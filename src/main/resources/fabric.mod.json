@@ -1,0 +1,41 @@
+{
+	"schemaVersion": 1,
+	"id": "beamcraft",
+	"version": "${version}",
+	"name": "BeamCraft",
+	"description": "This is an example description! Tell everyone what your mod is about!",
+	"authors": [
+		"Me!"
+	],
+	"contact": {
+		"homepage": "https://fabricmc.net/",
+		"sources": "https://github.com/FabricMC/fabric-example-mod"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/beamcraft/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"me.mzy.beamcraft.BeamCraft"
+		],
+		"client": [
+			"me.mzy.beamcraft.client.BeamCraftClient"
+		],
+		"fabric-datagen": [
+			"me.mzy.beamcraft.client.BeamCraftDataGenerator"
+		]
+	},
+	"mixins": [
+		"beamcraft.mixins.json",
+		{
+			"config": "beamcraft.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.2",
+		"minecraft": "~1.21",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
