@@ -2,7 +2,7 @@ package me.mzy.beamcraft.physics;
 
 import java.util.Arrays;
 
-public class QueryResultBuffer {
+public class SweepResultBuffer {
     public SoftBodyVehicle[] vehicles = new SoftBodyVehicle[128];
     public int[] nodeIds = new int[128];
     public int count = 0;

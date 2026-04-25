@@ -29,7 +29,7 @@ public class SoftBodyVehicle {
     private boolean[] partActive = new boolean[0];
 
     // 为多线程并发提供免 GC 的专属缓冲区
-    private static final ThreadLocal<QueryResultBuffer> localBuffer = ThreadLocal.withInitial(QueryResultBuffer::new);
+    private static final ThreadLocal<SweepResultBuffer> localBuffer = ThreadLocal.withInitial(SweepResultBuffer::new);
 
     // 获取实体当前的世界坐标作为锚点
     double entityX = 0.0;
@@ -558,15 +558,14 @@ public class SoftBodyVehicle {
         }
     }
 
-    public void solveVehicleCollisions(AxisSweep sap, double subDt) {
+    public void solveVehicleCollisions(DynamicAxisSweep sap, double subDt) {
         double eX = entityX, eY = entityY, eZ = entityZ;
 
         // ★ 核心优化 1：极小的容差，彻底消除多余的检测点 ★
-        double COL_MARGIN = 0.02;
+        double COL_MARGIN = 0.001;
 
         // PBD 防爆参数
-        double PBD_RELAXATION = 0.5; // 每次只推开 50%，防止把弹簧瞬间拉断
-        double MAX_POS_PUSH = 0.05;  // 每个子步最多只能推开 5 厘米
+        double PBD_RELAXATION = 1; // 每次只推开 50%，防止把弹簧瞬间拉断
 
         // ★ 并行计算所有的三角形 ★
         java.util.stream.IntStream.range(0, triangles.count).parallel().forEach(i -> {
@@ -611,7 +610,7 @@ public class SoftBodyVehicle {
             float maxZ = (float) (Math.max(az, Math.max(bz, cz)) + pad);
 
             // 获取线程专属 Buffer 并查询 SAP
-            QueryResultBuffer buffer = localBuffer.get();
+            SweepResultBuffer buffer = localBuffer.get();
             buffer.clear();
             sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, buffer);
 
@@ -694,7 +693,6 @@ public class SoftBodyVehicle {
                         // 1. 位置退回 (防爆版)
                         if (penetration > 0) {
                             double pushAmount = penetration * PBD_RELAXATION;
-                            if (pushAmount > MAX_POS_PUSH) pushAmount = MAX_POS_PUSH; // 绝不允许大跳跃
 
                             double posImpulse = pushAmount / wTotal;
                             dpX = posImpulse * effNx;
@@ -799,235 +797,6 @@ public class SoftBodyVehicle {
                     nodes.velX[i] *= friction; nodes.velY[i] *= friction;
                     nodes.posZ[i] = oldLocalZ;
                 }
-            }
-        }
-    }
-
-    // 接收外部传入的全局方块快照
-    public void tickPhysics(double dt, VoxelSnapshot snapshot) {
-        int subSteps = 100;
-        double subDt = dt / subSteps;
-        double invSubDt = 1.0 / subDt;
-
-        for (int s = 0; s < subSteps; s++) {
-            // Reset node force accumulation every substep
-            for (int i = 0; i < nodes.count; i++) {
-                nodes.forceX[i] = 0;
-                nodes.forceY[i] = 0;
-                nodes.forceZ[i] = 0;
-            }
-
-            // 1. Calculate spring and damping force for all beams
-            for (int i = 0; i < beams.count; i++) {
-                if (beams.broken[i]) continue;
-
-                int n1 = beams.node1[i];
-                int n2 = beams.node2[i];
-                double m1 = nodes.mass[n1];
-                double m2 = nodes.mass[n2];
-                if (m1 < KINDA_SMALL_NUMBER || m2 < KINDA_SMALL_NUMBER) continue;
-
-                double dx = nodes.posX[n2] - nodes.posX[n1];
-                double dy = nodes.posY[n2] - nodes.posY[n1];
-                double dz = nodes.posZ[n2] - nodes.posZ[n1];
-
-                double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                double invDist = 1.0 / dist;
-
-                int type = beams.type[i];
-
-                // Support beam logic: only resist compression, ignore tension
-                if (type == BeamContainer.BEAM_SUPPORT && dist > beams.restLength[i]) {
-                    continue;
-                }
-
-                // Calculate safe limited stiffness for explicit euler
-                double reducedMass = (m1 * m2) / (m1 + m2);
-                double maxSafeSpring = getMaxSafeSpring(reducedMass, subDt);
-
-                double activeSpring = Math.min(beams.spring[i], maxSafeSpring);
-
-                double activeDamp = beams.damp[i];
-                double springForce = activeSpring * (dist - beams.restLength[i]);
-
-                // Bounded beam limit logic
-                if (type == BeamContainer.BEAM_BOUNDED) {
-                    double shortBoundary = beams.restLength[i] * (1.0 - beams.shortBound[i]);
-                    double longBoundary = beams.restLength[i] * (1.0 + beams.longBound[i]);
-
-                    double limitSpring = Math.min(beams.limitSpring[i], maxSafeSpring);
-
-                    if (dist < shortBoundary) {
-                        springForce += limitSpring * (dist - shortBoundary);
-                        activeDamp = Math.max(activeDamp, beams.limitDamp[i]);
-                    } else if (dist > longBoundary) {
-                        springForce += limitSpring * (dist - longBoundary);
-                        activeDamp = Math.max(activeDamp, beams.limitDamp[i]);
-                    }
-                }
-
-                // Relative velocity and damping calculation
-                double vx = nodes.velX[n2] - nodes.velX[n1];
-                double vy = nodes.velY[n2] - nodes.velY[n1];
-                double vz = nodes.velZ[n2] - nodes.velZ[n1];
-                double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-                double absRelVel = Math.abs(relVel);
-
-                // Anti-explosion damping clamp
-                double maxDampForce = (reducedMass * absRelVel) * invSubDt;
-                double actualDampForce = activeDamp * absRelVel;
-                actualDampForce = Math.min(actualDampForce, maxDampForce);
-                double dampForce = actualDampForce * Math.signum(relVel);
-
-                double totalForce = springForce + dampForce;
-
-                // Break beam if over strength limit
-                if (Math.abs(totalForce) > beams.strength[i]) {
-                    beams.broken[i] = true;
-                    continue;
-                }
-
-                // Quadratic plastic deformation model
-                if (Math.abs(totalForce) > beams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                    double overForce = Math.abs(totalForce) - beams.deform[i];
-                    double flowRate = (overForce * overForce) / (beams.deform[i] * activeSpring);
-                    double deformAmount = flowRate * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * subDt;
-
-                    if (dist > beams.restLength[i]) {
-                        beams.restLength[i] += deformAmount;
-                    } else {
-                        beams.restLength[i] -= deformAmount;
-                        if (beams.restLength[i] < KINDA_SMALL_NUMBER) {
-                            beams.restLength[i] = KINDA_SMALL_NUMBER;
-                        }
-                    }
-                }
-
-                // Split and apply force to two nodes
-                double fx = totalForce * dx * invDist;
-                double fy = totalForce * dy * invDist;
-                double fz = totalForce * dz * invDist;
-
-                nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
-                nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
-            }
-
-            // Sliding node rail constraint solver
-            for (int i = 0; i < slidenodes.count; i++) {
-                int nId = slidenodes.nodeId[i];
-                int aId = slidenodes.railA[i];
-                int bId = slidenodes.railB[i];
-
-                double nx = nodes.posX[nId], ny = nodes.posY[nId], nz = nodes.posZ[nId];
-                double ax = nodes.posX[aId], ay = nodes.posY[aId], az = nodes.posZ[aId];
-                double bx = nodes.posX[bId], by = nodes.posY[bId], bz = nodes.posZ[bId];
-
-                double abx = bx - ax, aby = by - ay, abz = bz - az;
-                double anx = nx - ax, any = ny - ay, anz = nz - az;
-
-                double ab_sq = abx*abx + aby*aby + abz*abz;
-                if (ab_sq < KINDA_SMALL_NUMBER) continue;
-
-                double t = (anx*abx + any*aby + anz*abz) / ab_sq;
-                if (t < 0.0) t = 0.0;
-                if (t > 1.0) t = 1.0;
-
-                double px = ax + t * abx;
-                double py = ay + t * aby;
-                double pz = az + t * abz;
-
-                double pnx = nx - px, pny = ny - py, pnz = nz - pz;
-                double dist = Math.sqrt(pnx*pnx + pny*pny + pnz*pnz);
-
-                // Anti zero-divide protection
-                if (dist < KINDA_SMALL_NUMBER) { pnx = KINDA_SMALL_NUMBER; dist = KINDA_SMALL_NUMBER; }
-
-                double invDist = 1.0 / dist;
-                double nDirX = pnx * invDist, nDirY = pny * invDist, nDirZ = pnz * invDist;
-
-                double mN = nodes.mass[nId];
-                double mRail = nodes.mass[aId] + nodes.mass[bId];
-                if (mN < KINDA_SMALL_NUMBER ||  mRail < KINDA_SMALL_NUMBER) continue;
-
-                double reducedMass = (mN * mRail) / (mN + mRail);
-                double maxSafeSpring = getMaxSafeSpring(reducedMass, subDt);
-
-                double activeSpring = slidenodes.spring[i];
-                if (Math.abs(activeSpring) > maxSafeSpring) activeSpring = maxSafeSpring;
-
-                // Keep original rest offset, no forced snap
-                double springForce = activeSpring * (dist - slidenodes.restDist[i]);
-
-                // Rail point velocity interpolation
-                double vpx = nodes.velX[aId] * (1 - t) + nodes.velX[bId] * t;
-                double vpy = nodes.velY[aId] * (1 - t) + nodes.velY[bId] * t;
-                double vpz = nodes.velZ[aId] * (1 - t) + nodes.velZ[bId] * t;
-
-                double relVel = (nodes.velX[nId] - vpx) * nDirX + (nodes.velY[nId] - vpy) * nDirY + (nodes.velZ[nId] - vpz) * nDirZ;
-                double dampForce = slidenodes.damp[i] * relVel;
-
-                double maxDamp = (reducedMass * Math.abs(relVel)) / subDt;
-                if (Math.abs(dampForce) > maxDamp) dampForce = maxDamp * Math.signum(relVel);
-
-                // Apply slide constraint force
-                double fx = (springForce + dampForce) * nDirX;
-                double fy = (springForce + dampForce) * nDirY;
-                double fz = (springForce + dampForce) * nDirZ;
-
-                nodes.forceX[nId] -= fx; nodes.forceY[nId] -= fy; nodes.forceZ[nId] -= fz;
-                nodes.forceX[aId] += fx * (1 - t); nodes.forceY[aId] += fy * (1 - t); nodes.forceZ[aId] += fz * (1 - t);
-                nodes.forceX[bId] += fx * t;       nodes.forceY[bId] += fy * t;       nodes.forceZ[bId] += fz * t;
-            }
-
-            // --- 节点积分与碰撞 ---
-            for (int i = 0; i < nodes.count; i++) {
-                nodes.forceY[i] += PhysicsWorld.GRAVITY * nodes.mass[i];
-
-                double invMass = 1.0 / nodes.mass[i];
-                nodes.velX[i] += (nodes.forceX[i] * invMass) * subDt;
-                nodes.velY[i] += (nodes.forceY[i] * invMass) * subDt;
-                nodes.velZ[i] += (nodes.forceZ[i] * invMass) * subDt;
-
-                // 局部预测坐标
-                double nextLocalX = nodes.posX[i] + nodes.velX[i] * subDt;
-                double nextLocalY = nodes.posY[i] + nodes.velY[i] * subDt;
-                double nextLocalZ = nodes.posZ[i] + nodes.velZ[i] * subDt;
-
-                if (nodes.collision[i]) {
-                    // 转成世界坐标去测算！
-                    double worldX = entityX + nextLocalX;
-                    double worldY = entityY + nextLocalY;
-                    double worldZ = entityZ + nextLocalZ;
-
-                    if (worldY < 320 && worldY > -70 && snapshot.isSolid(worldX, worldY, worldZ)) {
-                        boolean hitX = snapshot.isSolid(worldX, entityY + nodes.posY[i], entityZ + nodes.posZ[i]);
-                        boolean hitY = snapshot.isSolid(entityX + nodes.posX[i], worldY, entityZ + nodes.posZ[i]);
-                        boolean hitZ = snapshot.isSolid(entityX + nodes.posX[i], entityY + nodes.posY[i], worldZ);
-
-                        double friction = Math.max(0, 1.0 - nodes.friction[i]);
-
-                        if (hitY) {
-                            nodes.velY[i] *= PhysicsWorld.BLOCK_REBOUND;
-                            nodes.velX[i] *= friction; nodes.velZ[i] *= friction;
-                            nextLocalY = nodes.posY[i];
-                        }
-                        if (hitX) {
-                            nodes.velX[i] *= PhysicsWorld.BLOCK_REBOUND;
-                            nodes.velY[i] *= friction; nodes.velZ[i] *= friction;
-                            nextLocalX = nodes.posX[i];
-                        }
-                        if (hitZ) {
-                            nodes.velZ[i] *= PhysicsWorld.BLOCK_REBOUND;
-                            nodes.velX[i] *= friction; nodes.velY[i] *= friction;
-                            nextLocalZ = nodes.posZ[i];
-                        }
-                    }
-                }
-
-                nodes.posX[i] = nextLocalX;
-                nodes.posY[i] = nextLocalY;
-                nodes.posZ[i] = nextLocalZ;
-                nodes.forceX[i] = 0; nodes.forceY[i] = 0; nodes.forceZ[i] = 0;
             }
         }
     }

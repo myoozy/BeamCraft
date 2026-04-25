@@ -21,7 +21,7 @@ public class PhysicsWorld {
     public static final double KINDA_BIG_NUMBER = 1e8;
     public static final int MAX_AABB_SIZE = 30;
     public final VoxelSnapshot voxelSnapshot = new VoxelSnapshot();
-    public final AxisSweep globalSap = new AxisSweep();
+    public final DynamicAxisSweep globalSap = new DynamicAxisSweep();
     BlockPos.Mutable mutablePos = new BlockPos.Mutable();
 
     public final java.util.List<SoftBodyVehicle> vehicles = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -71,7 +71,7 @@ public class PhysicsWorld {
             }
 
             // 【关键】：节点全塞进去后，构建(排序)一次
-            globalSap.build();
+            globalSap.updateAndSort();
 
             for (SoftBodyVehicle vehicle : vehicles) {
                 vehicle.solveVehicleCollisions(globalSap, subDt);
