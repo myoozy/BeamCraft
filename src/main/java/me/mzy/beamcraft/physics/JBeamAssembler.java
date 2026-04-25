@@ -34,7 +34,12 @@ public class JBeamAssembler {
      * Main entry point for vehicle assembly
      * Collects all required parts and runs two-pass assembly to build the physics body
      */
-    public void assembleVehicle(String rootPartName, Map<String, String> userConfig, Map<String, JsonObject> registry, PhysicsWorld world) {
+    public void assembleVehicle(
+            String rootPartName,
+            Map<String, String> userConfig,
+            Map<String, JsonObject> registry,
+            SoftBodyVehicle vehicle)
+    {
         List<PartEntry> activeParts = new ArrayList<>();
 
         // Phase 0: Recursively collect all required parts before assembly
@@ -50,28 +55,28 @@ public class JBeamAssembler {
         // Critical: Nodes must exist before beams reference them to avoid broken connections
         for (PartEntry entry : activeParts) {
             if (entry.json.has("nodes")) {
-                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), world, entry.partId);
+                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId);
             }
         }
-        System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + world.nodes.count);
+        System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
 
         // Pass 2: Build all structural connections (beams, surfaces, joints)
         for (PartEntry entry : activeParts) {
             if (entry.json.has("beams")) {
-                JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), world, entry.partId);
+                JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry.partId);
             }
 
             // Treat hydraulic actuators as fixed beams for initial assembly
             if (entry.json.has("hydros")) {
-                JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), world, entry.partId);
+                JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry.partId);
             }
 
             if (entry.json.has("triangles")) {
-                JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), world, entry.partId);
+                JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry.partId);
             }
 
             if (entry.json.has("torsionbars")) {
-                JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), world);
+                JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle);
             }
 
             if (entry.json.has("rails")) {
@@ -79,10 +84,10 @@ public class JBeamAssembler {
             }
 
             if (entry.json.has("slidenodes")) {
-                JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), world);
+                JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), vehicle);
             }
         }
-        System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + world.beams.count);
+        System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + vehicle.beams.count);
 
         // Print final assembly manifest
         System.out.println("====== 📦 Active Parts Assembly List ======");
@@ -99,7 +104,6 @@ public class JBeamAssembler {
         currentPartId++;
         activeParts.add(new PartEntry(part, currentPartId, partName));
 
-        // Support all slot formats (slots, slots1, slots2, slots3)
         if (part.has("slots3")) {
             parseSlotsArray(part.getAsJsonArray("slots3"), partName, userConfig, registry, activeParts);
         }

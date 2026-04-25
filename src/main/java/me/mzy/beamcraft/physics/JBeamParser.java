@@ -49,28 +49,36 @@ public class JBeamParser {
         return el.getAsString().trim();
     }
 
+    public static boolean getBooleanSafe(JsonObject obj, String key, boolean defaultValue) {
+        if (obj == null || !obj.has(key)) return defaultValue;
+        JsonElement el = obj.get(key);
+        if (el.isJsonNull()) return defaultValue;
+        return el.getAsBoolean();
+    }
+
 
     // --- 1. Node Parsing ---
     /**
      * Parses node definitions and creates physical nodes
      * Handles coordinate system conversion and inline property modifiers
      */
-    public static void parseNodes(JsonArray nodes, PhysicsWorld world, int partId) {
+    public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, int partId) {
         boolean isHeader = true;
 
         // Default values from Rig of Rods
         double currentWeight = 50.0;
         double currentFriction = 0.5;
         boolean currentCollision = true;
+        boolean currentSelfCollision = false;
 
         for (JsonElement element : nodes) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
                 currentWeight = getDoubleSafe(modifier, "nodeWeight", currentWeight);
                 currentFriction = getDoubleSafe(modifier, "frictionCoef", currentFriction);
-                if (modifier.has("collision")) {
-                    currentCollision = modifier.get("collision").getAsBoolean();
-                }
+                currentCollision = getBooleanSafe(modifier, "collision", currentCollision);
+                currentSelfCollision = getBooleanSafe(modifier, "selfCollision", currentSelfCollision);
+
                 continue;
             }
 
@@ -83,13 +91,13 @@ public class JBeamParser {
                 double inlineWeight = currentWeight;
                 double inlineFriction = currentFriction;
                 boolean inlineCollision = currentCollision;
+                boolean inlineSelfCollision = currentSelfCollision;
                 if (row.get(row.size() - 1).isJsonObject()) {
                     JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
                     inlineWeight = getDoubleSafe(inline, "nodeWeight", inlineWeight);
                     inlineFriction = getDoubleSafe(inline, "frictionCoef", inlineFriction);
-                    if (inline.has("collision")) {
-                        inlineCollision = inline.get("collision").getAsBoolean();
-                    }
+                    inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
+                    inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
                 }
 
                 String id = row.get(0).getAsString();
@@ -107,7 +115,7 @@ public class JBeamParser {
                     continue;
                 }
 
-                world.addNode(id, x, y, z, inlineWeight, inlineFriction, partId, inlineCollision);
+                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, partId, inlineCollision, inlineSelfCollision);
             }
         }
     }
@@ -117,7 +125,7 @@ public class JBeamParser {
      * Parses beam definitions and creates physical connections
      * Supports multiple beam types and inline property overrides
      */
-    public static void parseBeams(JsonArray beams, PhysicsWorld world, int partId) {
+    public static void parseBeams(JsonArray beams, SoftBodyVehicle vehicle, int partId) {
         boolean isHeader = true;
 
         int currentType = BeamContainer.BEAM_NORMAL;
@@ -211,7 +219,7 @@ public class JBeamParser {
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
 
-                    world.addBeam(id1, id2,
+                    vehicle.addBeam(id1, id2,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlineType, inlinePrecomp, inlineShortB, inlineLongB,
                             inlineShortBRange, inlineLongBRange,
@@ -225,15 +233,30 @@ public class JBeamParser {
     /**
      * Parses triangle collision surfaces
      */
-    public static void parseTriangles(JsonArray triangles, PhysicsWorld world, int partId) {
+    public static void parseTriangles(JsonArray triangles, SoftBodyVehicle vehicle, int partId) {
         boolean isHeader = true;
+        boolean currentCollision = true;
         for (JsonElement element : triangles) {
-            if (element.isJsonObject()) continue;
+            if (element.isJsonObject()) {
+                JsonObject modifier = element.getAsJsonObject();
+                if (modifier.has("triangleType")) {
+                    currentCollision = !modifier.get("triangleType").getAsString().equals("NONCOLLIDABLE");
+                }
+                continue;
+            }
             if (element.isJsonArray()) {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 3) {
-                    world.addTriangle(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), partId);
+                    boolean inlineCollision = currentCollision;
+
+                    if (row.get(row.size() - 1).isJsonObject()) {
+                        JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
+                        if (inline.has("triangleType")) {
+                            inlineCollision = !inline.get("triangleType").getAsString().equals("NONCOLLIDABLE");
+                        }
+                    }
+                    vehicle.addTriangle(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), partId, inlineCollision);
                 }
             }
         }
@@ -243,7 +266,7 @@ public class JBeamParser {
     /**
      * Parses torsion bar joint definitions
      */
-    public static void parseTorsionbars(JsonArray torsionbars, PhysicsWorld world) {
+    public static void parseTorsionbars(JsonArray torsionbars, SoftBodyVehicle vehicle) {
         boolean isHeader = true;
         double currentSpring = 0.0, currentDamp = 0.0;
         double currentDeform = PhysicsWorld.KINDA_BIG_NUMBER;
@@ -263,7 +286,7 @@ public class JBeamParser {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 4) {
-                    world.addTorsionBar(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), row.get(3).getAsString(),
+                    vehicle.addTorsionBar(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), row.get(3).getAsString(),
                             currentSpring, currentDamp, currentDeform, currentStrength);
                 }
             }
@@ -295,7 +318,7 @@ public class JBeamParser {
     /**
      * Parses sliding nodes that move along predefined rails
      */
-    public static void parseSlidenodes(JsonArray slidenodes, PhysicsWorld world) {
+    public static void parseSlidenodes(JsonArray slidenodes, SoftBodyVehicle vehicle) {
         boolean isHeader = true;
         for (JsonElement element : slidenodes) {
             if (element.isJsonObject()) continue;
@@ -320,7 +343,7 @@ public class JBeamParser {
 
                     String[] links = RAIL_MAP.get(railName);
                     if (links != null && links.length >= 2) {
-                        world.addSlidenode(nodeId, links, spring, damp);
+                        vehicle.addSlideNode(nodeId, links, spring, damp);
                     }
                 }
             }
