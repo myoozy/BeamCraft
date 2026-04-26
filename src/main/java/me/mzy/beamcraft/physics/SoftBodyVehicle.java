@@ -28,8 +28,7 @@ public class SoftBodyVehicle {
     private double[] partMaxX = new double[0], partMaxY = new double[0], partMaxZ = new double[0];
     private boolean[] partActive = new boolean[0];
 
-    // 为多线程并发提供免 GC 的专属缓冲区
-    private static final ThreadLocal<SweepResultBuffer> localBuffer = ThreadLocal.withInitial(SweepResultBuffer::new);
+    private final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
     // 获取实体当前的世界坐标作为锚点
     double entityX = 0.0;
@@ -567,9 +566,8 @@ public class SoftBodyVehicle {
         // PBD 防爆参数
         double PBD_RELAXATION = 1; // 每次只推开 50%，防止把弹簧瞬间拉断
 
-        // ★ 并行计算所有的三角形 ★
-        java.util.stream.IntStream.range(0, triangles.count).parallel().forEach(i -> {
-            if (!triangles.collision[i]) return;
+        for (int i = 0; i < triangles.count; i++) {
+            if (!triangles.collision[i]) continue;
 
             int nA = triangles.node1[i];
             int nB = triangles.node2[i];
@@ -586,7 +584,7 @@ public class SoftBodyVehicle {
             double nz = abx * acy - aby * acx;
 
             double nLenSq = nx*nx + ny*ny + nz*nz;
-            if (nLenSq < 1e-8) return;
+            if (nLenSq < 1e-8) continue;
             double invNLen = 1.0 / Math.sqrt(nLenSq);
             nx *= invNLen; ny *= invNLen; nz *= invNLen;
 
@@ -595,7 +593,7 @@ public class SoftBodyVehicle {
             double d01 = abx*acx + aby*acy + abz*acz;
             double d11 = acx*acx + acy*acy + acz*acz;
             double denom = d00 * d11 - d01 * d01;
-            if (denom < 1e-8) return;
+            if (denom < 1e-8) continue;
             double invDenom = 1.0 / denom;
 
             // 算 AABB
@@ -610,16 +608,18 @@ public class SoftBodyVehicle {
             float maxZ = (float) (Math.max(az, Math.max(bz, cz)) + pad);
 
             // 获取线程专属 Buffer 并查询 SAP
-            SweepResultBuffer buffer = localBuffer.get();
-            buffer.clear();
-            sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, buffer);
+            sweepResultBuffer.clear();
+            sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, sweepResultBuffer);
 
-            for (int k = 0; k < buffer.count; k++) {
-                SoftBodyVehicle hitVeh = buffer.vehicles[k];
-                int hitNodeId = buffer.nodeIds[k];
+            for (int k = 0; k < sweepResultBuffer.count; k++) {
+                SoftBodyVehicle hitVeh = sweepResultBuffer.vehicles[k];
+                int hitNodeId = sweepResultBuffer.nodeIds[k];
 
-                if (hitVeh == this && !nodes.selfCollision[hitNodeId]) continue;
-                if (hitVeh == this && (hitNodeId == nA || hitNodeId == nB || hitNodeId == nC)) continue;
+                boolean hitSelf = hitVeh == this;
+                boolean sameTriangle = hitNodeId == nA || hitNodeId == nB || hitNodeId == nC;
+                // boolean samePart = nodes.partId[hitNodeId] == triangles.partId[i];
+                boolean noSelfCollision = !nodes.selfCollision[hitNodeId];
+                if (hitSelf && (sameTriangle || noSelfCollision)) continue;
 
                 double pX = hitVeh.entityX + hitVeh.nodes.posX[hitNodeId];
                 double pY = hitVeh.entityY + hitVeh.nodes.posY[hitNodeId];
@@ -728,32 +728,49 @@ public class SoftBodyVehicle {
                         }
 
                         if (Math.abs(dpX) > 0 || Math.abs(dvX) > 0) {
-                            // 安全并发写入：按照质量的倒数比例分配变更
-                            hitVeh.applyPositionAndVelocityDeltaSafe(hitNodeId,
-                                    dpX / massNode, dpY / massNode, dpZ / massNode,
-                                    dvX / massNode, dvY / massNode, dvZ / massNode);
+                            if (hitVeh == this) {
+                                this.applyPositionAndVelocityDeltaUnSafe(hitNodeId,
+                                        dpX / massNode, dpY / massNode, dpZ / massNode,
+                                        dvX / massNode, dvY / massNode, dvZ / massNode);
+                            }
+                            else {
+                                // 安全并发写入：按照质量的倒数比例分配变更
+                                hitVeh.applyPositionAndVelocityDeltaSafe(hitNodeId,
+                                        dpX / massNode, dpY / massNode, dpZ / massNode,
+                                        dvX / massNode, dvY / massNode, dvZ / massNode);
+                            }
 
-                            this.applyPositionAndVelocityDeltaSafe(nA,
+                            this.applyPositionAndVelocityDeltaUnSafe(nA,
                                     -dpX * (wA / massA), -dpY * (wA / massA), -dpZ * (wA / massA),
                                     -dvX * (wA / massA), -dvY * (wA / massA), -dvZ * (wA / massA));
 
-                            this.applyPositionAndVelocityDeltaSafe(nB,
+                            this.applyPositionAndVelocityDeltaUnSafe(nB,
                                     -dpX * (wB / massB), -dpY * (wB / massB), -dpZ * (wB / massB),
                                     -dvX * (wB / massB), -dvY * (wB / massB), -dvZ * (wB / massB));
 
-                            this.applyPositionAndVelocityDeltaSafe(nC,
+                            this.applyPositionAndVelocityDeltaUnSafe(nC,
                                     -dpX * (wC / massC), -dpY * (wC / massC), -dpZ * (wC / massC),
                                     -dvX * (wC / massC), -dvY * (wC / massC), -dvZ * (wC / massC));
                         }
                     }
                 }
             }
-        });
+        }
     }
 
     public void applyPositionAndVelocityDeltaSafe(int nodeId, double dPx, double dPy, double dPz,
                                                   double  dVx, double dVy, double dVz) {
         nodes.applyPositionAndVelocityDeltaSafe(nodeId, dPx, dPy, dPz, dVx, dVy, dVz);
+    }
+
+    public void applyPositionAndVelocityDeltaUnSafe(int nodeId, double dPx, double dPy, double dPz,
+                                                  double  dVx, double dVy, double dVz) {
+        nodes.posX[nodeId] += dPx;
+        nodes.posY[nodeId] += dPy;
+        nodes.posZ[nodeId] += dPz;
+        nodes.velX[nodeId] += dVx;
+        nodes.velY[nodeId] += dVy;
+        nodes.velZ[nodeId] += dVz;
     }
 
     public void flushCollisionDeltas(){
