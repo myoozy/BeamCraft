@@ -13,7 +13,6 @@ public class TorsionBarContainer {
     public int[] node4 = new int[INIT_TORSION_CAP];
 
     public double[] initAngle = new double[INIT_TORSION_CAP]; // 静止角度
-    public double[] prevAngle = new double[INIT_TORSION_CAP];
     public double[] spring = new double[INIT_TORSION_CAP];
     public double[] damp = new double[INIT_TORSION_CAP];
     public double[] deform = new double[INIT_TORSION_CAP];
@@ -28,7 +27,6 @@ public class TorsionBarContainer {
             node3 = Utility.expand(node3, newSize);
             node4 = Utility.expand(node4, newSize);
             initAngle = Utility.expand(initAngle, newSize);
-            prevAngle = Utility.expand(prevAngle, newSize);
             spring =  Utility.expand(spring, newSize);
             damp = Utility.expand(damp, newSize);
             deform = Utility.expand(deform, newSize);
@@ -87,7 +85,6 @@ public class TorsionBarContainer {
         double angle = Math.atan2(dot1, dot2);
 
         initAngle[count] = angle;
-        prevAngle[count] = initAngle[count];
 
         count++;
     }

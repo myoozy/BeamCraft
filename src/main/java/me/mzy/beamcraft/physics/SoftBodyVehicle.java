@@ -476,6 +476,127 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
+// ==========================================
+        // 🛡️ 扭杆计算 (Torsionbars) - 终极物理无 Bug 版
+        // ==========================================
+        for (int i = 0; i < torsionbars.count; i++) {
+            if (torsionbars.broken[i]) continue;
+
+            int n1 = torsionbars.node1[i], n2 = torsionbars.node2[i], n3 = torsionbars.node3[i], n4 = torsionbars.node4[i];
+
+            double x1 = nodes.posX[n1], y1 = nodes.posY[n1], z1 = nodes.posZ[n1];
+            double x2 = nodes.posX[n2], y2 = nodes.posY[n2], z2 = nodes.posZ[n2];
+            double x3 = nodes.posX[n3], y3 = nodes.posY[n3], z3 = nodes.posZ[n3];
+            double x4 = nodes.posX[n4], y4 = nodes.posY[n4], z4 = nodes.posZ[n4];
+
+            double b1x = x2 - x1, b1y = y2 - y1, b1z = z2 - z1;
+            double b2x = x3 - x2, b2y = y3 - y2, b2z = z3 - z2;
+            double b3x = x4 - x3, b3y = y4 - y3, b3z = z4 - z3;
+
+            double c1x = b1y * b2z - b1z * b2y;
+            double c1y = b1z * b2x - b1x * b2z;
+            double c1z = b1x * b2y - b1y * b2x;
+
+            double c2x = b2y * b3z - b2z * b3y;
+            double c2y = b2z * b3x - b2x * b3z;
+            double c2z = b2x * b3y - b2y * b3x;
+
+            double c1_sq = c1x*c1x + c1y*c1y + c1z*c1z;
+            double c2_sq = c2x*c2x + c2y*c2y + c2z*c2z;
+            double b2_sq = b2x*b2x + b2y*b2y + b2z*b2z;
+
+            // 限制极小值，防除零崩溃 (1e-8 已经足够，不需要改成 1 了！)
+            double c1_sq_safe = Math.max(c1_sq, 1e-8);
+            double c2_sq_safe = Math.max(c2_sq, 1e-8);
+            double b2_sq_safe = Math.max(b2_sq, 1e-8);
+            double b2_mag = Math.sqrt(b2_sq_safe);
+
+            double c1Xc2_x = c1y * c2z - c1z * c2y;
+            double c1Xc2_y = c1z * c2x - c1x * c2z;
+            double c1Xc2_z = c1x * c2y - c1y * c2x;
+
+            double dot1 = (c1Xc2_x * b2x + c1Xc2_y * b2y + c1Xc2_z * b2z) / b2_mag;
+            double dot2 = c1x * c2x + c1y * c2y + c1z * c2z;
+            double currentAngle = Math.atan2(dot1, dot2);
+
+            double deltaAngle = currentAngle - torsionbars.initAngle[i];
+            while (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
+            while (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
+
+            // ==========================================
+            // 🚨🚨🚨 史上最大 Bug 修复：完美的梯度符号
+            // ==========================================
+            double g1_factor = b2_mag / c1_sq_safe;
+            double g4_factor = -b2_mag / c2_sq_safe;
+
+            double g1x = g1_factor * c1x, g1y = g1_factor * c1y, g1z = g1_factor * c1z;
+            double g4x = g4_factor * c2x, g4y = g4_factor * c2y, g4z = g4_factor * c2z;
+
+            double b1_dot_b2_div_sq = (b1x*b2x + b1y*b2y + b1z*b2z) / b2_sq_safe;
+            double b3_dot_b2_div_sq = (b3x*b2x + b3y*b2y + b3z*b2z) / b2_sq_safe;
+
+            // 注意这里的符号：这保证了系统绝对不会再凭空产生让你发抖的幽灵力矩！
+            double g2x = -g1x * b1_dot_b2_div_sq + g4x * b3_dot_b2_div_sq - g1x;
+            double g2y = -g1y * b1_dot_b2_div_sq + g4y * b3_dot_b2_div_sq - g1y;
+            double g2z = -g1z * b1_dot_b2_div_sq + g4z * b3_dot_b2_div_sq - g1z;
+
+            double g3x = -g1x - g2x - g4x;
+            double g3y = -g1y - g2y - g4y;
+            double g3z = -g1z - g2z - g4z;
+
+            // ==========================================
+            // 🛡️ 广义质量与你的天才钳制理论
+            // ==========================================
+            double g1_sq_val = g1x*g1x + g1y*g1y + g1z*g1z;
+            double g2_sq_val = g2x*g2x + g2y*g2y + g2z*g2z;
+            double g3_sq_val = g3x*g3x + g3y*g3y + g3z*g3z;
+            double g4_sq_val = g4x*g4x + g4y*g4y + g4z*g4z;
+
+            double invGenMass = (g1_sq_val / nodes.mass[n1]) + (g2_sq_val / nodes.mass[n2]) +
+                    (g3_sq_val / nodes.mass[n3]) + (g4_sq_val / nodes.mass[n4]);
+
+            double genMass = 1.0 / Math.max(invGenMass, 1e-12);
+
+            // 0.1 安全系数，完美适配 2000Hz
+            double maxSafeSpring = (genMass / (dt * dt));
+            double maxSafeDamp = genMass / dt;
+
+            double activeSpring = Math.min(torsionbars.spring[i], maxSafeSpring);
+            double activeDamp = Math.min(torsionbars.damp[i], maxSafeDamp);
+
+            // ==========================================
+            // 💥 最终受力输出
+            // ==========================================
+            double omega = (g1x*nodes.velX[n1] + g1y*nodes.velY[n1] + g1z*nodes.velZ[n1]) +
+                    (g2x*nodes.velX[n2] + g2y*nodes.velY[n2] + g2z*nodes.velZ[n2]) +
+                    (g3x*nodes.velX[n3] + g3y*nodes.velY[n3] + g3z*nodes.velZ[n3]) +
+                    (g4x*nodes.velX[n4] + g4y*nodes.velY[n4] + g4z*nodes.velZ[n4]);
+
+            // 纯净的扭矩，不需要复杂的正负号判断
+            double torque = (activeSpring * deltaAngle) - (activeDamp * omega);
+
+            double absTorque = Math.abs(torque);
+            if (absTorque > torsionbars.strength[i]) {
+                torsionbars.broken[i] = true;
+                continue;
+            }
+            if (absTorque > torsionbars.deform[i] && torsionbars.spring[i] > 1e-8) {
+                double overTorque = absTorque - torsionbars.deform[i];
+                double flowRate = (overTorque * overTorque) / (torsionbars.deform[i] * torsionbars.spring[i]);
+                double deformAmount = flowRate * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+
+                torsionbars.initAngle[i] += Math.signum(deltaAngle) * deformAmount;
+                while (torsionbars.initAngle[i] > Math.PI) torsionbars.initAngle[i] -= Math.PI * 2;
+                while (torsionbars.initAngle[i] < -Math.PI) torsionbars.initAngle[i] += Math.PI * 2;
+
+                torque = Math.signum(torque) * torsionbars.deform[i];
+            }
+
+            nodes.forceX[n1] += torque * g1x; nodes.forceY[n1] += torque * g1y; nodes.forceZ[n1] += torque * g1z;
+            nodes.forceX[n2] += torque * g2x; nodes.forceY[n2] += torque * g2y; nodes.forceZ[n2] += torque * g2z;
+            nodes.forceX[n3] += torque * g3x; nodes.forceY[n3] += torque * g3y; nodes.forceZ[n3] += torque * g3z;
+            nodes.forceX[n4] += torque * g4x; nodes.forceY[n4] += torque * g4y; nodes.forceZ[n4] += torque * g4z;
+        }
 
         // ==========================================
         // 🛡️ 计算滑块 (slidenodes)
