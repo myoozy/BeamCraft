@@ -12,7 +12,8 @@ public class TorsionBarContainer {
     public int[] node3 = new int[INIT_TORSION_CAP];
     public int[] node4 = new int[INIT_TORSION_CAP];
 
-    public double[] restAngle = new double[INIT_TORSION_CAP]; // 静止角度
+    public double[] initAngle = new double[INIT_TORSION_CAP]; // 静止角度
+    public double[] prevAngle = new double[INIT_TORSION_CAP];
     public double[] spring = new double[INIT_TORSION_CAP];
     public double[] damp = new double[INIT_TORSION_CAP];
     public double[] deform = new double[INIT_TORSION_CAP];
@@ -26,7 +27,8 @@ public class TorsionBarContainer {
             node2 = Utility.expand(node2, newSize);
             node3 = Utility.expand(node3, newSize);
             node4 = Utility.expand(node4, newSize);
-            restAngle = Utility.expand(restAngle, newSize);
+            initAngle = Utility.expand(initAngle, newSize);
+            prevAngle = Utility.expand(prevAngle, newSize);
             spring =  Utility.expand(spring, newSize);
             damp = Utility.expand(damp, newSize);
             deform = Utility.expand(deform, newSize);
@@ -53,29 +55,39 @@ public class TorsionBarContainer {
         deform[count] = torsionDeform; strength[count] = torsionStrength;
         broken[count] = false;
 
-        // --- 计算初始的二面角 (Rest Angle) ---
-        // 向量：n2->n1, n2->n3, n2->n4
-        double v1x = posX1 - posX2; double v1y = posY1 - posY2; double v1z = posZ1 - posZ2;
-        double v2x = posX3 - posX2; double v2y = posY3 - posY2; double v2z = posZ3 - posZ2;
-        double v3x = posX4 - posX2; double v3y = posY4 - posY2; double v3z = posZ4 - posZ2;
+        // 获取初始坐标
+        double x1 = posX1, y1 = posY1, z1 = posZ1;
+        double x2 = posX2, y2 = posY2, z2 = posZ2;
+        double x3 = posX3, y3 = posY3, z3 = posZ3;
+        double x4 = posX4, y4 = posY4, z4 = posZ4;
 
-        // 计算两个面的法向量 (叉乘)
-        double n1x = v1y*v2z - v1z*v2y; double n1y = v1z*v2x - v1x*v2z; double n1z = v1x*v2y - v1y*v2x;
-        double n2x = v3y*v2z - v3z*v2y; double n2y = v3z*v2x - v3x*v2z; double n2z = v3x*v2y - v3y*v2x;
+        // 算出 3 根向量: b1, b2, b3
+        double b1x = x2 - x1, b1y = y2 - y1, b1z = z2 - z1;
+        double b2x = x3 - x2, b2y = y3 - y2, b2z = z3 - z2;
+        double b3x = x4 - x3, b3y = y4 - y3, b3z = z4 - z3;
 
-        // 计算法向量的模长
-        double len1 = Math.sqrt(n1x*n1x + n1y*n1y + n1z*n1z);
-        double len2 = Math.sqrt(n2x*n2x + n2y*n2y + n2z*n2z);
+        // 算出两个面的法向量 (叉乘): c1 = b1 x b2, c2 = b2 x b3
+        double c1x = b1y * b2z - b1z * b2y;
+        double c1y = b1z * b2x - b1x * b2z;
+        double c1z = b1x * b2y - b1y * b2x;
 
-        // 避免除零
-        if (len1 > 0.0001 && len2 > 0.0001) {
-            // 点乘求夹角 cos 值
-            double dot = (n1x*n2x + n1y*n2y + n1z*n2z) / (len1 * len2);
-            dot = Math.max(-1.0, Math.min(1.0, dot)); // 限制在 [-1, 1] 防止浮点溢出
-            restAngle[count] = Math.acos(dot); // 记录原厂角度 (弧度)
-        } else {
-            restAngle[count] = 0;
-        }
+        double c2x = b2y * b3z - b2z * b3y;
+        double c2y = b2z * b3x - b2x * b3z;
+        double c2z = b2x * b3y - b2y * b3x;
+
+        // 利用 atan2 计算二面角 (Dihedral Angle)
+        double b2_mag = Math.sqrt(b2x*b2x + b2y*b2y + b2z*b2z);
+        double c1Xc2_x = c1y * c2z - c1z * c2y;
+        double c1Xc2_y = c1z * c2x - c1x * c2z;
+        double c1Xc2_z = c1x * c2y - c1y * c2x;
+
+        double dot1 = (c1Xc2_x * b2x + c1Xc2_y * b2y + c1Xc2_z * b2z) / b2_mag;
+        double dot2 = c1x * c2x + c1y * c2y + c1z * c2z;
+
+        double angle = Math.atan2(dot1, dot2);
+
+        initAngle[count] = angle;
+        prevAngle[count] = initAngle[count];
 
         count++;
     }

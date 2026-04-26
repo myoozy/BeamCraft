@@ -15,6 +15,8 @@ public class SoftBodyVehicle {
     public static final int MAX_AABB_SIZE = PhysicsWorld.MAX_AABB_SIZE;
 
     public final Entity parentEntity; // 绑定的实体
+    public int vehicleId = -1; // 物理世界给它分配的顺序 ID (0, 1, 2...)
+    public int globalNodeOffset = 0; // 全局节点偏移量
 
     public final NodeContainer nodes = new NodeContainer();
     public final BeamContainer beams = new BeamContainer();
@@ -378,7 +380,9 @@ public class SoftBodyVehicle {
             nodes.forceZ[i] = 0;
         }
 
-        // 1. Calculate spring and damping force for all beams
+        // ==========================================
+        // 🛡️ 计算梁 (Beams)
+        // ==========================================
         for (int i = 0; i < beams.count; i++) {
             if (beams.broken[i]) continue;
 
@@ -473,7 +477,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
 
-        // Sliding node rail constraint solver
+        // ==========================================
+        // 🛡️ 计算滑块 (slidenodes)
+        // ==========================================
         for (int i = 0; i < slidenodes.count; i++) {
             int nId = slidenodes.nodeId[i];
             int aId = slidenodes.railA[i];
@@ -540,8 +546,11 @@ public class SoftBodyVehicle {
             nodes.forceX[bId] += fx * t;       nodes.forceY[bId] += fy * t;       nodes.forceZ[bId] += fz * t;
         }
 
-        // 【只保留这一次唯一的积分！】
+        // ==========================================
+        // 🛡️ 积分速度和位置（预测）。整个tick只有这一次积分
+        // ==========================================
         for (int i = 0; i < nodes.count; i++) {
+            if (nodes.mass[i] < PhysicsWorld.KINDA_SMALL_NUMBER) continue;
             // 加重力
             nodes.forceY[i] += PhysicsWorld.GRAVITY * nodes.mass[i];
 
@@ -550,6 +559,40 @@ public class SoftBodyVehicle {
             nodes.velY[i] += (nodes.forceY[i] * invMass) * dt;
             nodes.velZ[i] += (nodes.forceZ[i] * invMass) * dt;
 
+            // 算出当前节点的速度大小
+            double speedSq = nodes.velX[i]*nodes.velX[i] + nodes.velY[i]*nodes.velY[i] + nodes.velZ[i]*nodes.velZ[i];
+
+            if (speedSq > 1.0) { // 速度太小就忽略空气阻力，省性能
+                double speed = Math.sqrt(speedSq);
+                double mach = speed / PhysicsWorld.SOUND_SPEED; // 计算马赫数
+
+                // 1. 基础空气阻力 (与 v^2 成正比，这里简化为一个极小的常数系数)
+                double baseDrag = 0.0005 * speed;
+
+                // 2. 激波阻力模拟！(魔法就在这里：马赫数的 6 次方)
+                // 速度慢时几乎为 0；接近 Mach 1 时暴增；超过 340m/s 时变成一面绝望的墙
+                double shockDrag = 0.0;
+                if (mach > 0.5) { // 0.5马赫(170m/s)以下没激波
+                    shockDrag = 2.0 * Math.pow(mach, 6.0);
+                }
+
+                // 计算本子步的总速度衰减率 (dt = subDt)
+                double totalDamping = (baseDrag + shockDrag) * dt;
+
+                // 防止衰减超过 100% 导致速度反向
+                double velocityMultiplier = Math.max(0.0, 1.0 - totalDamping);
+
+                // 应用空气动力学衰减！
+                nodes.velX[i] *= velocityMultiplier;
+                nodes.velY[i] *= velocityMultiplier;
+                nodes.velZ[i] *= velocityMultiplier;
+            }
+
+            // 清洗极端的 NaN (应对除以0等极端异常)
+            if (Double.isNaN(nodes.velX[i])) {
+                nodes.velX[i] = 0; nodes.velY[i] = 0; nodes.velZ[i] = 0;
+            }
+
             // 局部预测坐标 (直接覆盖 posX，因为 prevPos 已经存好了)
             nodes.posX[i] += nodes.velX[i] * dt;
             nodes.posY[i] += nodes.velY[i] * dt;
@@ -557,14 +600,17 @@ public class SoftBodyVehicle {
         }
     }
 
-    public void solveVehicleCollisions(DynamicAxisSweep sap, double subDt) {
+    /**
+     * 宽阶段扫描：每隔 N 个子步调用一次，预测未来的位移，收集可能碰撞的对子
+     * @param sap 全局 SAP 加速结构
+     * @param manager 我们的碰撞调度中心
+     * @param dtPredict 预测时间 (例如 10 个子步的时间总和)
+     */
+    public void generateCollisionCandidates(DynamicAxisSweep sap, SoftBodyCollisionManager manager, double dtPredict) {
         double eX = entityX, eY = entityY, eZ = entityZ;
 
-        // ★ 核心优化 1：极小的容差，彻底消除多余的检测点 ★
-        double COL_MARGIN = 0.001;
-
-        // PBD 防爆参数
-        double PBD_RELAXATION = 1; // 每次只推开 50%，防止把弹簧瞬间拉断
+        // 铁皮的物理厚度常数：2厘米。不再承担防穿透的任务，只负责防浮点误差！
+        float BASE_MARGIN = 0.01f;
 
         for (int i = 0; i < triangles.count; i++) {
             if (!triangles.collision[i]) continue;
@@ -577,37 +623,29 @@ public class SoftBodyVehicle {
             double bx = eX + nodes.posX[nB], by = eY + nodes.posY[nB], bz = eZ + nodes.posZ[nB];
             double cx = eX + nodes.posX[nC], cy = eY + nodes.posY[nC], cz = eZ + nodes.posZ[nC];
 
-            double abx = bx - ax, aby = by - ay, abz = bz - az;
-            double acx = cx - ax, acy = cy - ay, acz = cz - az;
-            double nx = aby * acz - abz * acy;
-            double ny = abz * acx - abx * acz;
-            double nz = abx * acy - aby * acx;
+            // 1. 算出当前帧最紧凑的基准 AABB
+            float minX = (float) Math.min(ax, Math.min(bx, cx)) - BASE_MARGIN;
+            float maxX = (float) Math.max(ax, Math.max(bx, cx)) + BASE_MARGIN;
+            float minY = (float) Math.min(ay, Math.min(by, cy)) - BASE_MARGIN;
+            float maxY = (float) Math.max(ay, Math.max(by, cy)) + BASE_MARGIN;
+            float minZ = (float) Math.min(az, Math.min(bz, cz)) - BASE_MARGIN;
+            float maxZ = (float) Math.max(az, Math.max(bz, cz)) + BASE_MARGIN;
 
-            double nLenSq = nx*nx + ny*ny + nz*nz;
-            if (nLenSq < 1e-8) continue;
-            double invNLen = 1.0 / Math.sqrt(nLenSq);
-            nx *= invNLen; ny *= invNLen; nz *= invNLen;
+            // 2. 算物理：计算这个三角形的平均速度
+            double triVx = (nodes.velX[nA] + nodes.velX[nB] + nodes.velX[nC]) * 0.3333333333;
+            double triVy = (nodes.velY[nA] + nodes.velY[nB] + nodes.velY[nC]) * 0.3333333333;
+            double triVz = (nodes.velZ[nA] + nodes.velZ[nB] + nodes.velZ[nC]) * 0.3333333333;
 
-            // ★ 把重心坐标分母提出来，省去几万次乘法 ★
-            double d00 = abx*abx + aby*aby + abz*abz;
-            double d01 = abx*acx + aby*acy + abz*acz;
-            double d11 = acx*acx + acy*acy + acz*acz;
-            double denom = d00 * d11 - d01 * d01;
-            if (denom < 1e-8) continue;
-            double invDenom = 1.0 / denom;
+            // 3. 算预判位移向量：速度 * 预判时间
+            float dx = (float) (triVx * dtPredict);
+            float dy = (float) (triVy * dtPredict);
+            float dz = (float) (triVz * dtPredict);
 
-            // 算 AABB
-            double maxVel = Math.max(Math.max(Math.abs(nodes.velX[nA]), Math.abs(nodes.velY[nA])), Math.abs(nodes.velZ[nA]));
-            double pad = maxVel * subDt + COL_MARGIN;
+            // 4. 定向拉伸：只在运动方向上延伸包围盒！(Swept AABB)
+            if (dx > 0) maxX += dx; else minX += dx;
+            if (dy > 0) maxY += dy; else minY += dy;
+            if (dz > 0) maxZ += dz; else minZ += dz;
 
-            float minX = (float) (Math.min(ax, Math.min(bx, cx)) - pad);
-            float maxX = (float) (Math.max(ax, Math.max(bx, cx)) + pad);
-            float minY = (float) (Math.min(ay, Math.min(by, cy)) - pad);
-            float maxY = (float) (Math.max(ay, Math.max(by, cy)) + pad);
-            float minZ = (float) (Math.min(az, Math.min(bz, cz)) - pad);
-            float maxZ = (float) (Math.max(az, Math.max(bz, cz)) + pad);
-
-            // 获取线程专属 Buffer 并查询 SAP
             sweepResultBuffer.clear();
             sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, sweepResultBuffer);
 
@@ -615,152 +653,14 @@ public class SoftBodyVehicle {
                 SoftBodyVehicle hitVeh = sweepResultBuffer.vehicles[k];
                 int hitNodeId = sweepResultBuffer.nodeIds[k];
 
-                boolean hitSelf = hitVeh == this;
-                boolean sameTriangle = hitNodeId == nA || hitNodeId == nB || hitNodeId == nC;
-                // boolean samePart = nodes.partId[hitNodeId] == triangles.partId[i];
-                boolean noSelfCollision = !nodes.selfCollision[hitNodeId];
-                if (hitSelf && (sameTriangle || noSelfCollision)) continue;
+                // 排除不需要计算自碰撞的点，以及三角形自己的顶点
+                if (hitVeh == this && !nodes.selfCollision[hitNodeId]) continue;
+                if (hitVeh == this && (hitNodeId == nA || hitNodeId == nB || hitNodeId == nC)) continue;
 
-                double pX = hitVeh.entityX + hitVeh.nodes.posX[hitNodeId];
-                double pY = hitVeh.entityY + hitVeh.nodes.posY[hitNodeId];
-                double pZ = hitVeh.entityZ + hitVeh.nodes.posZ[hitNodeId];
-
-                double apx = pX - ax, apy = pY - ay, apz = pZ - az;
-                double distCurr = apx * nx + apy * ny + apz * nz;
-
-                // ★ 速度短路预判，不是在靠近的点直接踢掉！★
-                double triVx = (nodes.velX[nA] + nodes.velX[nB] + nodes.velX[nC]) * 0.33333333;
-                double triVy = (nodes.velY[nA] + nodes.velY[nB] + nodes.velY[nC]) * 0.33333333;
-                double triVz = (nodes.velZ[nA] + nodes.velZ[nB] + nodes.velZ[nC]) * 0.33333333;
-
-                double approxRelV = (hitVeh.nodes.velX[hitNodeId] - triVx) * nx +
-                        (hitVeh.nodes.velY[hitNodeId] - triVy) * ny +
-                        (hitVeh.nodes.velZ[hitNodeId] - triVz) * nz;
-
-                double approxPushDir = (distCurr > 0) ? 1.0 : -1.0;
-                // 如果它们正在互相远离，绝对不要算重心坐标！
-                if (approxRelV * approxPushDir > 0.05) continue;
-
-                // 计算上一帧距离 (CCD)
-                double distPrev = distCurr - approxRelV * subDt;
-
-                if ((distPrev * distCurr <= 0.0) || Math.abs(distCurr) < COL_MARGIN) {
-
-                    double ppx = apx - distCurr * nx;
-                    double ppy = apy - distCurr * ny;
-                    double ppz = apz - distCurr * nz;
-
-                    double d20 = ppx*abx + ppy*aby + ppz*abz;
-                    double d21 = ppx*acx + ppy*acy + ppz*acz;
-
-                    // 极速算出重心坐标
-                    double wB = (d11 * d20 - d01 * d21) * invDenom;
-                    double wC = (d00 * d21 - d01 * d20) * invDenom;
-                    double wA = 1.0 - wB - wC;
-
-                    if (wA >= -0.05 && wB >= -0.05 && wC >= -0.05) {
-
-                        double pushDir = (distPrev > 0) ? 1.0 : -1.0;
-                        double effNx = nx * pushDir;
-                        double effNy = ny * pushDir;
-                        double effNz = nz * pushDir;
-
-                        // 精确的表面点速度
-                        double exactTriVx = wA * nodes.velX[nA] + wB * nodes.velX[nB] + wC * nodes.velX[nC];
-                        double exactTriVy = wA * nodes.velY[nA] + wB * nodes.velY[nB] + wC * nodes.velY[nC];
-                        double exactTriVz = wA * nodes.velZ[nA] + wB * nodes.velZ[nB] + wC * nodes.velZ[nC];
-
-                        double relVx = hitVeh.nodes.velX[hitNodeId] - exactTriVx;
-                        double relVy = hitVeh.nodes.velY[hitNodeId] - exactTriVy;
-                        double relVz = hitVeh.nodes.velZ[hitNodeId] - exactTriVz;
-
-                        double approachSpeed = relVx * effNx + relVy * effNy + relVz * effNz;
-                        double penetration = Math.abs(distCurr);
-
-                        double massNode = hitVeh.nodes.mass[hitNodeId];
-                        double massA = nodes.mass[nA], massB = nodes.mass[nB], massC = nodes.mass[nC];
-
-                        double wTotal = (1.0 / massNode) + (wA*wA / massA) + (wB*wB / massB) + (wC*wC / massC);
-                        if (wTotal < 1e-8) continue;
-
-                        // ==========================================
-                        // ★ PBD 约束核心逻辑（退回位置 + 清零速度）★
-                        // ==========================================
-
-                        double dpX = 0, dpY = 0, dpZ = 0;
-                        double dvX = 0, dvY = 0, dvZ = 0;
-
-                        // 1. 位置退回 (防爆版)
-                        if (penetration > 0) {
-                            double pushAmount = penetration * PBD_RELAXATION;
-
-                            double posImpulse = pushAmount / wTotal;
-                            dpX = posImpulse * effNx;
-                            dpY = posImpulse * effNy;
-                            dpZ = posImpulse * effNz;
-                        }
-
-                        // 2. 速度清零 (只清零靠近的法向速度)
-                        if (approachSpeed < 0) {
-                            // 法向完全吸收，防弹跳
-                            double targetNormalVel = -approachSpeed;
-                            double normalVelImpulse = targetNormalVel / wTotal;
-                            dvX += normalVelImpulse * effNx;
-                            dvY += normalVelImpulse * effNy;
-                            dvZ += normalVelImpulse * effNz;
-
-                            // 表面摩擦力，防滑动抖动
-                            double tangentVx = relVx - (approachSpeed * effNx);
-                            double tangentVy = relVy - (approachSpeed * effNy);
-                            double tangentVz = relVz - (approachSpeed * effNz);
-
-                            double frictionCoefficient =
-                                    0.25 * (hitVeh.nodes.friction[hitNodeId] +
-                                            nodes.friction[nA] +
-                                            nodes.friction[nB] +
-                                            nodes.friction[nC]
-                                    );
-                            double friction = Math.max(0, 1.0 - frictionCoefficient);
-
-                            dvX -= (tangentVx * friction) / wTotal;
-                            dvY -= (tangentVy * friction) / wTotal;
-                            dvZ -= (tangentVz * friction) / wTotal;
-                        }
-
-                        if (Math.abs(dpX) > 0 || Math.abs(dvX) > 0) {
-                            if (hitVeh == this) {
-                                this.applyPositionAndVelocityDeltaUnSafe(hitNodeId,
-                                        dpX / massNode, dpY / massNode, dpZ / massNode,
-                                        dvX / massNode, dvY / massNode, dvZ / massNode);
-                            }
-                            else {
-                                // 安全并发写入：按照质量的倒数比例分配变更
-                                hitVeh.applyPositionAndVelocityDeltaSafe(hitNodeId,
-                                        dpX / massNode, dpY / massNode, dpZ / massNode,
-                                        dvX / massNode, dvY / massNode, dvZ / massNode);
-                            }
-
-                            this.applyPositionAndVelocityDeltaUnSafe(nA,
-                                    -dpX * (wA / massA), -dpY * (wA / massA), -dpZ * (wA / massA),
-                                    -dvX * (wA / massA), -dvY * (wA / massA), -dvZ * (wA / massA));
-
-                            this.applyPositionAndVelocityDeltaUnSafe(nB,
-                                    -dpX * (wB / massB), -dpY * (wB / massB), -dpZ * (wB / massB),
-                                    -dvX * (wB / massB), -dvY * (wB / massB), -dvZ * (wB / massB));
-
-                            this.applyPositionAndVelocityDeltaUnSafe(nC,
-                                    -dpX * (wC / massC), -dpY * (wC / massC), -dpZ * (wC / massC),
-                                    -dvX * (wC / massC), -dvY * (wC / massC), -dvZ * (wC / massC));
-                        }
-                    }
-                }
+                // 找到嫌疑人了！不用算物理，直接交给调度中心！
+                manager.addContact(hitVeh, hitNodeId, this, nA, nB, nC);
             }
         }
-    }
-
-    public void applyPositionAndVelocityDeltaSafe(int nodeId, double dPx, double dPy, double dPz,
-                                                  double  dVx, double dVy, double dVz) {
-        nodes.applyPositionAndVelocityDeltaSafe(nodeId, dPx, dPy, dPz, dVx, dVy, dVz);
     }
 
     public void applyPositionAndVelocityDeltaUnSafe(int nodeId, double dPx, double dPy, double dPz,
@@ -771,10 +671,6 @@ public class SoftBodyVehicle {
         nodes.velX[nodeId] += dVx;
         nodes.velY[nodeId] += dVy;
         nodes.velZ[nodeId] += dVz;
-    }
-
-    public void flushCollisionDeltas(){
-        nodes.flushCollisionDeltas();
     }
 
     public void solveEnvironmentCollisions(VoxelSnapshot snapshot, double dt) {
@@ -792,9 +688,13 @@ public class SoftBodyVehicle {
                 double oldLocalY = nodes.posY[i] - nodes.velY[i] * dt;
                 double oldLocalZ = nodes.posZ[i] - nodes.velZ[i] * dt;
 
-                boolean hitX = snapshot.isSolid(worldX, entityY + oldLocalY, entityZ + oldLocalZ);
-                boolean hitY = snapshot.isSolid(entityX + oldLocalX, worldY, entityZ + oldLocalZ);
-                boolean hitZ = snapshot.isSolid(entityX + oldLocalX, entityY + oldLocalY, worldZ);
+                double oldWorldX = entityX + oldLocalX;
+                double oldWorldY = entityY + oldLocalY;
+                double oldWorldZ = entityZ + oldLocalZ;
+
+                boolean hitX = snapshot.isSolid(worldX, oldWorldY, oldWorldZ);
+                boolean hitY = snapshot.isSolid(oldWorldX, worldY, oldWorldZ);
+                boolean hitZ = snapshot.isSolid(oldWorldX, oldWorldY, worldZ);
 
                 double friction = Math.max(0, 1.0 - nodes.friction[i]);
 
