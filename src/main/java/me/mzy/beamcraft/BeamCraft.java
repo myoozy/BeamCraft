@@ -33,10 +33,6 @@ public class BeamCraft implements ModInitializer {
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
-	// Parts Registry: The key is the part name (e.g., “pickup_frame”), and the value is the corresponding JSON object.
-	public static final Map<String, JsonObject> PART_REGISTRY = new HashMap<>();
-	// Player configuration: “Key” is the slot name, and “Value” is the name of the selected part.
-	public static final Map<String, String> USER_CONFIG = new HashMap<>();
 
 	// 1. 注册载具实体类型 (1.21 必须使用 Identifier.of)
 	public static final EntityType<PhysicsVehicleEntity> PHYSICS_VEHICLE_ENTITY = Registry.register(
@@ -69,13 +65,13 @@ public class BeamCraft implements ModInitializer {
 										ServerPlayerEntity player = context.getSource().getPlayer();
 
 										if (player != null) {
-											PhysicsVehicleEntity vehicle = new PhysicsVehicleEntity(PHYSICS_VEHICLE_ENTITY, player.getWorld());
+											PhysicsVehicleEntity vehicle =
+													new PhysicsVehicleEntity(PHYSICS_VEHICLE_ENTITY, player.getWorld());
+
+											vehicle.initializeVehicle(rootName, pcFile);
 
 											// 设置坐标和视角
 											vehicle.refreshPositionAndAngles(player.getX(), player.getY() + 1, player.getZ(), player.getYaw(), player.getPitch());
-
-											// 【这里！】把指令里输入的 rootName 传进去
-											vehicle.assemble(rootName, pcFile);
 
 											player.getWorld().spawnEntity(vehicle);
 											player.sendMessage(Text.literal("🚗 成功召唤载具: " + rootName + " (配置: " + pcFile + ")"), false);

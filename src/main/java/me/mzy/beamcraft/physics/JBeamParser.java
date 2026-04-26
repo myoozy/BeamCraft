@@ -107,9 +107,9 @@ public class JBeamParser {
 
                 try {
                     // Coordinate system conversion: flip X, swap Y and Z
-                    x = -row.get(1).getAsDouble();
+                    x = +row.get(1).getAsDouble();
                     y = +row.get(3).getAsDouble();
-                    z = +row.get(2).getAsDouble();
+                    z = -row.get(2).getAsDouble();
                 } catch (Exception e) {
                     System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
                     continue;

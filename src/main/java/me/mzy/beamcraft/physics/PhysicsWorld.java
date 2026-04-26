@@ -1,6 +1,8 @@
 package me.mzy.beamcraft.physics;
 
 import me.mzy.beamcraft.utility.Utility;
+import net.minecraft.entity.MovementType;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
@@ -38,7 +40,8 @@ public class PhysicsWorld {
     }
 
     public void addVehicle(SoftBodyVehicle vehicle) {
-        // 给车辆发“车牌”
+        if (vehicle == null || vehicles.contains(vehicle)) return;
+
         vehicle.vehicleId = nextVehicleId++;
         vehicles.add(vehicle);
     }
@@ -72,28 +75,23 @@ public class PhysicsWorld {
     }
 
     /**
-     * Pre-update step: cache block collision around vehicle for performance
-     * Generate per-part bounding box and sample Minecraft voxel data
+     * Main physics update loop
      */
-    public void preStep(World mcWorld, double dt) {
-        voxelSnapshot.clear();
-        // 让每辆车自己去扫描周围的方块并写入全局 snapshot
-        for (SoftBodyVehicle vehicle : vehicles) {
-            vehicle.updateVoxelSnapshot(mcWorld, voxelSnapshot, mutablePos, dt);
-        }
-    }
-
-    /**
-     * Main physics update loop, high substep count for stable simulation
-     */
-    public void step(double dt) {
+    public void step(World mcWorld, double dt) {
         int subSteps = 100;
         double subDt = dt / subSteps;
         int broadphaseRate = 10;
 
+        voxelSnapshot.clear();
+        // 让每辆车自己去扫描周围的方块并写入全局 snapshot
+        for (SoftBodyVehicle vehicle : vehicles) {
+            vehicle.cacheEntityLocation();
+            vehicle.updateVoxelSnapshot(mcWorld, voxelSnapshot, mutablePos, dt);
+        }
+
         for (int s = 0; s < subSteps; s++) {
 
-            // 1. 算内力并积分预测坐标【车辆级别完全独立并行！】
+            // 1. 算内力并积分预测坐标【完全独立并行】
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveInternalForces(subDt);
             });
@@ -104,7 +102,7 @@ public class PhysicsWorld {
 
                 // ★ 动态内存紧凑 (Dynamic Packing) ★
                 // 每次宽阶段前，重新为存活的车辆分配紧凑的全局 ID 偏移量。
-                // 这样无论玩家怎么删除和生成车辆，内存永远是 0 空隙！
+                // 这样无论玩家怎么删除和生成车辆，内存永远是 0 空隙
                 int activeOffset = 0;
                 for (SoftBodyVehicle vehicle : vehicles) {
                     vehicle.globalNodeOffset = activeOffset;
@@ -135,6 +133,10 @@ public class PhysicsWorld {
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveEnvironmentCollisions(voxelSnapshot, subDt);
             });
+        }
+
+        for (SoftBodyVehicle vehicle : vehicles) {
+            vehicle.updateEntityLocation();
         }
     }
 

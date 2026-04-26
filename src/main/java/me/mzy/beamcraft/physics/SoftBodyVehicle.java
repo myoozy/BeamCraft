@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.physics;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
@@ -14,7 +15,8 @@ public class SoftBodyVehicle {
     public static final double KINDA_SMALL_NUMBER = PhysicsWorld.KINDA_SMALL_NUMBER;
     public static final int MAX_AABB_SIZE = PhysicsWorld.MAX_AABB_SIZE;
 
-    public final Entity parentEntity; // 绑定的实体
+    public final PhysicsVehicleEntity parentEntity; // 绑定的实体
+    public final double[] localCOM = new double[3];
     public int vehicleId = -1; // 物理世界给它分配的顺序 ID (0, 1, 2...)
     public int globalNodeOffset = 0; // 全局节点偏移量
 
@@ -37,11 +39,28 @@ public class SoftBodyVehicle {
     double entityY = 0.0;
     double entityZ = 0.0;
 
-    public SoftBodyVehicle(Entity parentEntity) {
+    public SoftBodyVehicle(PhysicsVehicleEntity parentEntity) {
         this.parentEntity = parentEntity;
-        entityX = parentEntity.getX();
-        entityY = parentEntity.getY();
-        entityZ = parentEntity.getZ();
+        cacheEntityLocation();
+    }
+
+    public void cacheEntityLocation() {
+        if (this.parentEntity == null) return;
+        entityX = this.parentEntity.getX();
+        entityY = this.parentEntity.getY();
+        entityZ = this.parentEntity.getZ();
+    }
+
+    public void updateEntityLocation() {
+        nodes.getCenterOfMass(localCOM);
+
+        this.parentEntity.setVelocity(0, 0, 0);
+
+        double newEntityX = entityX + localCOM[0];
+        double newEntityY = entityY + localCOM[1];
+        double newEntityZ = entityZ + localCOM[2];
+        this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
+        nodes.moveNodes(-localCOM[0], -localCOM[1], -localCOM[2]);
     }
 
     /**
@@ -198,58 +217,13 @@ public class SoftBodyVehicle {
     }
 
     /**
-     * 一次性旋转载具的所有节点（支持偏航、俯仰、滚转）
-     * 可以在生成后调用，也可以在运行时作为独立工具调用
+     * Sreset velocity and deformation state
      */
-    public void rotateNodes(float yawDeg, float pitchDeg, float rollDeg) {
-        // 转换为弧度
-        float radYaw = (float) Math.toRadians(-yawDeg); // MC 的 Yaw 顺逆时针是反的
-        float radPitch = (float) Math.toRadians(pitchDeg);
-        float radRoll = (float) Math.toRadians(rollDeg);
-
-        net.minecraft.util.math.Vec3d pos;
-        net.minecraft.util.math.Vec3d basePos;
-
-        for (int i = 0; i < nodes.count; i++) {
-            // 1. 旋转当前坐标
-            pos = new net.minecraft.util.math.Vec3d(nodes.posX[i], nodes.posY[i], nodes.posZ[i]);
-            pos = pos.rotateZ(radRoll).rotateX(radPitch).rotateY(radYaw);
-
-            nodes.posX[i] = pos.x;
-            nodes.posY[i] = pos.y;
-            nodes.posZ[i] = pos.z;
-
-            // 2. 旋转基础坐标 (确保 spawnAt 重置时朝向正确)
-            basePos = new net.minecraft.util.math.Vec3d(nodes.baseX[i], nodes.baseY[i], nodes.baseZ[i]);
-            basePos = basePos.rotateZ(radRoll).rotateX(radPitch).rotateY(radYaw);
-
-            nodes.baseX[i] = basePos.x;
-            nodes.baseY[i] = basePos.y;
-            nodes.baseZ[i] = basePos.z;
-        }
-
-        System.out.println("🔄 Vehicle nodes rotated (Yaw: " + yawDeg + ", Pitch: " + pitchDeg + ", Roll: " + rollDeg + ")");
-    }
-
-    /**
-     * Spawn assembled vehicle at target coordinate, reset velocity and deformation state
-     */
-    public void spawnAt(double startX, double startY, double startZ) {
-        for(int i = 0; i < nodes.count; i++) {
-            nodes.posX[i] = nodes.baseX[i] + startX;
-            nodes.posY[i] = nodes.baseY[i] + startY;
-            nodes.posZ[i] = nodes.baseZ[i] + startZ;
-
-            nodes.velX[i] = 0; nodes.velY[i] = 0; nodes.velZ[i] = 0;
-            nodes.forceX[i] = 0; nodes.forceY[i] = 0; nodes.forceZ[i] = 0;
-        }
-
-        for(int i = 0; i < beams.count; i++) {
-            beams.restLength[i] = beams.baseRestLength[i];
-            beams.broken[i] = false;
-        }
-
-        System.out.println("Vehicle spawned at coordinate: " + startX + ", " + startY + ", " + startZ);
+    public void reset() {
+        nodes.reset();
+        beams.reset();
+        torsionbars.reset();
+        System.out.println("Vehicle reset.");
     }
 
     /**
@@ -266,11 +240,8 @@ public class SoftBodyVehicle {
     }
 
     public void updateVoxelSnapshot(World mcWorld, VoxelSnapshot snapshot, BlockPos.Mutable mutablePos, double dt) {
-        if (nodes.count == 0) return;
 
-        entityX = parentEntity.getX();
-        entityY = parentEntity.getY();
-        entityZ = parentEntity.getZ();
+        if (nodes.count == 0) return;
 
         // Initialize bounding box min/max value for current tick
         for (int p = 0; p <= maxTrackedPartId; p++) {
@@ -378,6 +349,10 @@ public class SoftBodyVehicle {
             nodes.forceX[i] = 0;
             nodes.forceY[i] = 0;
             nodes.forceZ[i] = 0;
+
+            nodes.prevPosX[i] = nodes.posX[i];
+            nodes.prevPosY[i] = nodes.posY[i];
+            nodes.prevPosZ[i] = nodes.posZ[i];
         }
 
         // ==========================================
@@ -436,13 +411,11 @@ public class SoftBodyVehicle {
             double vy = nodes.velY[n2] - nodes.velY[n1];
             double vz = nodes.velZ[n2] - nodes.velZ[n1];
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-            double absRelVel = Math.abs(relVel);
 
             // Anti-explosion damping clamp
-            double maxDampForce = (reducedMass * absRelVel) * invDt;
-            double actualDampForce = activeDamp * absRelVel;
-            actualDampForce = Math.min(actualDampForce, maxDampForce);
-            double dampForce = actualDampForce * Math.signum(relVel);
+            double maxDamp = reducedMass * invDt;
+            activeDamp = Math.min(activeDamp, maxDamp);
+            double dampForce = relVel * activeDamp;
 
             double totalForce = springForce + dampForce;
 
@@ -476,8 +449,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
-// ==========================================
-        // 🛡️ 扭杆计算 (Torsionbars) - 终极物理无 Bug 版
+
+        // ==========================================
+        // 🛡️ 扭杆计算 (Torsionbars)
         // ==========================================
         for (int i = 0; i < torsionbars.count; i++) {
             if (torsionbars.broken[i]) continue;
@@ -505,7 +479,7 @@ public class SoftBodyVehicle {
             double c2_sq = c2x*c2x + c2y*c2y + c2z*c2z;
             double b2_sq = b2x*b2x + b2y*b2y + b2z*b2z;
 
-            // 限制极小值，防除零崩溃 (1e-8 已经足够，不需要改成 1 了！)
+            // 限制极小值，防除零崩溃 (1e-8 已经足够)
             double c1_sq_safe = Math.max(c1_sq, 1e-8);
             double c2_sq_safe = Math.max(c2_sq, 1e-8);
             double b2_sq_safe = Math.max(b2_sq, 1e-8);
@@ -519,13 +493,11 @@ public class SoftBodyVehicle {
             double dot2 = c1x * c2x + c1y * c2y + c1z * c2z;
             double currentAngle = Math.atan2(dot1, dot2);
 
-            double deltaAngle = currentAngle - torsionbars.initAngle[i];
+            double deltaAngle = currentAngle - torsionbars.restAngle[i];
             while (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
             while (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
 
-            // ==========================================
-            // 🚨🚨🚨 史上最大 Bug 修复：完美的梯度符号
-            // ==========================================
+            // 🚨🚨🚨 注意梯度符号
             double g1_factor = b2_mag / c1_sq_safe;
             double g4_factor = -b2_mag / c2_sq_safe;
 
@@ -535,7 +507,7 @@ public class SoftBodyVehicle {
             double b1_dot_b2_div_sq = (b1x*b2x + b1y*b2y + b1z*b2z) / b2_sq_safe;
             double b3_dot_b2_div_sq = (b3x*b2x + b3y*b2y + b3z*b2z) / b2_sq_safe;
 
-            // 注意这里的符号：这保证了系统绝对不会再凭空产生让你发抖的幽灵力矩！
+            // 注意这里的符号
             double g2x = -g1x * b1_dot_b2_div_sq + g4x * b3_dot_b2_div_sq - g1x;
             double g2y = -g1y * b1_dot_b2_div_sq + g4y * b3_dot_b2_div_sq - g1y;
             double g2z = -g1z * b1_dot_b2_div_sq + g4z * b3_dot_b2_div_sq - g1z;
@@ -544,9 +516,7 @@ public class SoftBodyVehicle {
             double g3y = -g1y - g2y - g4y;
             double g3z = -g1z - g2z - g4z;
 
-            // ==========================================
-            // 🛡️ 广义质量与你的天才钳制理论
-            // ==========================================
+            // 广义质量
             double g1_sq_val = g1x*g1x + g1y*g1y + g1z*g1z;
             double g2_sq_val = g2x*g2x + g2y*g2y + g2z*g2z;
             double g3_sq_val = g3x*g3x + g3y*g3y + g3z*g3z;
@@ -557,16 +527,13 @@ public class SoftBodyVehicle {
 
             double genMass = 1.0 / Math.max(invGenMass, 1e-12);
 
-            // 0.1 安全系数，完美适配 2000Hz
-            double maxSafeSpring = (genMass / (dt * dt));
-            double maxSafeDamp = genMass / dt;
+            double maxSafeSpring = getMaxSafeSpring (genMass, dt);
+            double maxSafeDamp = genMass * invDt;
 
             double activeSpring = Math.min(torsionbars.spring[i], maxSafeSpring);
             double activeDamp = Math.min(torsionbars.damp[i], maxSafeDamp);
 
-            // ==========================================
             // 💥 最终受力输出
-            // ==========================================
             double omega = (g1x*nodes.velX[n1] + g1y*nodes.velY[n1] + g1z*nodes.velZ[n1]) +
                     (g2x*nodes.velX[n2] + g2y*nodes.velY[n2] + g2z*nodes.velZ[n2]) +
                     (g3x*nodes.velX[n3] + g3y*nodes.velY[n3] + g3z*nodes.velZ[n3]) +
@@ -585,9 +552,9 @@ public class SoftBodyVehicle {
                 double flowRate = (overTorque * overTorque) / (torsionbars.deform[i] * torsionbars.spring[i]);
                 double deformAmount = flowRate * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
 
-                torsionbars.initAngle[i] += Math.signum(deltaAngle) * deformAmount;
-                while (torsionbars.initAngle[i] > Math.PI) torsionbars.initAngle[i] -= Math.PI * 2;
-                while (torsionbars.initAngle[i] < -Math.PI) torsionbars.initAngle[i] += Math.PI * 2;
+                torsionbars.restAngle[i] += Math.signum(deltaAngle) * deformAmount;
+                while (torsionbars.restAngle[i] > Math.PI) torsionbars.restAngle[i] -= Math.PI * 2;
+                while (torsionbars.restAngle[i] < -Math.PI) torsionbars.restAngle[i] += Math.PI * 2;
 
                 torque = Math.signum(torque) * torsionbars.deform[i];
             }
@@ -671,6 +638,7 @@ public class SoftBodyVehicle {
         // 🛡️ 积分速度和位置（预测）。整个tick只有这一次积分
         // ==========================================
         for (int i = 0; i < nodes.count; i++) {
+
             if (nodes.mass[i] < PhysicsWorld.KINDA_SMALL_NUMBER) continue;
             // 加重力
             nodes.forceY[i] += PhysicsWorld.GRAVITY * nodes.mass[i];
@@ -804,10 +772,10 @@ public class SoftBodyVehicle {
 
             if (worldY < 320 && worldY > -70 && snapshot.isSolid(worldX, worldY, worldZ)) {
 
-                // 完美的无缝回溯：减去刚刚加上的 vel*dt，瞬间回到上一步的安全坐标！
-                double oldLocalX = nodes.posX[i] - nodes.velX[i] * dt;
-                double oldLocalY = nodes.posY[i] - nodes.velY[i] * dt;
-                double oldLocalZ = nodes.posZ[i] - nodes.velZ[i] * dt;
+                // 回到上一步的安全坐标！
+                double oldLocalX = nodes.prevPosX[i];
+                double oldLocalY = nodes.prevPosY[i];
+                double oldLocalZ = nodes.prevPosZ[i];
 
                 double oldWorldX = entityX + oldLocalX;
                 double oldWorldY = entityY + oldLocalY;

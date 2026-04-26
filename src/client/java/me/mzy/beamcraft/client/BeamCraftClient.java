@@ -28,7 +28,6 @@ public class BeamCraftClient implements ClientModInitializer {
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
-	public static double lastScanMs = 0.0;
 
 	@Override
 	public void onInitializeClient() {
@@ -56,10 +55,10 @@ public class BeamCraftClient implements ClientModInitializer {
 			if (isG && !gWasPressed) {
 				double HEIGHT_OFFSET = 5;
 				for (SoftBodyVehicle vehicle : world.vehicles) {
+					vehicle.reset();
 					// 把 MC 实体强行瞬移过来
 					vehicle.parentEntity.setPosition(client.player.getX(), client.player.getY() + HEIGHT_OFFSET, client.player.getZ());
-					// 局部坐标系下清空形变和速度
-					vehicle.spawnAt(0, 0, 0);
+					vehicle.parentEntity.setAngles(client.player.getYaw(), client.player.getPitch());
 				}
 			}
 			gWasPressed = isG;
@@ -67,13 +66,10 @@ public class BeamCraftClient implements ClientModInitializer {
 			// 统一执行物理世界所有车辆的更新
 			if (!world.vehicles.isEmpty()) {
 				long t1 = System.nanoTime();
-				world.preStep(client.world, DELTA_TIME);
+				world.step(client.world, DELTA_TIME);
 				long t2 = System.nanoTime();
-				world.step(DELTA_TIME);
-				long t3 = System.nanoTime();
 
-				lastScanMs = (t2 - t1) / 1_000_000.0;
-				lastPhysicsMs = (t3 - t2) / 1_000_000.0;
+				lastPhysicsMs = (t2 - t1) / 1_000_000.0;
 			}
 		});
 
@@ -83,13 +79,11 @@ public class BeamCraftClient implements ClientModInitializer {
 			if (client.options.hudHidden) return; // 如果按了 F1 隐藏界面，就不画
 
 			String physicsStepText = String.format("BeamCraft Physics: %.2f ms", lastPhysicsMs);
-			String physicsScanText = String.format("BeamCraft Physics Scan: %.2f ms", lastScanMs);
 
 			// 耗时超过 10ms 变红警告，否则亮绿
-			int color = (lastPhysicsMs + lastScanMs > 10.0) ? 0xFF0000 : 0x00FF00;
+			int color = (lastPhysicsMs > 10.0) ? 0xFF0000 : 0x00FF00;
 
 			drawContext.drawTextWithShadow(client.textRenderer, physicsStepText, 10, 10, color);
-			drawContext.drawTextWithShadow(client.textRenderer, physicsScanText, 10, 20, color);
 		});
 
 		// 3. 渲染循环 (遍历所有车，并将局部坐标叠加上实体坐标)

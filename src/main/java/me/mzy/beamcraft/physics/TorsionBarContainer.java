@@ -12,7 +12,8 @@ public class TorsionBarContainer {
     public int[] node3 = new int[INIT_TORSION_CAP];
     public int[] node4 = new int[INIT_TORSION_CAP];
 
-    public double[] initAngle = new double[INIT_TORSION_CAP]; // 静止角度
+    public double[] restAngle = new double[INIT_TORSION_CAP]; // 静止角度
+    public double[] baseRestAngle = new double[INIT_TORSION_CAP];
     public double[] spring = new double[INIT_TORSION_CAP];
     public double[] damp = new double[INIT_TORSION_CAP];
     public double[] deform = new double[INIT_TORSION_CAP];
@@ -26,7 +27,8 @@ public class TorsionBarContainer {
             node2 = Utility.expand(node2, newSize);
             node3 = Utility.expand(node3, newSize);
             node4 = Utility.expand(node4, newSize);
-            initAngle = Utility.expand(initAngle, newSize);
+            restAngle = Utility.expand(restAngle, newSize);
+            baseRestAngle =  Utility.expand(baseRestAngle, newSize);
             spring =  Utility.expand(spring, newSize);
             damp = Utility.expand(damp, newSize);
             deform = Utility.expand(deform, newSize);
@@ -84,16 +86,21 @@ public class TorsionBarContainer {
 
         double angle = Math.atan2(dot1, dot2);
 
-        initAngle[count] = angle;
+        restAngle[count] = angle;
+        baseRestAngle[count] = restAngle[count];
 
         count++;
     }
 
     public void clear() {
         count = 0;
-        // 重置断裂状态
-        for (int i = 0; i < broken.length; i++) {
+        reset();
+    }
+    
+    public void reset() {
+        for (int i = 0; i < count; i++) {
             broken[i] = false;
+            restAngle[i] = baseRestAngle[i];
         }
     }
 }

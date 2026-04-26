@@ -15,19 +15,19 @@ public class BeamContainer {
     public int[] node2 = new int[INIT_BEAM_CAP];
 
     // 梁属性
+    public int[] type = new int[INIT_BEAM_CAP];           // 存储枚举值
     public double[] restLength = new double[INIT_BEAM_CAP];
     public double[] baseRestLength = new double[INIT_BEAM_CAP]; // 满血复活记录
     public double[] spring = new double[INIT_BEAM_CAP];
     public double[] damp = new double[INIT_BEAM_CAP];
     public double[] deform = new double[INIT_BEAM_CAP];
     public double[] strength = new double[INIT_BEAM_CAP];
-    public boolean[] broken = new boolean[INIT_BEAM_CAP];
-
-    public int[] type = new int[INIT_BEAM_CAP];           // 存储枚举值
     public double[] shortBound = new double[INIT_BEAM_CAP]; // 最短极限比例
     public double[] longBound = new double[INIT_BEAM_CAP];  // 最长极限比例
     public double[] limitSpring = new double[INIT_BEAM_CAP]; // 极限反弹力
     public double[] limitDamp = new double[INIT_BEAM_CAP];   // 极限阻尼
+
+    public boolean[] broken = new boolean[INIT_BEAM_CAP];
 
     private void ensureBeamCapacity() {
         if (count >= node1.length) {
@@ -87,9 +87,13 @@ public class BeamContainer {
 
     public void clear() {
         count = 0;
-        // Reset the break status
-        for (int i = 0; i < broken.length; i++) {
+        reset();
+    }
+
+    public void reset(){
+        for (int i = 0; i < count; i++) {
             broken[i] = false;
+            restLength[i] = baseRestLength[i];
         }
     }
 }
