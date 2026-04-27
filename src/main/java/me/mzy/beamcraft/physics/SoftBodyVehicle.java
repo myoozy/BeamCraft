@@ -105,19 +105,19 @@ public class SoftBodyVehicle {
     public void addBeam(String name1, String name2, double spring, double damp, double deform, double strength,
                         int type, double precomp, double shortBound, double longBound,
                         double shortBoundRange, double longBoundRange,
-                        double limitSpring, double limitDamp) {
-
+                        double limitSpring, double limitDamp,
+                        double dampVelSplit, double dampFast, double dampRebound, double dampReboundFast) {
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
             int n1 = nodes.nameToIndex.get(name1);
             int n2 = nodes.nameToIndex.get(name2);
-
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
-
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-            beams.addBeam(n1, n2, dist,spring,damp,deform,strength,type,precomp,shortBound,longBound,shortBoundRange,longBoundRange,limitSpring,limitDamp);
+            beams.addBeam(n1, n2, dist, spring, damp, deform, strength, type, precomp,
+                    shortBound, longBound, shortBoundRange, longBoundRange, limitSpring, limitDamp,
+                    dampVelSplit, dampFast, dampRebound, dampReboundFast);
         }
     }
 
@@ -355,9 +355,6 @@ public class SoftBodyVehicle {
             nodes.prevPosZ[i] = nodes.posZ[i];
         }
 
-        // ==========================================
-        // 🛡️ 计算梁 (Beams)
-        // ==========================================
         for (int i = 0; i < beams.count; i++) {
             if (beams.broken[i]) continue;
 
@@ -365,83 +362,90 @@ public class SoftBodyVehicle {
             int n2 = beams.node2[i];
             double m1 = nodes.mass[n1];
             double m2 = nodes.mass[n2];
-            if (m1 < KINDA_SMALL_NUMBER || m2 < KINDA_SMALL_NUMBER) continue;
+
+            if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
 
-            double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            double distSq = dx*dx + dy*dy + dz*dz;
+            double dist = Math.sqrt(distSq);
+            if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
-            int type = beams.type[i];
+            // 🚀 读取合并后的状态，并瞬间解包
+            int rawType = beams.type[i];
+            int type = rawType & BeamContainer.MASK_TYPE;
 
-            // Support beam logic: only resist compression, ignore tension
-            if (type == BeamContainer.BEAM_SUPPORT && dist > beams.restLength[i]) {
-                continue;
-            }
+            double restL = beams.restLength[i];
 
-            // Calculate safe limited stiffness for explicit euler
+            if (type == BeamContainer.BEAM_SUPPORT && dist > restL) continue;
+
             double reducedMass = (m1 * m2) / (m1 + m2);
             double maxSafeSpring = getMaxSafeSpring(reducedMass, dt);
 
             double activeSpring = Math.min(beams.spring[i], maxSafeSpring);
+            double springForce = activeSpring * (dist - restL);
 
             double activeDamp = beams.damp[i];
-            double springForce = activeSpring * (dist - beams.restLength[i]);
 
-            // Bounded beam limit logic
-            if (type == BeamContainer.BEAM_BOUNDED) {
-                double shortBoundary = beams.restLength[i] * (1.0 - beams.shortBound[i]);
-                double longBoundary = beams.restLength[i] * (1.0 + beams.longBound[i]);
-
-                double limitSpring = Math.min(beams.limitSpring[i], maxSafeSpring);
-
-                if (dist < shortBoundary) {
-                    springForce += limitSpring * (dist - shortBoundary);
-                    activeDamp = Math.max(activeDamp, beams.limitDamp[i]);
-                } else if (dist > longBoundary) {
-                    springForce += limitSpring * (dist - longBoundary);
-                    activeDamp = Math.max(activeDamp, beams.limitDamp[i]);
-                }
-            }
-
-            // Relative velocity and damping calculation
             double vx = nodes.velX[n2] - nodes.velX[n1];
             double vy = nodes.velY[n2] - nodes.velY[n1];
             double vz = nodes.velZ[n2] - nodes.velZ[n1];
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
-            // Anti-explosion damping clamp
+            // ==========================================
+            // 🔥 位运算门控 1：复杂阻尼（位与运算只要 1 个 CPU 时钟周期）
+            // ==========================================
+            if ((rawType & BeamContainer.FLAG_HAS_COMPLEX_DAMP) != 0) {
+                double split = beams.dampVelocitySplit[i];
+                boolean isRebound = relVel > 0;
+                boolean isFast = Math.abs(relVel) > split;
+                activeDamp = isRebound ?
+                        (isFast ? beams.dampReboundFast[i] : beams.dampRebound[i]) :
+                        (isFast ? beams.dampFast[i] : activeDamp);
+            }
+
+            // ==========================================
+            // 🔥 位运算门控 2：限位计算
+            // ==========================================
+            if ((rawType & BeamContainer.FLAG_HAS_BOUND) != 0) {
+                double shortBoundary = restL * (1.0 - beams.shortBound[i]);
+                double longBoundary  = restL * (1.0 + beams.longBound[i]);
+                double limitSpring = Math.min(beams.limitSpring[i], maxSafeSpring);
+
+                if (dist < shortBoundary) {
+                    springForce += limitSpring * (shortBoundary - dist);
+                    double lDamp = beams.limitDamp[i];
+                    if (lDamp > activeDamp) activeDamp = lDamp;
+                } else if (dist > longBoundary) {
+                    springForce += limitSpring * (dist - longBoundary);
+                    double lDamp = beams.limitDamp[i];
+                    if (lDamp > activeDamp) activeDamp = lDamp;
+                }
+            }
+
+            // ... (下面保持不变)
             double maxDamp = reducedMass * invDt;
-            activeDamp = Math.min(activeDamp, maxDamp);
-            double dampForce = relVel * activeDamp;
+            if (activeDamp > maxDamp) activeDamp = maxDamp;
 
-            double totalForce = springForce + dampForce;
+            double totalForce = springForce + (relVel * activeDamp);
 
-            // Break beam if over strength limit
-            if (Math.abs(totalForce) > beams.strength[i]) {
+            double absTotalForce = Math.abs(totalForce);
+            if (absTotalForce > beams.strength[i]) {
                 beams.broken[i] = true;
                 continue;
             }
 
-            // Quadratic plastic deformation model
-            if (Math.abs(totalForce) > beams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                double overForce = Math.abs(totalForce) - beams.deform[i];
-                double flowRate = (overForce * overForce) / (beams.deform[i] * activeSpring);
-                double deformAmount = flowRate * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+            if (absTotalForce > beams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - beams.deform[i];
+                double deformAmount = ((overForce * overForce) / (beams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
 
-                if (dist > beams.restLength[i]) {
-                    beams.restLength[i] += deformAmount;
-                } else {
-                    beams.restLength[i] -= deformAmount;
-                    if (beams.restLength[i] < KINDA_SMALL_NUMBER) {
-                        beams.restLength[i] = KINDA_SMALL_NUMBER;
-                    }
-                }
+                if (dist > restL) beams.restLength[i] += deformAmount;
+                else beams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
             }
 
-            // Split and apply force to two nodes
             double fx = totalForce * dx * invDist;
             double fy = totalForce * dy * invDist;
             double fz = totalForce * dz * invDist;

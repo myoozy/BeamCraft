@@ -140,6 +140,11 @@ public class JBeamParser {
         double currentShortBoundRange = -1.0, currentLongBoundRange = -1.0;
         double currentLimitSpring = currentSpring, currentLimitDamp = currentDamp;
 
+        double currentDampVelSplit = -1.0;
+        double currentDampFast = -1.0;
+        double currentDampRebound = -1.0;
+        double currentDampReboundFast = -1.0;
+
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
@@ -168,6 +173,11 @@ public class JBeamParser {
                 currentLimitSpring = getDoubleSafe(modifier, "beamLimitSpring", currentLimitSpring);
                 currentLimitDamp = getDoubleSafe(modifier, "beamLimitDamp", currentLimitDamp);
 
+                currentDampVelSplit = getDoubleSafe(modifier, "beamDampVelocitySplit", currentDampVelSplit);
+                currentDampFast = getDoubleSafe(modifier, "beamDampFast", currentDampFast);
+                currentDampRebound = getDoubleSafe(modifier, "beamDampRebound", currentDampRebound);
+                currentDampReboundFast = getDoubleSafe(modifier, "beamDampReboundFast", currentDampReboundFast);
+
                 if (modifier.has("beamShortBound")) currentShortBoundRange = -1.0;
                 if (modifier.has("beamLongBound")) currentLongBoundRange = -1.0;
 
@@ -189,6 +199,10 @@ public class JBeamParser {
                     double inlineShortB = currentShortBound, inlineLongB = currentLongBound;
                     double inlineShortBRange = currentShortBoundRange, inlineLongBRange = currentLongBoundRange;
                     double inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
+                    double inlineDampVelSplit = currentDampVelSplit;
+                    double inlineDampFast = currentDampFast;
+                    double inlineDampRebound = currentDampRebound;
+                    double inlineDampReboundFast = currentDampReboundFast;
 
                     // Apply inline properties from the end of the row
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
@@ -207,6 +221,11 @@ public class JBeamParser {
                         inlineLimitS = getDoubleSafe(inline, "beamLimitSpring", inlineLimitS);
                         inlineLimitD = getDoubleSafe(inline, "beamLimitDamp", inlineLimitD);
 
+                        inlineDampVelSplit = getDoubleSafe(inline, "beamDampVelocitySplit", inlineDampVelSplit);
+                        inlineDampFast = getDoubleSafe(inline, "beamDampFast", inlineDampFast);
+                        inlineDampRebound = getDoubleSafe(inline, "beamDampRebound", inlineDampRebound);
+                        inlineDampReboundFast = getDoubleSafe(inline, "beamDampReboundFast", inlineDampReboundFast);
+
                         String bt = getStringSafe(inline, "beamType", "");
                         if (!bt.isEmpty()) {
                             if (bt.equals("|NORMAL") || bt.equals("|HYDRO") || bt.equals("|ANISOTROPIC")) inlineType = BeamContainer.BEAM_NORMAL;
@@ -223,7 +242,8 @@ public class JBeamParser {
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlineType, inlinePrecomp, inlineShortB, inlineLongB,
                             inlineShortBRange, inlineLongBRange,
-                            inlineLimitS, inlineLimitD);
+                            inlineLimitS, inlineLimitD,
+                            inlineDampVelSplit, inlineDampFast, inlineDampRebound, inlineDampReboundFast);
                 }
             }
         }
