@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
+import me.mzy.beamcraft.physics.BeamContainer;
 import me.mzy.beamcraft.physics.PhysicsWorld;
 import me.mzy.beamcraft.physics.SoftBodyVehicle;
 
@@ -113,8 +114,8 @@ public class BeamCraftClient implements ClientModInitializer {
 				for (int i = 0; i < vehicle.beams.count; i++) {
 					if (vehicle.beams.broken[i]) continue; // 断裂的隐藏
 
-					int n1 = vehicle.beams.node1[i];
-					int n2 = vehicle.beams.node2[i];
+					int n1 = vehicle.beams.intData[i + BeamContainer.I_NODE1];
+					int n2 = vehicle.beams.intData[i + BeamContainer.I_NODE2];
 
 					// 【核心逻辑】：将 SoftBody 的内部坐标 + 实体的世界坐标
 					float x1 = (float)(vehicle.nodes.posX[n1] + eX);

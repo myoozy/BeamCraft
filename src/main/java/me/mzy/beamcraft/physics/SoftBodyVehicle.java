@@ -355,14 +355,21 @@ public class SoftBodyVehicle {
             nodes.prevPosZ[i] = nodes.posZ[i];
         }
 
+        // ==========================================
+        // 🛡️ 计算梁 (Beams) - AoS 内存连续极速版
+        // ==========================================
         for (int i = 0; i < beams.count; i++) {
             if (beams.broken[i]) continue;
 
-            int n1 = beams.node1[i];
-            int n2 = beams.node2[i];
+            // 🚀 位移寻址，瞬间定位当前梁在数组中的大块内存
+            int iBase = i << 2;
+            int dBase = i << 4;
+
+            int n1 = beams.intData[iBase + BeamContainer.I_NODE1];
+            int n2 = beams.intData[iBase + BeamContainer.I_NODE2];
+
             double m1 = nodes.mass[n1];
             double m2 = nodes.mass[n2];
-
             if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
@@ -374,21 +381,21 @@ public class SoftBodyVehicle {
             if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
-            // 🚀 读取合并后的状态，并瞬间解包
-            int rawType = beams.type[i];
+            int rawType = beams.intData[iBase + BeamContainer.I_TYPE];
             int type = rawType & BeamContainer.MASK_TYPE;
 
-            double restL = beams.restLength[i];
+            double restL = beams.dblData[dBase + BeamContainer.D_REST_LEN];
 
             if (type == BeamContainer.BEAM_SUPPORT && dist > restL) continue;
 
             double reducedMass = (m1 * m2) / (m1 + m2);
             double maxSafeSpring = getMaxSafeSpring(reducedMass, dt);
 
-            double activeSpring = Math.min(beams.spring[i], maxSafeSpring);
+            double beamSpring = beams.dblData[dBase + BeamContainer.D_SPRING];
+            double activeSpring = Math.min(beamSpring, maxSafeSpring);
             double springForce = activeSpring * (dist - restL);
 
-            double activeDamp = beams.damp[i];
+            double activeDamp = beams.dblData[dBase + BeamContainer.D_DAMP];
 
             double vx = nodes.velX[n2] - nodes.velX[n1];
             double vy = nodes.velY[n2] - nodes.velY[n1];
@@ -396,54 +403,56 @@ public class SoftBodyVehicle {
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
             // ==========================================
-            // 🔥 位运算门控 1：复杂阻尼（位与运算只要 1 个 CPU 时钟周期）
+            // 🔥 门控 1：复杂阻尼
             // ==========================================
             if ((rawType & BeamContainer.FLAG_HAS_COMPLEX_DAMP) != 0) {
-                double split = beams.dampVelocitySplit[i];
+                double split = beams.dblData[dBase + BeamContainer.D_DAMP_SPLIT];
                 boolean isRebound = relVel > 0;
                 boolean isFast = Math.abs(relVel) > split;
                 activeDamp = isRebound ?
-                        (isFast ? beams.dampReboundFast[i] : beams.dampRebound[i]) :
-                        (isFast ? beams.dampFast[i] : activeDamp);
+                        (isFast ? beams.dblData[dBase + BeamContainer.D_DAMP_REB_FAST] : beams.dblData[dBase + BeamContainer.D_DAMP_REB]) :
+                        (isFast ? beams.dblData[dBase + BeamContainer.D_DAMP_FAST] : activeDamp);
             }
 
             // ==========================================
-            // 🔥 位运算门控 2：限位计算
+            // 🔥 门控 2：限位计算
             // ==========================================
             if ((rawType & BeamContainer.FLAG_HAS_BOUND) != 0) {
-                double shortBoundary = restL * (1.0 - beams.shortBound[i]);
-                double longBoundary  = restL * (1.0 + beams.longBound[i]);
-                double limitSpring = Math.min(beams.limitSpring[i], maxSafeSpring);
+                double shortBoundary = restL * (1.0 - beams.dblData[dBase + BeamContainer.D_SHORT_BOUND]);
+                double longBoundary  = restL * (1.0 + beams.dblData[dBase + BeamContainer.D_LONG_BOUND]);
+                double limitSpring = Math.min(beams.dblData[dBase + BeamContainer.D_LIMIT_SPRING], maxSafeSpring);
 
                 if (dist < shortBoundary) {
                     springForce += limitSpring * (shortBoundary - dist);
-                    double lDamp = beams.limitDamp[i];
+                    double lDamp = beams.dblData[dBase + BeamContainer.D_LIMIT_DAMP];
                     if (lDamp > activeDamp) activeDamp = lDamp;
                 } else if (dist > longBoundary) {
                     springForce += limitSpring * (dist - longBoundary);
-                    double lDamp = beams.limitDamp[i];
+                    double lDamp = beams.dblData[dBase + BeamContainer.D_LIMIT_DAMP];
                     if (lDamp > activeDamp) activeDamp = lDamp;
                 }
             }
 
-            // ... (下面保持不变)
             double maxDamp = reducedMass * invDt;
             if (activeDamp > maxDamp) activeDamp = maxDamp;
 
             double totalForce = springForce + (relVel * activeDamp);
 
             double absTotalForce = Math.abs(totalForce);
-            if (absTotalForce > beams.strength[i]) {
+            double strength = beams.dblData[dBase + BeamContainer.D_STRENGTH];
+
+            if (absTotalForce > strength) {
                 beams.broken[i] = true;
                 continue;
             }
 
-            if (absTotalForce > beams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                double overForce = absTotalForce - beams.deform[i];
-                double deformAmount = ((overForce * overForce) / (beams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+            double deform = beams.dblData[dBase + BeamContainer.D_DEFORM];
+            if (absTotalForce > deform && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - deform;
+                double deformAmount = ((overForce * overForce) / (deform * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
 
-                if (dist > restL) beams.restLength[i] += deformAmount;
-                else beams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
+                if (dist > restL) beams.dblData[dBase + BeamContainer.D_REST_LEN] += deformAmount;
+                else beams.dblData[dBase + BeamContainer.D_REST_LEN] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
             }
 
             double fx = totalForce * dx * invDist;
