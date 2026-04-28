@@ -53,7 +53,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			// 检测 G 键 (调试功能：瞬间重置所有现存车辆，并传送到玩家头顶)
 			boolean isG = InputUtil.isKeyPressed(client.getWindow().getHandle(), GLFW.GLFW_KEY_G);
 			if (isG && !gWasPressed) {
-				double HEIGHT_OFFSET = 5;
+				double HEIGHT_OFFSET = 2;
 				for (SoftBodyVehicle vehicle : world.vehicles) {
 					vehicle.reset();
 					// 把 MC 实体强行瞬移过来
@@ -111,7 +111,6 @@ public class BeamCraftClient implements ClientModInitializer {
 
 				// === 1. 渲染梁/骨架 ===
 				for (int i = 0; i < vehicle.beams.count; i++) {
-					if (vehicle.beams.broken[i]) continue; // 断裂的隐藏
 
 					int n1 = vehicle.beams.node1[i];
 					int n2 = vehicle.beams.node2[i];
@@ -125,8 +124,18 @@ public class BeamCraftClient implements ClientModInitializer {
 					float y2 = (float)(vehicle.nodes.posY[n2] + eY);
 					float z2 = (float)(vehicle.nodes.posZ[n2] + eZ);
 
-					//beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
-					//beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
+					//if (vehicle.beams.restLength[i] != vehicle.beams.targetRestLength[i] && !vehicle.beams.broken[i]){
+					//	beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
+					//	beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
+					//}
+					//else if (vehicle.beams.broken[i]){
+					//	beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
+					//	beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
+					//}
+					//else {
+					//	//beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
+					//	//beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
+					//}
 				}
 
 				// === 2. 渲染三角面 (浅蓝色轮廓) ===

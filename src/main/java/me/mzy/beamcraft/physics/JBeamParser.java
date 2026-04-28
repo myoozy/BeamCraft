@@ -132,6 +132,8 @@ public class JBeamParser {
 
         // Default values from Rig of Rods
         double currentPrecomp = 1.0;
+        double currentPrecompRange = 0.0;
+        double currentPrecompTime = 0.0;
         double currentSpring = 9000000.0, currentDamp = 12000.0;
         double currentDeform = 400000.0;
         double currentStrength = 1000000.0;
@@ -163,6 +165,8 @@ public class JBeamParser {
                 }
 
                 currentPrecomp = getDoubleSafe(modifier, "beamPrecompression", currentPrecomp);
+                currentPrecompRange = getDoubleSafe(modifier, "precompressionRange", currentPrecompRange);
+                currentPrecompTime = getDoubleSafe(modifier, "beamPrecompressionTime", currentPrecompTime);
                 currentSpring = getDoubleSafe(modifier, "beamSpring", currentSpring);
                 currentDamp = getDoubleSafe(modifier, "beamDamp", currentDamp);
                 currentDeform = getDoubleSafe(modifier, "beamDeform", currentDeform);
@@ -195,7 +199,8 @@ public class JBeamParser {
                     int inlineType = currentType;
                     double inlineSpring = currentSpring, inlineDamp = currentDamp;
                     double inlineDeform = currentDeform, inlineStrength = currentStrength;
-                    double inlinePrecomp = currentPrecomp;
+                    double inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange;
+                    double inlinePrecompTime = currentPrecompTime;
                     double inlineShortB = currentShortBound, inlineLongB = currentLongBound;
                     double inlineShortBRange = currentShortBoundRange, inlineLongBRange = currentLongBoundRange;
                     double inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
@@ -213,6 +218,8 @@ public class JBeamParser {
                         inlineDeform = getDoubleSafe(inline, "beamDeform", inlineDeform);
                         inlineStrength = getDoubleSafe(inline, "beamStrength", inlineStrength);
                         inlinePrecomp = getDoubleSafe(inline, "beamPrecompression", inlinePrecomp);
+                        inlinePrecompRange = getDoubleSafe(inline, "precompressionRange", inlinePrecompRange);
+                        inlinePrecompTime = getDoubleSafe(inline, "beamPrecompressionTime", inlinePrecompTime);
 
                         inlineShortB = getDoubleSafe(inline, "beamShortBound", inlineShortB);
                         inlineLongB = getDoubleSafe(inline, "beamLongBound", inlineLongB);
@@ -239,11 +246,16 @@ public class JBeamParser {
                     String id2 = row.get(1).getAsString();
 
                     vehicle.addBeam(id1, id2,
-                            inlineSpring, inlineDamp, inlineDeform, inlineStrength,
-                            inlineType, inlinePrecomp, inlineShortB, inlineLongB,
+                            inlineSpring, inlineDamp,
+                            inlineDeform, inlineStrength,
+                            inlineType, inlinePrecomp,
+                            inlinePrecompRange, inlinePrecompTime,
+                            inlineShortB, inlineLongB,
                             inlineShortBRange, inlineLongBRange,
                             inlineLimitS, inlineLimitD,
-                            inlineDampVelSplit, inlineDampFast, inlineDampRebound, inlineDampReboundFast);
+                            inlineDampVelSplit, inlineDampFast,
+                            inlineDampRebound, inlineDampReboundFast
+                    );
                 }
             }
         }
@@ -364,6 +376,165 @@ public class JBeamParser {
                     String[] links = RAIL_MAP.get(railName);
                     if (links != null && links.length >= 2) {
                         vehicle.addSlideNode(nodeId, links, spring, damp);
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 7. Flexbody Parsing (Render Mesh Binding) ---
+    /**
+     * 解析 3D 网格模型与物理节点的绑定关系 (留作后续渲染使用)
+     */
+    public static void parseFlexbodies(JsonArray flexbodies, SoftBodyVehicle vehicle, int partId) {
+        boolean isHeader = true;
+        for (JsonElement element : flexbodies) {
+            if (element.isJsonObject()) continue; // flexbodies 偶尔也会有 inline modifier，目前先忽略
+
+            if (element.isJsonArray()) {
+                JsonArray row = element.getAsJsonArray();
+                if (isHeader) { isHeader = false; continue; }
+
+                if (row.size() >= 2) {
+                    String meshName = row.get(0).getAsString();
+
+                    // 解析它绑定的 Node Groups (可能是一个字符串，也可能是一个数组)
+                    java.util.List<String> targetGroups = new java.util.ArrayList<>();
+                    JsonElement groupElement = row.get(1);
+                    if (groupElement.isJsonArray()) {
+                        for (JsonElement g : groupElement.getAsJsonArray()) {
+                            targetGroups.add(g.getAsString());
+                        }
+                    } else {
+                        targetGroups.add(groupElement.getAsString());
+                    }
+
+                    // 提取位移、旋转、缩放属性 (通常在数组的第 4 个元素)
+                    double px = 0, py = 0, pz = 0;
+                    double rx = 0, ry = 0, rz = 0;
+                    double sx = 1, sy = 1, sz = 1;
+
+                    if (row.size() >= 4 && row.get(3).isJsonObject()) {
+                        JsonObject transform = row.get(3).getAsJsonObject();
+                        if (transform.has("pos")) {
+                            JsonObject pos = transform.getAsJsonObject("pos");
+                            px = getDoubleSafe(pos, "x", 0);
+                            py = getDoubleSafe(pos, "y", 0);
+                            pz = getDoubleSafe(pos, "z", 0);
+                        }
+                        if (transform.has("rot")) {
+                            JsonObject rot = transform.getAsJsonObject("rot");
+                            rx = getDoubleSafe(rot, "x", 0);
+                            ry = getDoubleSafe(rot, "y", 0);
+                            rz = getDoubleSafe(rot, "z", 0);
+                        }
+                        if (transform.has("scale")) {
+                            JsonObject scale = transform.getAsJsonObject("scale");
+                            sx = getDoubleSafe(scale, "x", 1);
+                            sy = getDoubleSafe(scale, "y", 1);
+                            sz = getDoubleSafe(scale, "z", 1);
+                        }
+                    }
+
+                    // TODO: 存入 vehicle.renderEngine.addFlexbody(...)
+                    // System.out.println("Registered Mesh: " + meshName + " bound to " + targetGroups);
+                }
+            }
+        }
+    }
+
+    // --- 8. PressureWheels Parsing ---
+    public static void parsePressureWheels(JsonArray pressureWheels, SoftBodyVehicle vehicle, PressureWheelsState pool) {
+        boolean isHeader = true;
+
+        for (JsonElement element : pressureWheels) {
+            if (element.isJsonObject()) {
+                JsonObject mod = element.getAsJsonObject();
+                // 检查是否有给后续修饰符命名的键
+                if (mod.has("name") && mod.get("name").isJsonPrimitive()) {
+                    pool.setGroupName(mod.get("name").getAsString());
+                } else if (mod.has("group") && mod.get("group").isJsonPrimitive()) {
+                    pool.setGroupName(mod.get("group").getAsString());
+                } else if (mod.has("hubGroup") && mod.get("hubGroup").isJsonPrimitive()) {
+                    pool.setGroupName(mod.get("hubGroup").getAsString());
+                }
+
+                // 将属性存入当前组
+                pool.updateCurrentState(mod);
+                continue;
+            }
+
+            if (element.isJsonArray()) {
+                JsonArray row = element.getAsJsonArray();
+                if (isHeader) { isHeader = false; continue; }
+
+                if (row.size() >= 5) {
+                    String wheelName = row.get(0).getAsString();
+                    String hubGroup = row.get(1).isJsonNull() ? "default" : row.get(1).getAsString(); // 从数据行获取组名
+                    String tireGroup = row.get(2).isJsonNull() ? "default" : row.get(2).getAsString();
+
+                    Integer n1 = vehicle.nodes.nameToIndex.get(row.get(3).getAsString());
+                    Integer n2 = vehicle.nodes.nameToIndex.get(row.get(4).getAsString());
+                    if (n1 == null || n2 == null) continue;
+
+                    // 注意：有时候后轮可能没有 nodeArm，或者参数不够长，做好防越界和判空
+                    Integer nodeArm = null;
+                    if (row.size() > 6 && !row.get(6).isJsonNull()) {
+                        String armName = row.get(6).getAsString();
+                        // 有些后轮填的是 "9999" 或者数字代表无，忽略它们
+                        if (!armName.equals("9999")) {
+                            nodeArm = vehicle.nodes.nameToIndex.get(armName);
+                        }
+                    }
+
+                    // 🚀 获取该车轴所属组累积的属性 (优先取轮胎组名，如果没有取轮毂组名)
+                    String targetGroup = tireGroup.equals("default") ? hubGroup : tireGroup;
+                    PressureWheelsState.WheelState finalState = pool.getMergedState(targetGroup);
+
+                    // 如果行末有行内覆盖，直接更新
+                    if (row.get(row.size() - 1).isJsonObject()) {
+                        finalState.updateFrom(row.get(row.size() - 1).getAsJsonObject());
+                    }
+
+                    // 提取最终下发参数
+                    boolean finalHasTire = finalState.hasTire != null ? finalState.hasTire : true;
+                    int finalRays = finalState.numRays != null ? finalState.numRays : 12;
+                    double finalOff = finalState.wheelOffset != null ? finalState.wheelOffset : 0.0;
+
+                    double hubR = finalState.hubRadius != null ? finalState.hubRadius : 0.5;
+                    double hubW = finalState.hubWidth != null ? finalState.hubWidth : 0.2;
+                    double hubMass = finalState.nodeWeight != null ? finalState.nodeWeight : 0.75; // 回退使用 nodeWeight
+                    double hubFric = finalState.frictionCoef != null ? finalState.frictionCoef : 0.5;
+
+                    double tireR = finalState.radius != null ? finalState.radius : 1;
+                    double tireW = finalState.tireWidth != null ? finalState.tireWidth : 0.2;
+                    double tireMass = finalState.nodeWeight != null ? finalState.nodeWeight : 0.15;
+                    double tireFric = finalState.frictionCoef != null ? finalState.frictionCoef : 1.0;
+                    double press = finalState.pressurePSI != null ? finalState.pressurePSI : 30.0;
+
+                    // 兜底刚度
+                    double hTS = finalState.treadS != null ? finalState.treadS : 1.5e6;
+                    double hTD = finalState.treadD != null ? finalState.treadD : 15;
+                    double hPS = finalState.periS != null ? finalState.periS : 1.5e6;
+                    double hPD = finalState.periD != null ? finalState.periD : 15;
+                    double hSS = finalState.sideS != null ? finalState.sideS : 1.5e6;
+                    double hSD = finalState.sideD != null ? finalState.sideD : 15;
+
+                    double tTS = finalState.treadS != null ? finalState.treadS : 40000;
+                    double tTD = finalState.treadD != null ? finalState.treadD : 80;
+                    double tPS = finalState.periS != null ? finalState.periS : 40000;
+                    double tPD = finalState.periD != null ? finalState.periD : 40;
+                    double tSS = finalState.sideS != null ? finalState.sideS : 15000;
+                    double tSD = finalState.sideD != null ? finalState.sideD : 30;
+
+                    double rS = finalState.reinfS != null ? finalState.reinfS : 20000;
+                    double rD = finalState.reinfD != null ? finalState.reinfD : 180;
+
+                    // 生成
+                    vehicle.wheels.generateHub(wheelName, n1, n2, nodeArm, finalRays, hubR, hubW, finalOff, hubMass, hubFric, hTS, hTD, hPS, hPD, hSS, hSD);
+
+                    if (finalHasTire) {
+                        vehicle.wheels.generateTire(wheelName, n1, n2, finalRays, tireR, tireW, finalOff, tireMass, tireFric, press, tTS, tTD, tPS, tPD, tSS, tSD, rS, rD);
                     }
                 }
             }

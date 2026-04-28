@@ -2,23 +2,18 @@ package me.mzy.beamcraft.physics;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import me.mzy.beamcraft.BeamCraft;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.stream.Stream;
 
 public class JBeamLoader {
-    private static String readEntry(ZipInputStream zis) throws Exception {
-        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-        byte[] buffer = new byte[2048];
-        int len;
-        while ((len = zis.read(buffer)) > 0) {
-            baos.write(buffer, 0, len);
-        }
-        return baos.toString(java.nio.charset.StandardCharsets.UTF_8.name());
-    }
 
     public static String cleanJBeamSafe(String input) {
         StringBuilder out = new StringBuilder();
@@ -168,68 +163,65 @@ public class JBeamLoader {
         return outString;
     }
 
-    public static void loadJBeamByPC(String[] zipFiles, String pcFile, Map<String, JsonObject> partRegistry, Map<String, String> userConfig ) {
-        String pcContent = "";
-        int loadedFiles = 0;
+    private static String readInputStream(InputStream is) throws Exception {
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[2048];
+        int len;
+        while ((len = is.read(buffer)) > 0) {
+            baos.write(buffer, 0, len);
+        }
+        return baos.toString(java.nio.charset.StandardCharsets.UTF_8.name());
+    }
 
-        // loop through all zips
-        for (String zipPath : zipFiles) {
-            System.out.println("🔍 Scanning zip: " + zipPath);
-            try (InputStream fis = BeamCraft.class.getResourceAsStream(zipPath)) {
+    /**
+     * @param vehiclesRootDir 模组车辆存放目录
+     * @param targetVehicleName 目标车辆内部名 (例如 "pickup")
+     * @param pcFileName 配置文件名 (可选省略 .pc)
+     */
+    public static void loadVehicle(File vehiclesRootDir, String targetVehicleName, String pcFileName, Map<String, JsonObject> partRegistry, Map<String, String> userConfig) {
+        if (!vehiclesRootDir.exists()) {
+            vehiclesRootDir.mkdirs();
+            System.out.println("📁 Created vehicles directory at: " + vehiclesRootDir.getAbsolutePath());
+            return;
+        }
 
-                if (fis == null) {
-                    System.err.println("⚠️ Zip does not exist: " + zipPath + ". Please make sure it is placed in the root directory of `resources`.");
-                    continue;
+        // 处理可选的 .pc 后缀
+        if (pcFileName != null && !pcFileName.isEmpty() && !pcFileName.endsWith(".pc")) {
+            pcFileName += ".pc";
+        }
+
+        String[] pcContentBox = new String[]{""};
+        int[] loadedCount = new int[]{0};
+
+        System.out.println("====== 🔍 启动 JBeam 资产扫描 ======");
+
+        // 1. 加载 common 资源
+        File commonZip = new File(vehiclesRootDir, "common.zip");
+        File commonDir = new File(vehiclesRootDir, "common");
+        if (commonZip.exists()) scanZip(commonZip, targetVehicleName, null, partRegistry, pcContentBox, loadedCount, true);
+        if (commonDir.exists()) scanFolder(commonDir, targetVehicleName, null, partRegistry, pcContentBox, loadedCount, true);
+
+        // 2. 扫描 vehiclesRootDir 下的其他文件寻找目标车辆的路径
+        File[] files = vehiclesRootDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                String name = file.getName();
+                if (name.equals("common.zip") || name.equals("common")) continue;
+
+                if (file.isDirectory()) {
+                    scanFolder(file, targetVehicleName, pcFileName, partRegistry, pcContentBox, loadedCount, false);
+                } else if (name.endsWith(".zip")) {
+                    scanZip(file, targetVehicleName, pcFileName, partRegistry, pcContentBox, loadedCount, false);
                 }
-
-                try (ZipInputStream zis = new ZipInputStream(fis)) {
-                    ZipEntry entry;
-                    while ((entry = zis.getNextEntry()) != null) {
-                        String name = entry.getName();
-
-                        if ((name.endsWith(".jbeam") || name.endsWith(".pc")) && !name.contains("__MACOSX")) {
-                            String content = readEntry(zis);
-
-                            // lock pc file
-                            if (name.endsWith(".pc")) {
-                                if (name.endsWith("/" + pcFile) || name.equals(pcFile)) {
-                                    pcContent = cleanJBeamSafe(content);
-                                    System.out.println("📄 Config .pc file locked: " + name + " (from " + zipPath + ")");
-                                }
-                                continue;
-                            }
-
-                            // Normal JBeam part cleaning and loading
-                            String cleanJson = cleanJBeamSafe(content);
-
-                            try {
-                                com.google.gson.stream.JsonReader reader = new com.google.gson.stream.JsonReader(new java.io.StringReader(cleanJson));
-                                reader.setLenient(true); // Enable tolerance mode
-                                JsonObject fileJson = JsonParser.parseReader(reader).getAsJsonObject();
-
-                                for (String partName : fileJson.keySet()) {
-                                    partRegistry.put(partName, fileJson.getAsJsonObject(partName));
-                                }
-                                loadedFiles++;
-                            } catch (Exception e) {
-                                // Ignore errors to keep the console clean
-                            }
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
             }
-        } // End ZIP traversal
+        }
 
-        System.out.println("📦 Joint loading of the part library complete. A total of " +
-                loadedFiles + " drawing files were read, and " +
-                partRegistry.size() + " parts were extracted!");
+        System.out.println("📦 零件库加载完成。共读取 " + loadedCount[0] + " 个文件，提取 " + partRegistry.size() + " 个零件!");
 
-        // --- Step 2: Parse the .pc configuration ---
-        if (!pcContent.isEmpty()) {
+        // 3. 解析 .pc 配置文件
+        if (!pcContentBox[0].isEmpty()) {
             try {
-                com.google.gson.stream.JsonReader pcReader = new com.google.gson.stream.JsonReader(new java.io.StringReader(pcContent));
+                com.google.gson.stream.JsonReader pcReader = new com.google.gson.stream.JsonReader(new java.io.StringReader(pcContentBox[0]));
                 pcReader.setLenient(true);
                 JsonObject pcJson = JsonParser.parseReader(pcReader).getAsJsonObject();
 
@@ -237,9 +229,80 @@ public class JBeamLoader {
                 for (String slot : parts.keySet()) {
                     userConfig.put(slot, parts.get(slot).getAsString());
                 }
+                System.out.println("📄 PC配置解析成功，载入 " + userConfig.size() + " 个插槽设定。");
             } catch (Exception e) {
-                System.err.println("🚨 Failed to parse the .pc configuration");
+                System.err.println("🚨 无法解析 .pc 配置文件结构");
             }
+        } else {
+            System.err.println("⚠️ 未找到指定的 .pc 配置文件或其内容为空: " + pcFileName);
+        }
+    }
+
+    private static void scanFolder(File folder, String targetVehicleName, String targetPcName, Map<String, JsonObject> registry, String[] pcContentBox, int[] loadedCount, boolean isCommon) {
+        try (Stream<Path> paths = Files.walk(folder.toPath())) {
+            paths.filter(Files::isRegularFile).forEach(path -> {
+                String filePath = path.toString().replace("\\", "/");
+
+                // 仅处理属于 common 或目标车辆路径的文件
+                boolean isTarget = isCommon || filePath.contains("/vehicles/" + targetVehicleName + "/");
+
+                if (isTarget && (filePath.endsWith(".jbeam") || filePath.endsWith(".pc"))) {
+                    try (FileInputStream fis = new FileInputStream(path.toFile())) {
+                        String content = readInputStream(fis);
+                        String fileName = path.getFileName().toString();
+                        processFileContent(fileName, content, targetPcName, registry, pcContentBox, loadedCount);
+                    } catch (Exception e) {}
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("🚨 Failed to walk directory: " + folder.getName());
+        }
+    }
+
+    private static void scanZip(File zipFile, String targetVehicleName, String targetPcName, Map<String, JsonObject> registry, String[] pcContentBox, int[] loadedCount, boolean isCommon) {
+        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String name = entry.getName();
+
+                // 仅处理属于 common 或目标车辆路径的文件
+                boolean isTarget = isCommon || name.contains("vehicles/" + targetVehicleName + "/");
+
+                if (isTarget && !entry.isDirectory() && !name.contains("__MACOSX") && (name.endsWith(".jbeam") || name.endsWith(".pc"))) {
+                    String content = readInputStream(zis);
+
+                    // 提取纯文件名用于后续匹配
+                    String[] parts = name.split("/");
+                    String fileName = parts[parts.length - 1];
+                    processFileContent(fileName, content, targetPcName, registry, pcContentBox, loadedCount);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("🚨 Failed to read ZIP: " + zipFile.getName());
+        }
+    }
+
+    private static void processFileContent(String fileName, String rawContent, String targetPcName, Map<String, JsonObject> registry, String[] pcContentBox, int[] loadedCount) {
+        if (fileName.endsWith(".pc")) {
+            if (targetPcName != null && fileName.equals(targetPcName)) {
+                pcContentBox[0] = cleanJBeamSafe(rawContent);
+                System.out.println("   🔒 Locked PC config: " + fileName);
+            }
+            return;
+        }
+
+        String cleanJson = cleanJBeamSafe(rawContent);
+        try {
+            com.google.gson.stream.JsonReader reader = new com.google.gson.stream.JsonReader(new java.io.StringReader(cleanJson));
+            reader.setLenient(true);
+            JsonObject fileJson = JsonParser.parseReader(reader).getAsJsonObject();
+
+            for (String partName : fileJson.keySet()) {
+                registry.put(partName, fileJson.getAsJsonObject(partName));
+            }
+            loadedCount[0]++;
+        } catch (Exception e) {
+            // 忽略格式损坏的文件
         }
     }
 }

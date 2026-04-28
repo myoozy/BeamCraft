@@ -137,6 +137,7 @@ public class PhysicsWorld {
 
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.updateEntityLocation();
+            vehicle.beams.updatePrecompression(dt);
         }
     }
 
@@ -178,7 +179,7 @@ public class PhysicsWorld {
         double THICKNESS = 0.01;          // 铁皮厚度 1cm
         double PBD_RELAXATION = 1;        // 位置约束松弛度 (1 = 完全求解)
         double MAX_POS_PUSH = 0.1;        // 单帧最大位置修正量 (米)
-        double RESTITUTION = 0.1;         // 恢复系数: 0=完全非弹性，1=完全弹性。金属建议 0.2~0.4
+        double RESTITUTION = 0.0;         // 恢复系数: 0=完全非弹性，1=完全弹性。金属建议 0.2~0.4。如果为0则完全靠Beam刚度回弹
 
         SoftBodyVehicle nVeh = collisionManager.contactNodeVeh[contactId];
         int nHit = collisionManager.contactNodeId[contactId];

@@ -14,6 +14,10 @@ import java.util.concurrent.atomic.AtomicLongArray;
 public class NodeContainer {
     public static final int INIT_NODE_CAP = 128;
 
+    private double pendingDx = 0, pendingDy = 0, pendingDz = 0;
+    private float pendingYaw = 0, pendingPitch = 0, pendingRoll = 0;
+    private boolean hasPending = false;
+
     // Mapping from JBeam node ID (e.g., "f1r") to internal array index
     public final Map<String, Integer> nameToIndex = new HashMap<>();
 
@@ -119,7 +123,7 @@ public class NodeContainer {
             sleepRate[i] = 0;
         }
     }
-    
+
     /**
      * 一次性旋转载具的所有节点（支持偏航、俯仰、滚转）
      * 可以在生成后调用，也可以在运行时作为独立工具调用
@@ -128,7 +132,7 @@ public class NodeContainer {
 
         // 转换为弧度
         float radYaw = (float) Math.toRadians(-deltaYawDeg); // MC 的 Yaw 顺逆时针是反的
-        float radPitch = (float) Math.toRadians(deltaPitchDeg);
+        float radPitch = (float) Math.toRadians(-deltaPitchDeg);
         float radRoll = (float) Math.toRadians(deltaRollDeg);
 
         net.minecraft.util.math.Vec3d pos;
@@ -143,12 +147,6 @@ public class NodeContainer {
             posY[i] = pos.y;
             posZ[i] = pos.z;
         }
-
-        System.out.println("🔄 Vehicle nodes rotated (Yaw: " +
-                deltaYawDeg + ", Pitch: " +
-                deltaPitchDeg + ", Roll: " +
-                deltaRollDeg + ")"
-        );
     }
     
     /**
@@ -208,26 +206,6 @@ public class NodeContainer {
             out[0] = 0.0;
             out[1] = 0.0;
             out[2] = 0.0;
-        }
-    }
-
-    public Vec3d getCenterOfMassVec3d() {
-        double totalMass = 0.0;
-        double cx = 0.0, cy = 0.0, cz = 0.0;
-
-        for (int i = 0; i < count; i++) {
-            double m = mass[i];
-            totalMass += m;
-            cx += posX[i] * m;
-            cy += posY[i] * m;
-            cz += posZ[i] * m;
-        }
-
-        if (totalMass > 1e-8) {
-            double invMass = 1.0 / totalMass;
-            return new Vec3d(cx * invMass,  cy * invMass, cz * invMass);
-        } else {
-            return new Vec3d(0.0, 0.0, 0.0);
         }
     }
 }

@@ -21,8 +21,13 @@ public class BeamContainer {
 
     // 梁属性
     public int[] type = new int[INIT_BEAM_CAP];           // 存储枚举值
+
     public double[] restLength = new double[INIT_BEAM_CAP];
     public double[] baseRestLength = new double[INIT_BEAM_CAP]; // 满血复活记录
+    public double[] targetRestLength = new double[INIT_BEAM_CAP];
+    public double[] precompTimeTotal = new double[INIT_BEAM_CAP];  // 总过渡时间
+    public double[] precompTimer = new double[INIT_BEAM_CAP];      // 剩余过渡时间 (秒)
+
     public double[] spring = new double[INIT_BEAM_CAP];
     public double[] damp = new double[INIT_BEAM_CAP];
     public double[] deform = new double[INIT_BEAM_CAP];
@@ -45,6 +50,9 @@ public class BeamContainer {
             node2 = Utility.expand(node2, newSize);
             restLength = Utility.expand(restLength, newSize);
             baseRestLength = Utility.expand(baseRestLength, newSize);
+            targetRestLength = Utility.expand(targetRestLength, newSize);
+            precompTimeTotal = Utility.expand(precompTimeTotal, newSize);
+            precompTimer = Utility.expand(precompTimer, newSize);
             spring = Utility.expand(spring, newSize);
             damp = Utility.expand(damp, newSize);
             deform = Utility.expand(deform, newSize);
@@ -64,20 +72,37 @@ public class BeamContainer {
         }
     }
 
-    public void addBeam(int beamIndex1, int beamIndex2, double nodeDist, double beamSpring, double beamDamp,
-                        double beamDeform, double beamStrength, int beamType, double precomp,
+    public void addBeam(int beamIndex1, int beamIndex2, double nodeDist,
+                        double beamSpring, double beamDamp,
+                        double beamDeform, double beamStrength,
+                        int beamType, double precomp,
+                        double precompRange, double precompTime,
                         double beamShortBound, double beamLongBound,
                         double shortBoundRange, double longBoundRange,
                         double beamLimitSpring, double beamLimitDamp,
-                        double inDampVelSplit, double inDampFast, double inDampRebound, double inDampReboundFast) {
+                        double inDampVelSplit, double inDampFast,
+                        double inDampRebound, double inDampReboundFast) {
         ensureBeamCapacity();
 
         node1[count] = beamIndex1;
         node2[count] = beamIndex2;
 
-        // Resting length = initial distance * pre-compression factor
-        // If precomp is 0.8, this spring will contract as much as possible the moment it is created!
-        restLength[count] = nodeDist * precomp;
+        // 🚀 预紧力平滑计算逻辑
+        double targetLen = (nodeDist * precomp) + precompRange;
+        targetRestLength[count] = targetLen;
+
+        if (precompTime > 0.0) {
+            // 如果有过渡时间，初始长度就是真实的物理距离
+            restLength[count] = nodeDist;
+            precompTimer[count] = precompTime;
+            precompTimeTotal[count] = precompTime;
+        } else {
+            // 没有过渡时间，直接一步到位
+            restLength[count] = targetLen;
+            precompTimer[count] = 0.0;
+            precompTimeTotal[count] = 0.0;
+        }
+
         baseRestLength[count] = restLength[count];
 
         spring[count] = beamSpring;
@@ -127,6 +152,27 @@ public class BeamContainer {
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             restLength[i] = baseRestLength[i];
+            precompTimer[i] = precompTimeTotal[i];
+        }
+    }
+
+    /**
+     * 宏观 Tick 更新 (例如每 50ms 也就是 dt=0.05 时调用一次)
+     * 用于处理需要缓慢过渡的预紧力，防止初始爆炸
+     */
+    public void updatePrecompression(double mcDt) {
+        for (int i = 0; i < count; i++) {
+            if (precompTimer[i] > 0) {
+                precompTimer[i] -= mcDt; // mcDt 通常是 0.05 (50ms)
+
+                if (precompTimer[i] <= 0) {
+                    precompTimer[i] = 0;
+                    restLength[i] = targetRestLength[i];
+                } else {
+                    double progress = 1.0 - (precompTimer[i] / precompTimeTotal[i]);
+                    restLength[i] = baseRestLength[i] + (targetRestLength[i] - baseRestLength[i]) * progress;
+                }
+            }
         }
     }
 }

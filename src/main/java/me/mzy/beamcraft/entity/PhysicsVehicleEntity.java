@@ -1,14 +1,16 @@
 package me.mzy.beamcraft.entity;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.physics.JBeamLoader;
 import me.mzy.beamcraft.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.physics.JBeamAssembler;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
-import net.minecraft.entity.MovementType;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
+
+import java.io.File;
 
 public class PhysicsVehicleEntity extends Entity {
 
@@ -45,11 +47,15 @@ public class PhysicsVehicleEntity extends Entity {
             // Player configuration: “Key” is the slot name, and “Value” is the name of the selected part.
             java.util.Map<String, String> localConfig = new java.util.HashMap<>();
 
-            // 2. 加载 ZIP 数据到这个临时库里
-            String[] zipFiles = {"/Debug/common.zip", "/Debug/pickup.zip"};
-            me.mzy.beamcraft.physics.JBeamLoader.loadJBeamByPC(
-                    zipFiles, pcFileName, localRegistry, localConfig
-            );
+            // 获取运行目录并定位到我们模组的专属车辆文件夹
+            File gameDir = FabricLoader.getInstance().getGameDir().toFile();
+            File vehiclesDir = new File(gameDir, "mods/beamcraft/vehicles");
+
+            // 确保目录存在
+            if (!vehiclesDir.exists()) vehiclesDir.mkdirs();
+
+            // 执行加载：它会自动寻找 vehiclesDir 下的 common.zip 和 pickup.zip
+            JBeamLoader.loadVehicle(vehiclesDir, rootPartName, pcFileName, localRegistry, localConfig);
 
             JBeamAssembler assembler = new JBeamAssembler();
             assembler.assembleVehicle(rootPartName, localConfig, localRegistry, this.softBody);

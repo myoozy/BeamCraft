@@ -48,7 +48,7 @@ public class JBeamAssembler {
             collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts);
         }
 
-        System.out.println("====== 🛠️ Starting Two-Pass Assembly ======");
+        System.out.println("====== 🛠️ Starting 3-Pass Assembly ======");
         System.out.println("Collected " + activeParts.size() + " valid part modules.");
 
         // Pass 1: Create all nodes FIRST
@@ -86,8 +86,25 @@ public class JBeamAssembler {
             if (entry.json.has("slidenodes")) {
                 JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), vehicle);
             }
+
+            if (entry.json.has("flexbodies")) {
+                JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, entry.partId);
+            }
         }
         System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + vehicle.beams.count);
+
+        // ==========================================
+        // 🚀 Pass 3: 逆向解析车轮 (解决子零件属性覆盖问题)
+        // ==========================================
+        System.out.println("====== 🛞 Assembling Wheels ======");
+        PressureWheelsState pwState = new PressureWheelsState();
+
+        for (PartEntry entry : activeParts) {
+            if (entry.json.has("pressureWheels")) {
+                JBeamParser.parsePressureWheels(entry.json.getAsJsonArray("pressureWheels"), vehicle, pwState);
+            }
+        }
+        System.out.println("✅ Pass 3 Complete: Wheels generated.");
 
         // Print final assembly manifest
         System.out.println("====== 📦 Active Parts Assembly List ======");
