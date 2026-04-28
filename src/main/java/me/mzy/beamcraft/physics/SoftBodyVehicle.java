@@ -374,16 +374,17 @@ public class SoftBodyVehicle {
             if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
-            // 🚀 读取合并后的状态，并瞬间解包
+            // 🚀 读取合并后的状态，并解包
             int rawType = beams.type[i];
             int type = rawType & BeamContainer.MASK_TYPE;
 
             double restL = beams.restLength[i];
 
+            // 支撑梁只抗压不抗拉
             if (type == BeamContainer.BEAM_SUPPORT && dist > restL) continue;
 
             double reducedMass = (m1 * m2) / (m1 + m2);
-            double maxSafeSpring = getMaxSafeSpring(reducedMass, dt);
+            double maxSafeSpring = reducedMass * invDt * invDt;
 
             double activeSpring = Math.min(beams.spring[i], maxSafeSpring);
             double springForce = activeSpring * (dist - restL);
@@ -396,7 +397,7 @@ public class SoftBodyVehicle {
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
             // ==========================================
-            // 🔥 位运算门控 1：复杂阻尼（位与运算只要 1 个 CPU 时钟周期）
+            // 🔥 复杂阻尼计算
             // ==========================================
             if ((rawType & BeamContainer.FLAG_HAS_COMPLEX_DAMP) != 0) {
                 double split = beams.dampVelocitySplit[i];
@@ -408,7 +409,7 @@ public class SoftBodyVehicle {
             }
 
             // ==========================================
-            // 🔥 位运算门控 2：限位计算
+            // 🔥 限位梁计算（有时|NORMAL梁也有short/long bound参数
             // ==========================================
             if ((rawType & BeamContainer.FLAG_HAS_BOUND) != 0) {
                 double shortBoundary = restL * (1.0 - beams.shortBound[i]);
@@ -426,7 +427,7 @@ public class SoftBodyVehicle {
                 }
             }
 
-            // ... (下面保持不变)
+            // 最大阻尼（一帧内速度清零）
             double maxDamp = reducedMass * invDt;
             if (activeDamp > maxDamp) activeDamp = maxDamp;
 
@@ -531,7 +532,7 @@ public class SoftBodyVehicle {
 
             double genMass = 1.0 / Math.max(invGenMass, 1e-12);
 
-            double maxSafeSpring = getMaxSafeSpring (genMass, dt);
+            double maxSafeSpring = genMass * invDt * invDt;
             double maxSafeDamp = genMass * invDt;
 
             double activeSpring = Math.min(torsionbars.spring[i], maxSafeSpring);
@@ -609,7 +610,7 @@ public class SoftBodyVehicle {
             if (mN < KINDA_SMALL_NUMBER ||  mRail < KINDA_SMALL_NUMBER) continue;
 
             double reducedMass = (mN * mRail) / (mN + mRail);
-            double maxSafeSpring = getMaxSafeSpring(reducedMass, dt);
+            double maxSafeSpring = reducedMass * invDt * invDt;
 
             double activeSpring = slidenodes.spring[i];
             if (Math.abs(activeSpring) > maxSafeSpring) activeSpring = maxSafeSpring;
@@ -655,31 +656,13 @@ public class SoftBodyVehicle {
             // 算出当前节点的速度大小
             double speedSq = nodes.velX[i]*nodes.velX[i] + nodes.velY[i]*nodes.velY[i] + nodes.velZ[i]*nodes.velZ[i];
 
-            if (speedSq > 1.0) { // 速度太小就忽略空气阻力，省性能
-                double speed = Math.sqrt(speedSq);
-                double mach = speed / PhysicsWorld.SOUND_SPEED; // 计算马赫数
-
-                // 1. 基础空气阻力 (与 v^2 成正比，这里简化为一个极小的常数系数)
-                double baseDrag = 0.0005 * speed;
-
-                // 2. 激波阻力模拟！(魔法就在这里：马赫数的 6 次方)
-                // 速度慢时几乎为 0；接近 Mach 1 时暴增；超过 340m/s 时变成一面绝望的墙
-                double shockDrag = 0.0;
-                if (mach > 0.5) { // 0.5马赫(170m/s)以下没激波
-                    shockDrag = 2.0 * Math.pow(mach, 6.0);
-                }
-
-                // 计算本子步的总速度衰减率 (dt = subDt)
-                double totalDamping = (baseDrag + shockDrag) * dt;
-
-                // 防止衰减超过 100% 导致速度反向
-                double velocityMultiplier = Math.max(0.0, 1.0 - totalDamping);
-
-                // 应用空气动力学衰减！
-                nodes.velX[i] *= velocityMultiplier;
-                nodes.velY[i] *= velocityMultiplier;
-                nodes.velZ[i] *= velocityMultiplier;
-            }
+            // 施加一个高速时增长极快的魔法阻力，防止节点炸飞
+            final double K_V4 = 1.2e-7;   // 防飞出系数，根据最高期望速度调
+            double v4 = speedSq * speedSq;
+            double factor = 1.0 / (1.0 + K_V4 * v4 * dt);
+            nodes.velX[i] *= factor;
+            nodes.velY[i] *= factor;
+            nodes.velZ[i] *= factor;
 
             // 清洗极端的 NaN (应对除以0等极端异常)
             if (Double.isNaN(nodes.velX[i])) {
@@ -809,12 +792,5 @@ public class SoftBodyVehicle {
                 }
             }
         }
-    }
-
-    /**
-     * Calculate maximum stable spring stiffness for current timestep
-     */
-    public static double getMaxSafeSpring(double mass, double dt){
-        return (dt > KINDA_SMALL_NUMBER) ? mass / (dt * dt) : 0.0;
     }
 }
