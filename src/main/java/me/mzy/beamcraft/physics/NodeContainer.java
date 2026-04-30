@@ -49,6 +49,7 @@ public class NodeContainer {
 
     public double[] mass = new double[INIT_NODE_CAP];
     public double[] friction = new double[INIT_NODE_CAP];
+    public double[] slidingFriction = new double[INIT_NODE_CAP];
     public boolean[] collision = new boolean[INIT_NODE_CAP];
     public boolean[] selfCollision = new boolean[INIT_NODE_CAP];
 
@@ -65,7 +66,7 @@ public class NodeContainer {
             prevPosX = Utility.expand(prevPosX, newSize); prevPosY = Utility.expand(prevPosY, newSize); prevPosZ = Utility.expand(prevPosZ, newSize);
             velX = Utility.expand(velX, newSize);   velY = Utility.expand(velY, newSize);   velZ = Utility.expand(velZ, newSize);
             forceX = Utility.expand(forceX, newSize); forceY = Utility.expand(forceY, newSize); forceZ = Utility.expand(forceZ, newSize);
-            mass = Utility.expand(mass, newSize);   friction = Utility.expand(friction, newSize);
+            mass = Utility.expand(mass, newSize);   friction = Utility.expand(friction, newSize); slidingFriction = Utility.expand(slidingFriction, newSize);
             collision = Utility.expand(collision, newSize); selfCollision = Utility.expand(selfCollision, newSize);
             collisionRate = Utility.expand(collisionRate, newSize); sleepRate = Utility.expand(sleepRate, newSize);
 
@@ -76,7 +77,7 @@ public class NodeContainer {
     /**
      * Adds a node to the container or accumulates mass if the node already exists.
      */
-    public void addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction,
+    public void addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
                         int nodePartId, boolean nodeCollision, boolean nodeSelfCollision) {
         ensureNodeCapacity();
 
@@ -97,6 +98,7 @@ public class NodeContainer {
 
         mass[count] = nodeMass;
         friction[count] = nodeFriction;
+        slidingFriction[count] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
         nameToIndex.put(name, count);
         partId[count] = nodePartId;
         collision[count] = nodeCollision;

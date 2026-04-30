@@ -94,8 +94,8 @@ public class SoftBodyVehicle {
     /**
      * Register node into physics world and expand part bounding box cache
      */
-    public void addNode(String name, double x, double y, double z, double nodeMass, double friction, int partId, boolean collision, boolean selfCollision) {
-        nodes.addNode(name, x, y, z, nodeMass, friction, partId, collision, selfCollision);
+    public void addNode(String name, double x, double y, double z, double nodeMass, double friction, double slidingFriction, int partId, boolean collision, boolean selfCollision) {
+        nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision);
 
         // Calculate current maximum part id and expand buffer
         int currentMaxPartId = -1;

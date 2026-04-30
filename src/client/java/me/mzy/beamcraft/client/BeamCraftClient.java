@@ -109,7 +109,7 @@ public class BeamCraftClient implements ClientModInitializer {
 				double eY = vehicle.parentEntity.getY();
 				double eZ = vehicle.parentEntity.getZ();
 
-				boolean DEBUG_SHOW_BEAMS = false;
+				boolean DEBUG_SHOW_BEAMS = true;
 
 				// === 1. 渲染梁/骨架 ===
 				if (DEBUG_SHOW_BEAMS) {

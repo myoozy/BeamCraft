@@ -68,6 +68,7 @@ public class JBeamParser {
         // Default values from Rig of Rods
         double currentWeight = 50.0;
         double currentFriction = 0.5;
+        double currentSlidingFriction = -1;
         boolean currentCollision = true;
         boolean currentSelfCollision = false;
 
@@ -76,6 +77,7 @@ public class JBeamParser {
                 JsonObject modifier = element.getAsJsonObject();
                 currentWeight = getDoubleSafe(modifier, "nodeWeight", currentWeight);
                 currentFriction = getDoubleSafe(modifier, "frictionCoef", currentFriction);
+                currentSlidingFriction = getDoubleSafe(modifier, "slidingFrictionCoef", currentSlidingFriction);
                 currentCollision = getBooleanSafe(modifier, "collision", currentCollision);
                 currentSelfCollision = getBooleanSafe(modifier, "selfCollision", currentSelfCollision);
 
@@ -90,12 +92,14 @@ public class JBeamParser {
                 // Apply inline properties from the end of the row
                 double inlineWeight = currentWeight;
                 double inlineFriction = currentFriction;
+                double inlineSlidingFriction = currentSlidingFriction;
                 boolean inlineCollision = currentCollision;
                 boolean inlineSelfCollision = currentSelfCollision;
                 if (row.get(row.size() - 1).isJsonObject()) {
                     JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
                     inlineWeight = getDoubleSafe(inline, "nodeWeight", inlineWeight);
                     inlineFriction = getDoubleSafe(inline, "frictionCoef", inlineFriction);
+                    inlineSlidingFriction = getDoubleSafe(inline, "slidingFrictionCoef", inlineSlidingFriction);
                     inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
                     inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
                 }
@@ -115,7 +119,7 @@ public class JBeamParser {
                     continue;
                 }
 
-                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, partId, inlineCollision, inlineSelfCollision);
+                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, partId, inlineCollision, inlineSelfCollision);
             }
         }
     }
@@ -483,10 +487,19 @@ public class JBeamParser {
                     if (n1 == null || n2 == null) continue;
 
                     // 注意：有时候后轮可能没有 nodeArm，或者参数不够长，做好防越界和判空
+                    // 🚀 正确提取 nodeS (索引 5)
+                    Integer nodeS = null;
+                    if (row.size() > 5 && !row.get(5).isJsonNull()) {
+                        String sName = row.get(5).getAsString();
+                        if (!sName.equals("9999")) { // 9999 在 BeamNG 中代表禁用此节点
+                            nodeS = vehicle.nodes.nameToIndex.get(sName);
+                        }
+                    }
+
+                    // 🚀 修正 nodeArm 的提取 (索引 6)
                     Integer nodeArm = null;
                     if (row.size() > 6 && !row.get(6).isJsonNull()) {
                         String armName = row.get(6).getAsString();
-                        // 有些后轮填的是 "9999" 或者数字代表无，忽略它们
                         if (!armName.equals("9999")) {
                             nodeArm = vehicle.nodes.nameToIndex.get(armName);
                         }
@@ -536,7 +549,7 @@ public class JBeamParser {
                     double rD = finalState.reinfD != null ? finalState.reinfD : 180;
 
                     // 生成
-                    vehicle.wheels.generateHub(wheelName, n1, n2, nodeArm, finalRays, hubR, hubW, finalOff, hubMass, hubFric, hTS, hTD, hPS, hPD, hSS, hSD);
+                    vehicle.wheels.generateHub(wheelName, n1, n2, nodeS, nodeArm, finalRays, hubR, hubW, finalOff, hubMass, hubFric, hTS, hTD, hPS, hPD, hSS, hSD);
 
                     if (finalHasTire) {
                         vehicle.wheels.generateTire(wheelName, n1, n2, finalRays, tireR, tireW, finalOff, tireMass, tireFric, press, tTS, tTD, tPS, tPD, tSS, tSD, rS, rD);

@@ -41,7 +41,7 @@ public class WheelContainer {
     /**
      * 生成轮毂 (Hub)
      */
-    public void generateHub(String wheelName, int n1, int n2, Integer nodeArm, int rays,
+    public void generateHub(String wheelName, int n1, int n2, Integer nodeS, Integer nodeArm, int rays,
                             double radius, double width, double offset,
                             double nodeWeight, double frictionCoef,
                             double hubTreadS, double hubTreadD,
@@ -66,6 +66,7 @@ public class WheelContainer {
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
+        // n1 是车轮的绝对几何原点，offset 沿着轮轴方向偏移
         double centerX = vehicle.nodes.posX[n1] + axisX[0] * offset;
         double centerY = vehicle.nodes.posY[n1] + axisY[0] * offset;
         double centerZ = vehicle.nodes.posZ[n1] + axisZ[0] * offset;
@@ -80,6 +81,7 @@ public class WheelContainer {
             double rayY = uY[0] * cosA + vY[0] * sinA;
             double rayZ = uZ[0] * cosA + vZ[0] * sinA;
 
+            // 内外圈各占 width 的一半
             double inX = centerX + rayX * radius - axisX[0] * (width * 0.5);
             double inY = centerY + rayY * radius - axisY[0] * (width * 0.5);
             double inZ = centerZ + rayZ * radius - axisZ[0] * (width * 0.5);
@@ -88,66 +90,53 @@ public class WheelContainer {
             double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
-            vehicle.nodes.addNode(wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight, frictionCoef, partId, true, false);
+            // 生成物理节点
+            vehicle.nodes.addNode(wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight, frictionCoef, 0.0, partId, true, false);
             hubInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
-            vehicle.nodes.addNode(wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight, frictionCoef, partId, true, false);
+            vehicle.nodes.addNode(wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight, frictionCoef, 0.0, partId, true, false);
             hubOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
+        // 默认的塑性变形和断裂强度（合金轮毂非常坚硬）
         double deform = 50000, strength = 500000;
         boolean COLLISION = false;
 
+        // 3. 生成物理拓扑 (Beams)
         for (int i = 0; i < rays; i++) {
             int next = (i + 1) % rays;
             int hInCur = hubInnerNodes[baseOffset + i], hInNext = hubInnerNodes[baseOffset + next];
             int hOutCur = hubOuterNodes[baseOffset + i], hOutNext = hubOuterNodes[baseOffset + next];
 
+            // --- 碰撞面 ---
             vehicle.triangles.addTriangle(n1, hInNext, hInCur, partId, COLLISION);
             vehicle.triangles.addTriangle(n2, hOutCur, hOutNext, partId, COLLISION);
 
-            // 🚀 补全缺失的轮辋周长支撑
+            // ================= 1. 轮辋蒙皮 =================
+            // 周长支撑 (Tread)
             addFastBeam(hInCur, hInNext, hubTreadS, hubTreadD, deform, strength);
             addFastBeam(hOutCur, hOutNext, hubTreadS, hubTreadD, deform, strength);
 
-            // 🚀 补全缺失的轮辋横向支撑
-            addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, strength);
-            addFastBeam(hInCur, hOutNext, hubPeriS, hubPeriD, deform, strength);
-            addFastBeam(hOutCur, hInNext, hubPeriS, hubPeriD, deform, strength);
+            // 横向支撑与 X 型交叉防扭曲 (Periphery)
+            addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, strength); // 直连
+            addFastBeam(hInCur, hOutNext, hubPeriS, hubPeriD, deform, strength); // 交叉 1
+            addFastBeam(hOutCur, hInNext, hubPeriS, hubPeriD, deform, strength); // 交叉 2
 
-            // 原有的车辐支撑
+            // ================= 2. 自行车交叉辐条 (Spokes) =================
+            // a) 直连辐条 (内圈连内侧轴，外圈连外侧轴)
             addFastBeam(hInCur, n1, hubSideS, hubSideD, deform, strength);
             addFastBeam(hOutCur, n2, hubSideS, hubSideD, deform, strength);
+
+            // b) 交叉辐条 (内圈连外侧轴，外圈连内侧轴)
             addFastBeam(hInCur, n2, hubSideS, hubSideD, deform, strength);
             addFastBeam(hOutCur, n1, hubSideS, hubSideD, deform, strength);
 
-            // 从内圈连向车轴 n1 和 n2
-            addFastBeam(hInCur, n1, hubSideS, hubSideD, deform, strength);
-            addFastBeam(hInCur, n2, hubSideS, hubSideD, deform, strength); // 交叉！
-
-            // 从外圈连向车轴 n1 和 n2
-            addFastBeam(hOutCur, n2, hubSideS, hubSideD, deform, strength);
-            addFastBeam(hOutCur, n1, hubSideS, hubSideD, deform, strength); // 交叉！
-        }
-
-        // 🚀 补全轮毂的绝对刚性：对角线穿心支撑 (Diametric Cross-Braces)
-        int halfRays = rays / 2;
-        for (int i = 0; i < halfRays; i++) {
-            int opp = (i + halfRays) % rays; // 对面的节点
-            int hInCur = hubInnerNodes[baseOffset + i], hInOpp = hubInnerNodes[baseOffset + opp];
-            int hOutCur = hubOuterNodes[baseOffset + i], hOutOpp = hubOuterNodes[baseOffset + opp];
-
-            // 极高刚度的穿心梁，彻底锁死轮毂的圆形结构
-            double rigidS = hubTreadS * 2.0;
-            double rigidD = hubTreadD * 2.0;
-
-            // 内圈对穿
-            addFastBeam(hInCur, hInOpp, rigidS, rigidD, deform, strength);
-            // 外圈对穿
-            addFastBeam(hOutCur, hOutOpp, rigidS, rigidD, deform, strength);
-            // 内部 X 型交叉对穿 (彻底防止轮毂扭曲)
-            addFastBeam(hInCur, hOutOpp, rigidS, rigidD, deform, strength);
-            addFastBeam(hOutCur, hInOpp, rigidS, rigidD, deform, strength);
+            // ================= 3. 稳定节点支撑 (nodeS) =================
+            // 将轮毂内外圈所有节点都与 nodeS 相连，分摊 n2 的受力
+            if (nodeS != null) {
+                addFastBeam(hInCur, nodeS, hubSideS, hubSideD, deform, strength);
+                addFastBeam(hOutCur, nodeS, hubSideS, hubSideD, deform, strength);
+            }
         }
 
         count++;
@@ -201,10 +190,10 @@ public class WheelContainer {
             double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
-            vehicle.nodes.addNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight, frictionCoef, partId, true, false);
+            vehicle.nodes.addNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight, frictionCoef, 0.0, partId, true, false);
             tireInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
-            vehicle.nodes.addNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight, frictionCoef, partId, true, false);
+            vehicle.nodes.addNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight, frictionCoef, 0.0, partId, true, false);
             tireOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
@@ -251,11 +240,6 @@ public class WheelContainer {
             addFastBeam(tInCur, tInNext2, finalTreadS, treadDamp, deform, strength);
             addFastBeam(tOutCur, tOutNext2, finalTreadS, treadDamp, deform, strength);
 
-            // 🚀 内部截面 X 型支撑 (wheelReinfBeam)
-            // 跨越内部空气空间，连接 Hub 侧和 Tire 对侧，实现形变传导
-            addFastBeam(hInCur, tOutCur, reinfS, reinfD, deform, strength);
-            addFastBeam(hOutCur, tInCur, reinfS, reinfD, deform, strength);
-
             // 轮胎横向支撑
             addFastBeam(tInCur, tOutCur, finalPeriS, periDamp, deform, strength);
             addFastBeam(tInCur, tOutNext, finalPeriS, periDamp, deform, strength);
@@ -274,7 +258,7 @@ public class WheelContainer {
             double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
             double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-            //vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
+            vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
         }
 
     private void calculateWheelBasis(int n1, int n2, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {

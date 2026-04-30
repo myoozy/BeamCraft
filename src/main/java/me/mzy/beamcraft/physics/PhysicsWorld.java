@@ -311,10 +311,11 @@ public class PhysicsWorld {
 
         // 6.3 库仑摩擦力模型 (Static vs Kinetic)
         if (equivalentJn > 0) {
-            // 提取摩擦系数 (JBeam 也可以通过 nodes 传入特定的静摩擦属性，这里默认静摩擦比滑动摩擦大 20%)
-            double baseFriction = 0.25 * (nVeh.nodes.friction[nHit] + tVeh.nodes.friction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
-            double mu_s = baseFriction * 1.2; // 静摩擦系数
-            double mu_k = baseFriction;       // 滑动摩擦系数
+            // 静摩擦系数
+            double mu_s = 0.25 * (nVeh.nodes.friction[nHit] + tVeh.nodes.friction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
+
+            // 滑动摩擦系数
+            double mu_k = 0.25 * (nVeh.nodes.slidingFriction[nHit] + tVeh.nodes.slidingFriction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
 
             // 计算切向相对速度
             double tangentVx = relVx - (approachSpeed * effNx);
