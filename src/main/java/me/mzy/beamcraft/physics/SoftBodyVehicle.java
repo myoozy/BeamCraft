@@ -129,10 +129,7 @@ public class SoftBodyVehicle {
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-            if (type == BeamContainer.BEAM_NORMAL) {
-                normalBeams.addBeam(n1, n2, dist, spring, damp,
-                        deform, strength, precomp, precompRange, precompTime);
-            } else if (type == BeamContainer.BEAM_SUPPORT) {
+            if (type == BeamContainer.BEAM_SUPPORT) {
                 supportBeams.addBeam(n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
             } else if (type == BeamContainer.BEAM_BOUNDED) {
@@ -144,6 +141,9 @@ public class SoftBodyVehicle {
                         limitSpring, limitDamp,
                         dampVelSplit, dampFast,
                         dampRebound, dampReboundFast);
+            } else {
+                normalBeams.addBeam(n1, n2, dist, spring, damp,
+                        deform, strength, precomp, precompRange, precompTime);
             }
         }
     }

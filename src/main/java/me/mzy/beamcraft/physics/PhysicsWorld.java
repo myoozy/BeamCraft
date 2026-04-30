@@ -176,10 +176,10 @@ public class PhysicsWorld {
      */
     private void resolveSingleContact(int contactId, double subDt) {
         // 物理参数（可根据车辆材质调整）
-        double THICKNESS = 0.01;          // 铁皮厚度 1cm
-        double PBD_RELAXATION = 1;        // 位置约束松弛度 (1 = 完全求解)
-        double MAX_POS_PUSH = 0.1;        // 单帧最大位置修正量 (米)
-        double RESTITUTION = 0.0;         // 恢复系数: 0=完全非弹性，1=完全弹性。金属建议 0.2~0.4。如果为0则完全靠Beam刚度回弹
+        double THICKNESS = 0.01;
+        double PBD_RELAXATION = 1;
+        double MAX_POS_PUSH = 0.1;
+        double RESTITUTION = 0.0;
 
         SoftBodyVehicle nVeh = collisionManager.contactNodeVeh[contactId];
         int nHit = collisionManager.contactNodeId[contactId];
@@ -199,7 +199,7 @@ public class PhysicsWorld {
         double pY = nVeh.entityY + nVeh.nodes.posY[nHit];
         double pZ = nVeh.entityZ + nVeh.nodes.posZ[nHit];
 
-        // ★ AABB 快速过滤（带厚度）
+        // AABB 快速过滤（带厚度）
         double minX = Math.min(ax, Math.min(bx, cx)) - THICKNESS;
         double maxX = Math.max(ax, Math.max(bx, cx)) + THICKNESS;
         double minY = Math.min(ay, Math.min(by, cy)) - THICKNESS;
@@ -208,7 +208,7 @@ public class PhysicsWorld {
         double maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
         if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) return;
 
-        // 三角形法线（未经单位化）
+        // 三角形法线
         double abx = bx - ax, aby = by - ay, abz = bz - az;
         double acx = cx - ax, acy = cy - ay, acz = cz - az;
         double nx = aby * acz - abz * acy;
@@ -220,7 +220,7 @@ public class PhysicsWorld {
         double invNLen = 1.0 / Math.sqrt(nLenSq);
         nx *= invNLen; ny *= invNLen; nz *= invNLen;
 
-        // 预计算三角形边的内积（用于重心坐标）
+        // 预计算重心坐标用数据
         double d00 = abx*abx + aby*aby + abz*abz;
         double d01 = abx*acx + aby*acy + abz*acz;
         double d11 = acx*acx + acy*acy + acz*acz;
@@ -228,11 +228,10 @@ public class PhysicsWorld {
         if (denom < 1e-8) return;
         double invDenom = 1.0 / denom;
 
-        // 2. CCD: 计算当前距离和上一帧距离
+        // 2. CCD: 距离预测
         double apx = pX - ax, apy = pY - ay, apz = pZ - az;
         double distCurr = apx * nx + apy * ny + apz * nz;
 
-        // 三角形近似速度（顶点平均）
         double triVx = (tVeh.nodes.velX[nA] + tVeh.nodes.velX[nB] + tVeh.nodes.velX[nC]) * 0.33333333;
         double triVy = (tVeh.nodes.velY[nA] + tVeh.nodes.velY[nB] + tVeh.nodes.velY[nC]) * 0.33333333;
         double triVz = (tVeh.nodes.velZ[nA] + tVeh.nodes.velZ[nB] + tVeh.nodes.velZ[nC]) * 0.33333333;
@@ -243,13 +242,13 @@ public class PhysicsWorld {
 
         double distPrev = distCurr - approxRelV * subDt;
 
-        // 3. 确定碰撞侧并计算穿透深度
+        // 3. 确定碰撞侧并计算穿透
         double pushDir = (distPrev > 0) ? 1.0 : -1.0;
-        double signedDist = distCurr * pushDir;      // 从碰撞侧到平面的距离（正值）
+        double signedDist = distCurr * pushDir;
         double penetration = THICKNESS - signedDist;
-        if (penetration <= 0) return;               // 没有压入厚度，忽略
+        if (penetration <= 0) return;
 
-        // 4. 重心坐标（投影到平面上）
+        // 4. 重心坐标
         double ppx = apx - distCurr * nx;
         double ppy = apy - distCurr * ny;
         double ppz = apz - distCurr * nz;
@@ -264,17 +263,15 @@ public class PhysicsWorld {
         double TOLERANCE = -0.01;
         if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) return;
 
-        // 有效推力方向（总是将节点推回它原来所在的那一侧）
         double effNx = nx * pushDir, effNy = ny * pushDir, effNz = nz * pushDir;
 
         double massNode = nVeh.nodes.mass[nHit];
         double massA = tVeh.nodes.mass[nA], massB = tVeh.nodes.mass[nB], massC = tVeh.nodes.mass[nC];
 
-        // 广义反质量（PBD 标准形式）
         double wTotal = (1.0 / massNode) + (wA*wA / massA) + (wB*wB / massB) + (wC*wC / massC);
         if (wTotal < 1e-8) return;
 
-        // 5. 位置修正（穿透推离）
+        // 5. 位置修正 (PBD 硬约束)
         double pushAmount = penetration * PBD_RELAXATION;
         if (pushAmount > MAX_POS_PUSH) pushAmount = MAX_POS_PUSH;
         double posImpulse = pushAmount / wTotal;
@@ -282,10 +279,9 @@ public class PhysicsWorld {
         double dpY = posImpulse * effNy;
         double dpZ = posImpulse * effNz;
 
-        // 6. 速度修正（弹性 + 摩擦）
+        // 6. 速度修正（法向弹性 + 切向库仑摩擦）
         double dvX = 0, dvY = 0, dvZ = 0;
 
-        // 6.1 精确接触点速度（重心坐标加权）
         double exactTriVx = wA * tVeh.nodes.velX[nA] + wB * tVeh.nodes.velX[nB] + wC * tVeh.nodes.velX[nC];
         double exactTriVy = wA * tVeh.nodes.velY[nA] + wB * tVeh.nodes.velY[nB] + wC * tVeh.nodes.velY[nC];
         double exactTriVz = wA * tVeh.nodes.velZ[nA] + wB * tVeh.nodes.velZ[nB] + wC * tVeh.nodes.velZ[nC];
@@ -295,27 +291,64 @@ public class PhysicsWorld {
         double relVz = nVeh.nodes.velZ[nHit] - exactTriVz;
 
         double approachSpeed = relVx * effNx + relVy * effNy + relVz * effNz;
+        double jn = 0; // 法向冲量大小
 
-        // 法向弹性冲量（可配置恢复系数）
+        // 6.1 法向弹性冲量
         if (approachSpeed < 0) {
-            double deltaRelVel = -(1 + RESTITUTION) * approachSpeed;   // 期望的相对速度变化
-            double normalImpulse = deltaRelVel / wTotal;
-            dvX += normalImpulse * effNx;
-            dvY += normalImpulse * effNy;
-            dvZ += normalImpulse * effNz;
+            double deltaRelVel = -(1 + RESTITUTION) * approachSpeed;
+            jn = deltaRelVel / wTotal;
+            dvX += jn * effNx;
+            dvY += jn * effNy;
+            dvZ += jn * effNz;
         }
 
-        // 切向摩擦（衰减切向相对速度）
-        double tangentVx = relVx - (approachSpeed * effNx);
-        double tangentVy = relVy - (approachSpeed * effNy);
-        double tangentVz = relVz - (approachSpeed * effNz);
-        double frictionCoefficient = 0.25 * (nVeh.nodes.friction[nHit] + tVeh.nodes.friction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
-        double friction = Math.max(0, 1.0 - frictionCoefficient);
-        dvX -= (tangentVx * friction) / wTotal;
-        dvY -= (tangentVy * friction) / wTotal;
-        dvZ -= (tangentVz * friction) / wTotal;
+        // 6.2 估算总法向支撑力
+        // 即便速度为 0 (静止靠在斜坡上)，如果有位置推挤，说明重力在挤压，也要产生摩擦力支撑！
+        double equivalentJn = jn;
+        if (penetration > 0 && approachSpeed >= -1e-4) {
+            equivalentJn += (pushAmount / subDt) / wTotal;
+        }
 
-        // 7. 应用位置和速度增量（按质量和重心权重分配）
+        // 6.3 库仑摩擦力模型 (Static vs Kinetic)
+        if (equivalentJn > 0) {
+            // 提取摩擦系数 (JBeam 也可以通过 nodes 传入特定的静摩擦属性，这里默认静摩擦比滑动摩擦大 20%)
+            double baseFriction = 0.25 * (nVeh.nodes.friction[nHit] + tVeh.nodes.friction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
+            double mu_s = baseFriction * 1.2; // 静摩擦系数
+            double mu_k = baseFriction;       // 滑动摩擦系数
+
+            // 计算切向相对速度
+            double tangentVx = relVx - (approachSpeed * effNx);
+            double tangentVy = relVy - (approachSpeed * effNy);
+            double tangentVz = relVz - (approachSpeed * effNz);
+
+            double vtLen = Math.sqrt(tangentVx * tangentVx + tangentVy * tangentVy + tangentVz * tangentVz);
+
+            if (vtLen > 1e-8) {
+                // 完全抵消切向相对速度所需的冲量
+                double jtMax = vtLen / wTotal;
+
+                double frictionImpulse;
+                if (jtMax <= mu_s * equivalentJn) {
+                    // 【静摩擦】：所需冲量没有突破极限，彻底消除切向速度（咬死）
+                    frictionImpulse = jtMax;
+                } else {
+                    // 【滑动摩擦】：突破极限发生打滑，提供恒定阻力
+                    frictionImpulse = mu_k * equivalentJn;
+                }
+
+                // 切向单位向量
+                double tDirX = tangentVx / vtLen;
+                double tDirY = tangentVy / vtLen;
+                double tDirZ = tangentVz / vtLen;
+
+                // 施加摩擦冲量
+                dvX -= frictionImpulse * tDirX;
+                dvY -= frictionImpulse * tDirY;
+                dvZ -= frictionImpulse * tDirZ;
+            }
+        }
+
+        // 7. 应用位置和速度增量
         nVeh.applyPositionAndVelocityDeltaUnSafe(nHit,
                 dpX / massNode, dpY / massNode, dpZ / massNode,
                 dvX / massNode, dvY / massNode, dvZ / massNode);

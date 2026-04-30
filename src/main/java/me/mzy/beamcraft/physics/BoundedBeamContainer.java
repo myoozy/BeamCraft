@@ -7,14 +7,14 @@ import me.mzy.beamcraft.utility.Utility;
  */
 public class BoundedBeamContainer extends BeamContainer {
     // 限界与阻尼特有属性
-    protected double[] shortBound;      // 最短极限比例
-    protected double[] longBound;       // 最长极限比例
-    protected double[] limitSpring;     // 极限反弹力
-    protected double[] limitDamp;       // 极限阻尼
-    protected double[] dampVelocitySplit; // 速度分界点
-    protected double[] dampFast;        // 高速阻尼
-    protected double[] dampRebound;     // 回弹阻尼
-    protected double[] dampReboundFast; // 高速回弹阻尼
+    public double[] shortBound;      // 最短极限比例
+    public double[] longBound;       // 最长极限比例
+    public double[] limitSpring;     // 极限反弹力
+    public double[] limitDamp;       // 极限阻尼
+    public double[] dampVelocitySplit; // 速度分界点
+    public double[] dampFast;        // 高速阻尼
+    public double[] dampRebound;     // 回弹阻尼
+    public double[] dampReboundFast; // 高速回弹阻尼
 
     private static final double KINDA_BIG_NUMBER = 1e9;
 
@@ -90,14 +90,4 @@ public class BoundedBeamContainer extends BeamContainer {
         dampRebound[idx] = finalRebound;
         dampReboundFast[idx] = finalReboundFast;
     }
-
-    // ---------- 限界梁特有 getter ----------
-    public double[] getShortBound() { return shortBound; }
-    public double[] getLongBound() { return longBound; }
-    public double[] getLimitSpring() { return limitSpring; }
-    public double[] getLimitDamp() { return limitDamp; }
-    public double[] getDampVelocitySplit() { return dampVelocitySplit; }
-    public double[] getDampFast() { return dampFast; }
-    public double[] getDampRebound() { return dampRebound; }
-    public double[] getDampReboundFast() { return dampReboundFast; }
 }
