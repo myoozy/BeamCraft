@@ -91,7 +91,8 @@ public class JBeamAssembler {
                 JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, entry.partId);
             }
         }
-        System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + vehicle.beams.count);
+        int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;
+        System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + beamsCount);
 
         // ==========================================
         // 🚀 Pass 3: 逆向解析车轮 (解决子零件属性覆盖问题)

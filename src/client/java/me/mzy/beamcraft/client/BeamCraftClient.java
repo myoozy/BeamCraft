@@ -109,33 +109,85 @@ public class BeamCraftClient implements ClientModInitializer {
 				double eY = vehicle.parentEntity.getY();
 				double eZ = vehicle.parentEntity.getZ();
 
+				boolean DEBUG_SHOW_BEAMS = false;
+
 				// === 1. 渲染梁/骨架 ===
-				for (int i = 0; i < vehicle.beams.count; i++) {
+				if (DEBUG_SHOW_BEAMS) {
 
-					int n1 = vehicle.beams.node1[i];
-					int n2 = vehicle.beams.node2[i];
+					// === 1. 渲染普通梁（NORMAL） ===
+					for (int i = 0; i < vehicle.normalBeams.count; i++) {
+						int n1 = vehicle.normalBeams.node1[i];
+						int n2 = vehicle.normalBeams.node2[i];
 
-					// 【核心逻辑】：将 SoftBody 的内部坐标 + 实体的世界坐标
-					float x1 = (float)(vehicle.nodes.posX[n1] + eX);
-					float y1 = (float)(vehicle.nodes.posY[n1] + eY);
-					float z1 = (float)(vehicle.nodes.posZ[n1] + eZ);
+						float x1 = (float) (vehicle.nodes.posX[n1] + eX);
+						float y1 = (float) (vehicle.nodes.posY[n1] + eY);
+						float z1 = (float) (vehicle.nodes.posZ[n1] + eZ);
+						float x2 = (float) (vehicle.nodes.posX[n2] + eX);
+						float y2 = (float) (vehicle.nodes.posY[n2] + eY);
+						float z2 = (float) (vehicle.nodes.posZ[n2] + eZ);
 
-					float x2 = (float)(vehicle.nodes.posX[n2] + eX);
-					float y2 = (float)(vehicle.nodes.posY[n2] + eY);
-					float z2 = (float)(vehicle.nodes.posZ[n2] + eZ);
+						if (vehicle.normalBeams.restLength[i] != vehicle.normalBeams.targetRestLength[i]) {
+							// 过渡中：黄色
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
+						} else if (vehicle.normalBeams.broken[i]) {
+							// 断裂：红色
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
+						} else {
+							// 正常：绿色
+							beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
+						}
+					}
 
-					//if (vehicle.beams.restLength[i] != vehicle.beams.targetRestLength[i] && !vehicle.beams.broken[i]){
-					//	beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
-					//	beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
-					//}
-					//else if (vehicle.beams.broken[i]){
-					//	beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
-					//	beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
-					//}
-					//else {
-					//	//beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
-					//	//beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
-					//}
+					// === 2. 渲染支撑梁（SUPPORT） ===
+					for (int i = 0; i < vehicle.supportBeams.count; i++) {
+						int n1 = vehicle.supportBeams.node1[i];
+						int n2 = vehicle.supportBeams.node2[i];
+
+						float x1 = (float) (vehicle.nodes.posX[n1] + eX);
+						float y1 = (float) (vehicle.nodes.posY[n1] + eY);
+						float z1 = (float) (vehicle.nodes.posZ[n1] + eZ);
+						float x2 = (float) (vehicle.nodes.posX[n2] + eX);
+						float y2 = (float) (vehicle.nodes.posY[n2] + eY);
+						float z2 = (float) (vehicle.nodes.posZ[n2] + eZ);
+
+						if (vehicle.supportBeams.restLength[i] != vehicle.supportBeams.targetRestLength[i]) {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
+						} else if (vehicle.supportBeams.broken[i]) {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
+						} else {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
+						}
+					}
+
+					// === 3. 渲染限界梁（	BOUNDED） ===
+					for (int i = 0; i < vehicle.boundedBeams.count; i++) {
+						int n1 = vehicle.boundedBeams.node1[i];
+						int n2 = vehicle.boundedBeams.node2[i];
+
+						float x1 = (float) (vehicle.nodes.posX[n1] + eX);
+						float y1 = (float) (vehicle.nodes.posY[n1] + eY);
+						float z1 = (float) (vehicle.nodes.posZ[n1] + eZ);
+						float x2 = (float) (vehicle.nodes.posX[n2] + eX);
+						float y2 = (float) (vehicle.nodes.posY[n2] + eY);
+						float z2 = (float) (vehicle.nodes.posZ[n2] + eZ);
+
+						if (vehicle.boundedBeams.restLength[i] != vehicle.boundedBeams.targetRestLength[i]) {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
+						} else if (vehicle.boundedBeams.broken[i]) {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
+						} else {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
+						}
+					}
 				}
 
 				// === 2. 渲染三角面 (浅蓝色轮廓) ===

@@ -21,7 +21,9 @@ public class SoftBodyVehicle {
     public int globalNodeOffset = 0; // 全局节点偏移量
 
     public final NodeContainer nodes = new NodeContainer();
-    public final BeamContainer beams = new BeamContainer();
+    public final BeamContainer normalBeams = new BeamContainer();
+    public final BeamContainer supportBeams = new BeamContainer();
+    public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
     public final TriangleContainer triangles = new TriangleContainer();
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
@@ -64,6 +66,12 @@ public class SoftBodyVehicle {
         nodes.moveNodes(-localCOM[0], -localCOM[1], -localCOM[2]);
     }
 
+    public void updateBeamPrecompression(double dt) {
+        normalBeams.updatePrecompression(dt);
+        supportBeams.updatePrecompression(dt);
+        boundedBeams.updatePrecompression(dt);
+    }
+
     /**
      * Expand array capacity to avoid index out of bounds for new part id
      */
@@ -103,11 +111,11 @@ public class SoftBodyVehicle {
     /**
      * Create physical beam constraint between two existing nodes
      */
-    public void addBeam(String name1, String name2,
+    public void addBeam(int type,
+                        String name1, String name2,
                         double spring, double damp,
                         double deform, double strength,
-                        int type, double precomp,
-                        double precompRange, double precompTime,
+                        double precomp, double precompRange, double precompTime,
                         double shortBound, double longBound,
                         double shortBoundRange, double longBoundRange,
                         double limitSpring, double limitDamp,
@@ -121,14 +129,22 @@ public class SoftBodyVehicle {
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-            beams.addBeam(n1, n2, dist, spring, damp,
-                    deform, strength, type,
-                    precomp, precompRange, precompTime,
-                    shortBound, longBound,
-                    shortBoundRange, longBoundRange,
-                    limitSpring, limitDamp,
-                    dampVelSplit, dampFast,
-                    dampRebound, dampReboundFast);
+            if (type == BeamContainer.BEAM_NORMAL) {
+                normalBeams.addBeam(n1, n2, dist, spring, damp,
+                        deform, strength, precomp, precompRange, precompTime);
+            } else if (type == BeamContainer.BEAM_SUPPORT) {
+                supportBeams.addBeam(n1, n2, dist, spring, damp,
+                        deform, strength, precomp, precompRange, precompTime);
+            } else if (type == BeamContainer.BEAM_BOUNDED) {
+                boundedBeams.addBeam(n1, n2, dist,
+                        spring, damp, deform, strength,
+                        precomp, precompRange, precompTime,
+                        shortBound, longBound,
+                        shortBoundRange, longBoundRange,
+                        limitSpring, limitDamp,
+                        dampVelSplit, dampFast,
+                        dampRebound, dampReboundFast);
+            }
         }
     }
 
@@ -232,7 +248,9 @@ public class SoftBodyVehicle {
      */
     public void reset() {
         nodes.reset();
-        beams.reset();
+        normalBeams.reset();
+        supportBeams.reset();
+        boundedBeams.reset();
         torsionbars.reset();
         System.out.println("Vehicle reset.");
     }
@@ -242,7 +260,9 @@ public class SoftBodyVehicle {
      */
     public void clear() {
         nodes.clear();
-        beams.clear();
+        normalBeams.clear();
+        supportBeams.clear();
+        boundedBeams.clear();
         triangles.clear();
         torsionbars.clear();
         slidenodes.clear();
@@ -366,96 +386,199 @@ public class SoftBodyVehicle {
             nodes.prevPosZ[i] = nodes.posZ[i];
         }
 
-        for (int i = 0; i < beams.count; i++) {
-            if (beams.broken[i]) continue;
+        // ==========================================
+        // 🛡️ 梁计算 (Beams)
+        // ==========================================
 
-            int n1 = beams.node1[i];
-            int n2 = beams.node2[i];
+        // ========== 1. 处理普通梁（NORMAL） ==========
+        for (int i = 0; i < normalBeams.count; i++) {
+            if (normalBeams.broken[i]) continue;
+
+            int n1 = normalBeams.node1[i];
+            int n2 = normalBeams.node2[i];
             double m1 = nodes.mass[n1];
             double m2 = nodes.mass[n2];
-
             if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
-
             double distSq = dx*dx + dy*dy + dz*dz;
             double dist = Math.sqrt(distSq);
             if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
-            // 🚀 读取合并后的状态，并解包
-            int rawType = beams.type[i];
-            int type = rawType & BeamContainer.MASK_TYPE;
-
-            double restL = beams.restLength[i];
-
-            // 支撑梁只抗压不抗拉
-            if (type == BeamContainer.BEAM_SUPPORT && dist > restL) continue;
-
+            double restL = normalBeams.restLength[i];
             double reducedMass = (m1 * m2) / (m1 + m2);
             double maxSafeSpring = reducedMass * invDt * invDt;
-
-            double activeSpring = Math.min(beams.spring[i], maxSafeSpring);
+            double activeSpring = Math.min(normalBeams.spring[i], maxSafeSpring);
             double springForce = activeSpring * (dist - restL);
-
-            double activeDamp = beams.damp[i];
 
             double vx = nodes.velX[n2] - nodes.velX[n1];
             double vy = nodes.velY[n2] - nodes.velY[n1];
             double vz = nodes.velZ[n2] - nodes.velZ[n1];
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
-            // ==========================================
-            // 🔥 复杂阻尼计算
-            // ==========================================
-            if ((rawType & BeamContainer.FLAG_HAS_COMPLEX_DAMP) != 0) {
-                double split = beams.dampVelocitySplit[i];
-                boolean isRebound = relVel > 0;
-                boolean isFast = Math.abs(relVel) > split;
-                activeDamp = isRebound ?
-                        (isFast ? beams.dampReboundFast[i] : beams.dampRebound[i]) :
-                        (isFast ? beams.dampFast[i] : activeDamp);
-            }
-
-            // ==========================================
-            // 🔥 限位梁计算（有时|NORMAL梁也有short/long bound参数
-            // ==========================================
-            if (rawType == BeamContainer.BEAM_BOUNDED) {
-                double shortBoundary = restL * (1.0 - beams.shortBound[i]);
-                double longBoundary  = restL * (1.0 + beams.longBound[i]);
-                double limitSpring = Math.min(beams.limitSpring[i], maxSafeSpring);
-
-                if (dist < shortBoundary) {
-                    springForce += limitSpring * (shortBoundary - dist);
-                    double lDamp = beams.limitDamp[i];
-                    if (lDamp > activeDamp) activeDamp = lDamp;
-                } else if (dist > longBoundary) {
-                    springForce += limitSpring * (dist - longBoundary);
-                    double lDamp = beams.limitDamp[i];
-                    if (lDamp > activeDamp) activeDamp = lDamp;
-                }
-            }
-
-            // 最大阻尼（一帧内速度清零）
+            double activeDamp = normalBeams.damp[i];
             double maxDamp = reducedMass * invDt;
             if (activeDamp > maxDamp) activeDamp = maxDamp;
 
             double totalForce = springForce + (relVel * activeDamp);
-
             double absTotalForce = Math.abs(totalForce);
-            if (absTotalForce > beams.strength[i]) {
-                beams.broken[i] = true;
+
+            if (absTotalForce > normalBeams.strength[i]) {
+                normalBeams.broken[i] = true;
                 continue;
             }
 
-            if (absTotalForce > beams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                double overForce = absTotalForce - beams.deform[i];
-                double deformAmount = ((overForce * overForce) / (beams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+            if (absTotalForce > normalBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - normalBeams.deform[i];
+                double deformAmount = ((overForce * overForce) / (normalBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+                if (dist > restL) normalBeams.restLength[i] += deformAmount;
+                else normalBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
+            }
 
-                if (dist > restL) beams.restLength[i] += deformAmount;
-                else beams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
+            double fx = totalForce * dx * invDist;
+            double fy = totalForce * dy * invDist;
+            double fz = totalForce * dz * invDist;
+
+            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
+            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
+        }
+
+        // ========== 2. 处理支撑梁（SUPPORT，仅压缩） ==========
+        for (int i = 0; i < supportBeams.count; i++) {
+            if (supportBeams.broken[i]) continue;
+
+            int n1 = supportBeams.node1[i];
+            int n2 = supportBeams.node2[i];
+            double m1 = nodes.mass[n1];
+            double m2 = nodes.mass[n2];
+            if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
+
+            double dx = nodes.posX[n2] - nodes.posX[n1];
+            double dy = nodes.posY[n2] - nodes.posY[n1];
+            double dz = nodes.posZ[n2] - nodes.posZ[n1];
+            double distSq = dx*dx + dy*dy + dz*dz;
+            double dist = Math.sqrt(distSq);
+            if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
+            double invDist = 1.0 / dist;
+
+            double restL = supportBeams.restLength[i];
+
+            // 支撑梁：只抗压，不抗拉（拉伸时跳过）
+            if (dist > restL) continue;
+
+            double reducedMass = (m1 * m2) / (m1 + m2);
+            double maxSafeSpring = reducedMass * invDt * invDt;
+            double activeSpring = Math.min(supportBeams.spring[i], maxSafeSpring);
+            double springForce = activeSpring * (dist - restL);  // dist <= restL，力为负（压力）
+
+            double vx = nodes.velX[n2] - nodes.velX[n1];
+            double vy = nodes.velY[n2] - nodes.velY[n1];
+            double vz = nodes.velZ[n2] - nodes.velZ[n1];
+            double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
+
+            double activeDamp = supportBeams.damp[i];
+            double maxDamp = reducedMass * invDt;
+            if (activeDamp > maxDamp) activeDamp = maxDamp;
+
+            double totalForce = springForce + (relVel * activeDamp);
+            double absTotalForce = Math.abs(totalForce);
+
+            if (absTotalForce > supportBeams.strength[i]) {
+                supportBeams.broken[i] = true;
+                continue;
+            }
+
+            if (absTotalForce > supportBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - supportBeams.deform[i];
+                double deformAmount = ((overForce * overForce) / (supportBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+                if (dist > restL) supportBeams.restLength[i] += deformAmount;
+                else supportBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
+            }
+
+            double fx = totalForce * dx * invDist;
+            double fy = totalForce * dy * invDist;
+            double fz = totalForce * dz * invDist;
+
+            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
+            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
+        }
+
+        // ========== 3. 处理限界梁（BOUNDED，含复杂阻尼和限位） ==========
+        for (int i = 0; i < boundedBeams.count; i++) {
+            if (boundedBeams.broken[i]) continue;
+
+            int n1 = boundedBeams.node1[i];
+            int n2 = boundedBeams.node2[i];
+            double m1 = nodes.mass[n1];
+            double m2 = nodes.mass[n2];
+            if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
+
+            double dx = nodes.posX[n2] - nodes.posX[n1];
+            double dy = nodes.posY[n2] - nodes.posY[n1];
+            double dz = nodes.posZ[n2] - nodes.posZ[n1];
+            double distSq = dx*dx + dy*dy + dz*dz;
+            double dist = Math.sqrt(distSq);
+            if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
+            double invDist = 1.0 / dist;
+
+            double restL = boundedBeams.restLength[i];
+            double reducedMass = (m1 * m2) / (m1 + m2);
+            double maxSafeSpring = reducedMass * invDt * invDt;
+            double activeSpring = Math.min(boundedBeams.spring[i], maxSafeSpring);
+            double springForce = activeSpring * (dist - restL);
+
+            double vx = nodes.velX[n2] - nodes.velX[n1];
+            double vy = nodes.velY[n2] - nodes.velY[n1];
+            double vz = nodes.velZ[n2] - nodes.velZ[n1];
+            double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
+
+            // ----- 复杂阻尼（仅限界梁拥有）-----
+            double activeDamp = boundedBeams.damp[i];
+            double split = boundedBeams.dampVelocitySplit[i];
+            boolean isRebound = relVel > 0;
+            boolean isFast = Math.abs(relVel) > split;
+            if (isRebound) {
+                activeDamp = isFast ? boundedBeams.dampReboundFast[i] : boundedBeams.dampRebound[i];
+            } else {
+                if (isFast) activeDamp = boundedBeams.dampFast[i];
+                // else 保持 activeDamp 不变（原逻辑：isFast? dampFast : activeDamp）
+            }
+
+            // ----- 限位逻辑 -----
+            double shortBoundary = restL * (1.0 - boundedBeams.shortBound[i]);
+            double longBoundary  = restL * (1.0 + boundedBeams.longBound[i]);
+            double limitSpring = Math.min(boundedBeams.limitSpring[i], maxSafeSpring);
+
+            if (dist < shortBoundary) {
+                springForce += limitSpring * (shortBoundary - dist);
+                double lDamp = boundedBeams.limitDamp[i];
+                if (lDamp > activeDamp) activeDamp = lDamp;
+            } else if (dist > longBoundary) {
+                springForce += limitSpring * (dist - longBoundary);
+                double lDamp = boundedBeams.limitDamp[i];
+                if (lDamp > activeDamp) activeDamp = lDamp;
+            }
+
+            // 最大阻尼限幅
+            double maxDamp = reducedMass * invDt;
+            if (activeDamp > maxDamp) activeDamp = maxDamp;
+
+            double totalForce = springForce + (relVel * activeDamp);
+            double absTotalForce = Math.abs(totalForce);
+
+            if (absTotalForce > boundedBeams.strength[i]) {
+                boundedBeams.broken[i] = true;
+                continue;
+            }
+
+            if (absTotalForce > boundedBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - boundedBeams.deform[i];
+                double deformAmount = ((overForce * overForce) / (boundedBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+                if (dist > restL) boundedBeams.restLength[i] += deformAmount;
+                else boundedBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
             }
 
             double fx = totalForce * dx * invDist;
@@ -803,190 +926,5 @@ public class SoftBodyVehicle {
                 }
             }
         }
-    }
-
-    public void addWheel(String wheelName, String nodeName1, String nodeName2,
-                         int numRays, double radius, double width, double offset,
-                         double nodeWeight, double frictionCoef,
-                         double treadSpring, double treadDamp,
-                         double peripherySpring, double peripheryDamp,
-                         double sideSpring, double sideDamp) {
-        int n1 = nodes.nameToIndex.get(nodeName1);
-        int n2 = nodes.nameToIndex.get(nodeName2);
-
-        this.generateWheel(
-                wheelName, n1, n2,
-                numRays, radius, width, offset,
-                nodeWeight, frictionCoef, treadSpring, treadDamp,
-                peripherySpring, peripheryDamp, sideSpring, sideDamp
-        );
-    }
-
-    /**
-     * 程序化生成车轮结构
-     * 必须在节点与梁的大循环解析完毕后调用
-     */
-    private void generateWheel(String wheelName, int node1, int node2,
-                              int numRays, double radius, double width, double offset,
-                              double nodeWeight, double frictionCoef,
-                              double treadSpring, double treadDamp,
-                              double peripherySpring, double peripheryDamp,
-                              double sideSpring, double sideDamp) {
-
-        double n1x = nodes.posX[node1], n1y = nodes.posY[node1], n1z = nodes.posZ[node1];
-        double n2x = nodes.posX[node2], n2y = nodes.posY[node2], n2z = nodes.posZ[node2];
-
-        // 1. 计算车轮旋转轴向量 (Z轴方向)
-        double axisX = n2x - n1x;
-        double axisY = n2y - n1y;
-        double axisZ = n2z - n1z;
-        double axisLen = Math.sqrt(axisX * axisX + axisY * axisY + axisZ * axisZ);
-        if (axisLen < KINDA_SMALL_NUMBER) return; // 防重合
-
-        axisX /= axisLen; axisY /= axisLen; axisZ /= axisLen;
-
-        // 2. 构建车轮平面的正交基底 (X 和 Y 轴)
-        double uX, uY, uZ;
-        // 如果旋转轴非常接近世界Y轴，则使用世界X轴作为辅助向量，否则使用Y轴
-        if (Math.abs(axisY) > 0.9) {
-            uX = 1; uY = 0; uZ = 0;
-        } else {
-            uX = 0; uY = 1; uZ = 0;
-        }
-
-        // 叉乘求出平面向量 V = Axis x U
-        double vX = axisY * uZ - axisZ * uY;
-        double vY = axisZ * uX - axisX * uZ;
-        double vZ = axisX * uY - axisY * uX;
-        double vLen = Math.sqrt(vX*vX + vY*vY + vZ*vZ);
-        vX /= vLen; vY /= vLen; vZ /= vLen;
-
-        // 叉乘求出平面真实向量 U = V x Axis 确保完全正交
-        uX = vY * axisZ - vZ * axisY;
-        uY = vZ * axisX - vX * axisZ;
-        uZ = vX * axisY - vY * axisX;
-
-        // 3. 计算生成基准中心点 (考虑轮距偏移 offset)
-        // 假设 node1 在内侧，以此为基准偏移
-        double centerX = n1x + axisX * offset;
-        double centerY = n1y + axisY * offset;
-        double centerZ = n1z + axisZ * offset;
-
-        int[] innerNodes = new int[numRays];
-        int[] outerNodes = new int[numRays];
-
-        int partId = nodes.partId[node1]; // 继承轮毂的 partId
-
-        // 4. 生成两圈节点 (内圈和外圈)
-        for (int i = 0; i < numRays; i++) {
-            double angle = (2.0 * Math.PI * i) / numRays;
-            double cosA = Math.cos(angle);
-            double sinA = Math.sin(angle);
-
-            // 当前射线在平面上的方向
-            double rayX = uX * cosA + vX * sinA;
-            double rayY = uY * cosA + vY * sinA;
-            double rayZ = uZ * cosA + vZ * sinA;
-
-            // 内圈节点位置 (向内收缩 width / 2)
-            double inX = centerX + rayX * radius - axisX * (width * 0.5);
-            double inY = centerY + rayY * radius - axisY * (width * 0.5);
-            double inZ = centerZ + rayZ * radius - axisZ * (width * 0.5);
-
-            // 外圈节点位置 (向外推展 width / 2)
-            double outX = centerX + rayX * radius + axisX * (width * 0.5);
-            double outY = centerY + rayY * radius + axisY * (width * 0.5);
-            double outZ = centerZ + rayZ * radius + axisZ * (width * 0.5);
-
-            String inName = wheelName + "_in_" + i;
-            String outName = wheelName + "_out_" + i;
-
-            nodes.addNode(inName, inX, inY, inZ, nodeWeight, frictionCoef, partId, true, false);
-            nodes.addNode(outName, outX, outY, outZ, nodeWeight, frictionCoef, partId, true, false);
-
-            innerNodes[i] = nodes.count - 2;
-            outerNodes[i] = nodes.count - 1;
-        }
-
-        // 5. 生成维持车轮结构的梁 (Beams)
-        double deform = 50000;   // 通用形变阈值
-        double strength = 500000; // 通用断裂阈值
-
-        for (int i = 0; i < numRays; i++) {
-            int next = (i + 1) % numRays;
-
-            int nIn = innerNodes[i];
-            int nOut = outerNodes[i];
-            int nInNext = innerNodes[next];
-            int nOutNext = outerNodes[next];
-
-            // (A) Tread Beams 胎面周长梁 (相连的内圈、外圈)
-            addWheelBeam(nIn, nInNext, treadSpring, treadDamp, deform, strength);
-            addWheelBeam(nOut, nOutNext, treadSpring, treadDamp, deform, strength);
-
-            // (B) Periphery Beams 横向与交叉支撑 (维持胎面宽度与抗扭曲)
-            addWheelBeam(nIn, nOut, peripherySpring, peripheryDamp, deform, strength); // 直连
-            addWheelBeam(nIn, nOutNext, peripherySpring, peripheryDamp, deform, strength); // 交叉 X
-            addWheelBeam(nOut, nInNext, peripherySpring, peripheryDamp, deform, strength); // 交叉 Y
-
-            // (C) Side Beams 侧向辐条支撑 (连接轮毂中心轴 node1 和 node2)
-            // 交叉绑定可以提供更强的侧向刚性
-            addWheelBeam(nIn, node1, sideSpring, sideDamp, deform, strength);
-            addWheelBeam(nOut, node2, sideSpring, sideDamp, deform, strength);
-
-            // 可选：为了防止轮胎脱圈，可以加入额外的交叉对角支撑
-            addWheelBeam(nIn, node2, sideSpring, sideDamp, deform, strength);
-            addWheelBeam(nOut, node1, sideSpring, sideDamp, deform, strength);
-        }
-
-        // ==========================================
-        // 生成车轮三角面 (Triangles)
-        // ==========================================
-        for (int i = 0; i < numRays; i++) {
-            int next = (i + 1) % numRays;
-
-            int nInCur = innerNodes[i];
-            int nInNext = innerNodes[next];
-            int nOutCur = outerNodes[i];
-            int nOutNext = outerNodes[next];
-            final boolean WHEEL_COLLISION = false;
-
-            // 1. 内侧胎壁 (Inner Sidewall)
-            // 连接内部中心点 (node1) 与内圈的相邻两个节点
-            triangles.addTriangle(node1, nInNext, nInCur, partId, WHEEL_COLLISION);
-
-            // 2. 外侧胎壁 (Outer Sidewall)
-            // 连接外部中心点 (node2) 与外圈的相邻两个节点
-            triangles.addTriangle(node2, nOutCur, nOutNext, partId, WHEEL_COLLISION);
-
-            // 3. 胎面 (Tread Surface)
-            // 由两个三角形拼接成一个四边形，连接内圈和外圈
-            triangles.addTriangle(nInCur, nInNext, nOutCur, partId, WHEEL_COLLISION);
-            triangles.addTriangle(nInNext, nOutNext, nOutCur, partId, WHEEL_COLLISION);
-        }
-
-        // TODO: 将 innerNodes 和 outerNodes 存入 WheelContainer 用于摩擦力计算
-    }
-
-    /**
-     * 车轮专用的快速梁添加函数
-     */
-    private void addWheelBeam(int id1, int id2, double spring, double damp, double deform, double strength) {
-        double dx = nodes.posX[id2] - nodes.posX[id1];
-        double dy = nodes.posY[id2] - nodes.posY[id1];
-        double dz = nodes.posZ[id2] - nodes.posZ[id1];
-        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-        // 类型为普通梁(BEAM_NORMAL), 无限位
-        beams.addBeam(id1, id2, dist,
-                spring, damp,
-                deform, strength,
-                BeamContainer.BEAM_NORMAL,
-                1.0, 0.0, 0.0,
-                1.0, 1.0,
-                -1, -1,
-                0, 0,
-                -1, -1,
-                -1, -1);
     }
 }

@@ -269,13 +269,13 @@ public class WheelContainer {
         }
     }
 
-    private void addFastBeam(int id1, int id2, double spring, double damp, double defrom, double strength) {
-        double dx = vehicle.nodes.posX[id2] - vehicle.nodes.posX[id1];
-        double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
-        double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
-        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        vehicle.beams.addBeam(id1, id2, dist, spring, damp, defrom, strength, BeamContainer.BEAM_NORMAL, 1.0, 0.0, 0.0, 1.0, 1.0, 0, 0, 0, 0, 0, 0, 0, 0);
-    }
+        private void addFastBeam(int id1, int id2, double spring, double damp, double defrom, double strength) {
+            double dx = vehicle.nodes.posX[id2] - vehicle.nodes.posX[id1];
+            double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
+            double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
+            double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            //vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
+        }
 
     private void calculateWheelBasis(int n1, int n2, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
         double n1x = vehicle.nodes.posX[n1], n1y = vehicle.nodes.posY[n1], n1z = vehicle.nodes.posZ[n1];
@@ -319,9 +319,9 @@ public class WheelContainer {
         double sideArea = (Math.PI * (rTire * rTire - rHub * rHub)) / rays;
 
         // 2. 形变参考量 (Delta X)
-        // 假设刚度的物理意义是：当轮胎被压扁胎壁高度的 30% 时，恰好提供等同于该区域气压总推力的反力
+        // 假设刚度的物理意义是：当轮胎被压扁胎壁高度的 100% 时，恰好提供等同于该区域气压总推力的反力
         double sidewallHeight = rTire - rHub;
-        double refDeflection = sidewallHeight * 0.3; // 参考形变量
+        double refDeflection = sidewallHeight * 100; // 参考形变量
 
         // 3. 刚度计算 (k = F / dx = (P * A) / dx)
         double treadBonus = (pressurePa * treadArea) / refDeflection;

@@ -137,7 +137,7 @@ public class PhysicsWorld {
 
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.updateEntityLocation();
-            vehicle.beams.updatePrecompression(dt);
+            vehicle.updateBeamPrecompression(dt);
         }
     }
 

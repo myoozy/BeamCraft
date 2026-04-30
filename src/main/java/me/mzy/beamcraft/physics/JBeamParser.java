@@ -201,8 +201,8 @@ public class JBeamParser {
                     double inlineDeform = currentDeform, inlineStrength = currentStrength;
                     double inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange;
                     double inlinePrecompTime = currentPrecompTime;
-                    double inlineShortB = currentShortBound, inlineLongB = currentLongBound;
-                    double inlineShortBRange = currentShortBoundRange, inlineLongBRange = currentLongBoundRange;
+                    double inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
+                    double inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
                     double inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
                     double inlineDampVelSplit = currentDampVelSplit;
                     double inlineDampFast = currentDampFast;
@@ -221,10 +221,10 @@ public class JBeamParser {
                         inlinePrecompRange = getDoubleSafe(inline, "precompressionRange", inlinePrecompRange);
                         inlinePrecompTime = getDoubleSafe(inline, "beamPrecompressionTime", inlinePrecompTime);
 
-                        inlineShortB = getDoubleSafe(inline, "beamShortBound", inlineShortB);
-                        inlineLongB = getDoubleSafe(inline, "beamLongBound", inlineLongB);
-                        inlineShortBRange = getDoubleSafe(inline, "shortBoundRange", inlineShortBRange);
-                        inlineLongBRange = getDoubleSafe(inline, "longBoundRange", inlineLongBRange);
+                        inlineShortBound = getDoubleSafe(inline, "beamShortBound", inlineShortBound);
+                        inlineLongBound = getDoubleSafe(inline, "beamLongBound", inlineLongBound);
+                        inlineShortBoundRange = getDoubleSafe(inline, "shortBoundRange", inlineShortBoundRange);
+                        inlineLongBoundRange = getDoubleSafe(inline, "longBoundRange", inlineLongBoundRange);
                         inlineLimitS = getDoubleSafe(inline, "beamLimitSpring", inlineLimitS);
                         inlineLimitD = getDoubleSafe(inline, "beamLimitDamp", inlineLimitD);
 
@@ -245,13 +245,12 @@ public class JBeamParser {
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
 
-                    vehicle.addBeam(id1, id2,
+                    vehicle.addBeam(inlineType, id1, id2,
                             inlineSpring, inlineDamp,
                             inlineDeform, inlineStrength,
-                            inlineType, inlinePrecomp,
-                            inlinePrecompRange, inlinePrecompTime,
-                            inlineShortB, inlineLongB,
-                            inlineShortBRange, inlineLongBRange,
+                            inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
+                            inlineShortBound, inlineLongBound,
+                            inlineShortBoundRange, inlineLongBoundRange,
                             inlineLimitS, inlineLimitD,
                             inlineDampVelSplit, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast

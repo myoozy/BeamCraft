@@ -63,7 +63,8 @@ public class PhysicsVehicleEntity extends Entity {
             // 登记到物理世界
             BeamCraft.PHYSICS_WORLD.addVehicle(this.softBody);
 
-            BeamCraft.LOGGER.info("Physics Vehicle assembled: nodes = " + softBody.nodes.count + " | beams = " + softBody.beams.count + " | triangles = " + softBody.triangles.count + " | torsion bars = " + softBody.torsionbars.count);
+            int beamsCount = softBody.normalBeams.count + softBody.supportBeams.count + softBody.boundedBeams.count;
+            BeamCraft.LOGGER.info("Physics Vehicle assembled: nodes = " + softBody.nodes.count + " | beams = " + beamsCount + " | triangles = " + softBody.triangles.count + " | torsion bars = " + softBody.torsionbars.count);
 
             // 方法结束时，localRegistry 会被自动销毁，内存永不爆炸！
         }
