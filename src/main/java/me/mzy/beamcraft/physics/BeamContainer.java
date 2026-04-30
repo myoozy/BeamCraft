@@ -9,6 +9,9 @@ public class BeamContainer {
     public static final int BEAM_NORMAL = 0;
     public static final int BEAM_SUPPORT = 1;
     public static final int BEAM_BOUNDED = 2;
+    public static final int BEAM_LBEAM = 3;
+    public static final int BEAM_HYDRO = 4;
+    public static final int BEAM_ANISOTROPIC = 5;
 
     public int count = 0;
     public int[] node1;

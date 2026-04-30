@@ -153,14 +153,18 @@ public class JBeamParser {
 
                 String bt = getStringSafe(modifier, "beamType", "");
                 if (!bt.isEmpty()) {
-                    if (bt.equals("|NORMAL") || bt.equals("|HYDRO") || bt.equals("|ANISOTROPIC")) {
+                    if (bt.equals("|NORMAL")) {
                         currentType = BeamContainer.BEAM_NORMAL;
                     } else if (bt.equals("|SUPPORT")) {
                         currentType = BeamContainer.BEAM_SUPPORT;
                     } else if (bt.equals("|BOUNDED")) {
                         currentType = BeamContainer.BEAM_BOUNDED;
                     } else if (bt.equals("|LBEAM")) {
-                        currentType = BeamContainer.BEAM_NORMAL;
+                        currentType = BeamContainer.BEAM_LBEAM;
+                    } else if (bt.equals("|HYDRO")) {
+                        currentType = BeamContainer.BEAM_HYDRO;
+                    } else if (bt.equals("|ANISOTROPIC")) {
+                        currentType = BeamContainer.BEAM_ANISOTROPIC;
                     }
                 }
 
@@ -235,10 +239,12 @@ public class JBeamParser {
 
                         String bt = getStringSafe(inline, "beamType", "");
                         if (!bt.isEmpty()) {
-                            if (bt.equals("|NORMAL") || bt.equals("|HYDRO") || bt.equals("|ANISOTROPIC")) inlineType = BeamContainer.BEAM_NORMAL;
+                            if (bt.equals("|NORMAL")) inlineType = BeamContainer.BEAM_NORMAL;
                             else if (bt.equals("|SUPPORT")) inlineType = BeamContainer.BEAM_SUPPORT;
                             else if (bt.equals("|BOUNDED")) inlineType = BeamContainer.BEAM_BOUNDED;
-                            else if (bt.equals("|LBEAM")) inlineType = BeamContainer.BEAM_NORMAL;
+                            else if (bt.equals("|LBEAM")) inlineType = BeamContainer.BEAM_LBEAM;
+                            else if (bt.equals("|HYDRO")) inlineType = BeamContainer.BEAM_HYDRO;
+                            else if (bt.equals("|ANISOTROPIC")) inlineType = BeamContainer.BEAM_ANISOTROPIC;
                         }
                     }
 

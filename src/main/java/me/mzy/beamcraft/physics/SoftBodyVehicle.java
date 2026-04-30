@@ -553,7 +553,7 @@ public class SoftBodyVehicle {
             double limitSpring = Math.min(boundedBeams.limitSpring[i], maxSafeSpring);
 
             if (dist < shortBoundary) {
-                springForce += limitSpring * (shortBoundary - dist);
+                springForce += limitSpring * (dist - shortBoundary);
                 double lDamp = boundedBeams.limitDamp[i];
                 if (lDamp > activeDamp) activeDamp = lDamp;
             } else if (dist > longBoundary) {
