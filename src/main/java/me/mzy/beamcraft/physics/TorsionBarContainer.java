@@ -88,6 +88,7 @@ public class TorsionBarContainer {
 
         restAngle[count] = angle;
         baseRestAngle[count] = restAngle[count];
+        if (Double.isNaN(angle)) broken[count] = true;
 
         count++;
     }

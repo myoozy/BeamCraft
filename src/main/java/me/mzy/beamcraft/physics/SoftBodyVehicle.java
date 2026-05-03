@@ -398,14 +398,17 @@ public class SoftBodyVehicle {
             int n2 = normalBeams.node2[i];
             double m1 = nodes.mass[n1];
             double m2 = nodes.mass[n2];
-            if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
+            if (m1 * m2 < KINDA_SMALL_NUMBER) {
+                normalBeams.broken[i] = true;
+                continue;
+            }
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double distSq = dx*dx + dy*dy + dz*dz;
+            if (distSq < KINDA_SMALL_NUMBER) continue;
             double dist = Math.sqrt(distSq);
-            if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
             double restL = normalBeams.restLength[i];
@@ -454,14 +457,17 @@ public class SoftBodyVehicle {
             int n2 = supportBeams.node2[i];
             double m1 = nodes.mass[n1];
             double m2 = nodes.mass[n2];
-            if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
+            if (m1 * m2 < KINDA_SMALL_NUMBER) {
+                supportBeams.broken[i] = true;
+                continue;
+            }
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double distSq = dx*dx + dy*dy + dz*dz;
+            if (distSq < KINDA_SMALL_NUMBER) continue;
             double dist = Math.sqrt(distSq);
-            if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
             double restL = supportBeams.restLength[i];
@@ -514,14 +520,17 @@ public class SoftBodyVehicle {
             int n2 = boundedBeams.node2[i];
             double m1 = nodes.mass[n1];
             double m2 = nodes.mass[n2];
-            if (m1 * m2 < KINDA_SMALL_NUMBER) continue;
+            if (m1 * m2 < KINDA_SMALL_NUMBER) {
+                boundedBeams.broken[i] = true;
+                continue;
+            }
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double distSq = dx*dx + dy*dy + dz*dz;
+            if (distSq < KINDA_SMALL_NUMBER) continue;
             double dist = Math.sqrt(distSq);
-            if (dist < KINDA_SMALL_NUMBER) dist = KINDA_SMALL_NUMBER;
             double invDist = 1.0 / dist;
 
             double restL = boundedBeams.restLength[i];
@@ -597,6 +606,14 @@ public class SoftBodyVehicle {
 
             int n1 = torsionbars.node1[i], n2 = torsionbars.node2[i], n3 = torsionbars.node3[i], n4 = torsionbars.node4[i];
 
+            if (nodes.mass[n1] < KINDA_SMALL_NUMBER ||
+                nodes.mass[n2] < KINDA_SMALL_NUMBER ||
+                nodes.mass[n3] < KINDA_SMALL_NUMBER ||
+                nodes.mass[n4] < KINDA_SMALL_NUMBER) {
+                torsionbars.broken[i] = true;
+                continue;
+            }
+
             double x1 = nodes.posX[n1], y1 = nodes.posY[n1], z1 = nodes.posZ[n1];
             double x2 = nodes.posX[n2], y2 = nodes.posY[n2], z2 = nodes.posZ[n2];
             double x3 = nodes.posX[n3], y3 = nodes.posY[n3], z3 = nodes.posZ[n3];
@@ -618,11 +635,13 @@ public class SoftBodyVehicle {
             double c2_sq = c2x*c2x + c2y*c2y + c2z*c2z;
             double b2_sq = b2x*b2x + b2y*b2y + b2z*b2z;
 
-            // 限制极小值，防除零崩溃 (1e-8 已经足够)
-            double c1_sq_safe = Math.max(c1_sq, 1e-8);
-            double c2_sq_safe = Math.max(c2_sq, 1e-8);
-            double b2_sq_safe = Math.max(b2_sq, 1e-8);
-            double b2_mag = Math.sqrt(b2_sq_safe);
+            // 如果有NaN，直接判定为断裂
+            if (Double.isNaN(c1_sq) || Double.isNaN(c2_sq) ||  Double.isNaN(b2_sq)) {
+                torsionbars.broken[i] = true;
+                continue;
+            }
+
+            double b2_mag = Math.sqrt(b2_sq);
 
             double c1Xc2_x = c1y * c2z - c1z * c2y;
             double c1Xc2_y = c1z * c2x - c1x * c2z;
@@ -637,14 +656,14 @@ public class SoftBodyVehicle {
             while (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
 
             // 🚨🚨🚨 注意梯度符号
-            double g1_factor = b2_mag / c1_sq_safe;
-            double g4_factor = -b2_mag / c2_sq_safe;
+            double g1_factor = b2_mag / c1_sq;
+            double g4_factor = -b2_mag / c2_sq;
 
             double g1x = g1_factor * c1x, g1y = g1_factor * c1y, g1z = g1_factor * c1z;
             double g4x = g4_factor * c2x, g4y = g4_factor * c2y, g4z = g4_factor * c2z;
 
-            double b1_dot_b2_div_sq = (b1x*b2x + b1y*b2y + b1z*b2z) / b2_sq_safe;
-            double b3_dot_b2_div_sq = (b3x*b2x + b3y*b2y + b3z*b2z) / b2_sq_safe;
+            double b1_dot_b2_div_sq = (b1x*b2x + b1y*b2y + b1z*b2z) / b2_sq;
+            double b3_dot_b2_div_sq = (b3x*b2x + b3y*b2y + b3z*b2z) / b2_sq;
 
             // 注意这里的符号
             double g2x = -g1x * b1_dot_b2_div_sq + g4x * b3_dot_b2_div_sq - g1x;
@@ -661,10 +680,11 @@ public class SoftBodyVehicle {
             double g3_sq_val = g3x*g3x + g3y*g3y + g3z*g3z;
             double g4_sq_val = g4x*g4x + g4y*g4y + g4z*g4z;
 
+            // 因为之前检查过mass，所以invGenMass基本不会是NaN
             double invGenMass = (g1_sq_val / nodes.mass[n1]) + (g2_sq_val / nodes.mass[n2]) +
                     (g3_sq_val / nodes.mass[n3]) + (g4_sq_val / nodes.mass[n4]);
 
-            double genMass = 1.0 / Math.max(invGenMass, 1e-12);
+            double genMass = 1.0 / invGenMass;
 
             double maxSafeSpring = genMass * invDt * invDt;
             double maxSafeDamp = genMass * invDt;
@@ -678,15 +698,14 @@ public class SoftBodyVehicle {
                     (g3x*nodes.velX[n3] + g3y*nodes.velY[n3] + g3z*nodes.velZ[n3]) +
                     (g4x*nodes.velX[n4] + g4y*nodes.velY[n4] + g4z*nodes.velZ[n4]);
 
-            // 纯净的扭矩，不需要复杂的正负号判断
             double torque = (activeSpring * deltaAngle) - (activeDamp * omega);
 
             double absTorque = Math.abs(torque);
-            if (absTorque > torsionbars.strength[i]) {
+            if (Double.isNaN(torque) || absTorque > torsionbars.strength[i]) {
                 torsionbars.broken[i] = true;
                 continue;
             }
-            if (absTorque > torsionbars.deform[i] && torsionbars.spring[i] > 1e-8) {
+            if (absTorque > torsionbars.deform[i] && torsionbars.spring[i] > KINDA_SMALL_NUMBER) {
                 double overTorque = absTorque - torsionbars.deform[i];
                 double flowRate = (overTorque * overTorque) / (torsionbars.deform[i] * torsionbars.spring[i]);
                 double deformAmount = flowRate * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
@@ -694,8 +713,6 @@ public class SoftBodyVehicle {
                 torsionbars.restAngle[i] += Math.signum(deltaAngle) * deformAmount;
                 while (torsionbars.restAngle[i] > Math.PI) torsionbars.restAngle[i] -= Math.PI * 2;
                 while (torsionbars.restAngle[i] < -Math.PI) torsionbars.restAngle[i] += Math.PI * 2;
-
-                torque = Math.signum(torque) * torsionbars.deform[i];
             }
 
             nodes.forceX[n1] += torque * g1x; nodes.forceY[n1] += torque * g1y; nodes.forceZ[n1] += torque * g1z;
@@ -734,7 +751,9 @@ public class SoftBodyVehicle {
             double dist = Math.sqrt(pnx*pnx + pny*pny + pnz*pnz);
 
             // Anti zero-divide protection
-            if (dist < KINDA_SMALL_NUMBER) { pnx = KINDA_SMALL_NUMBER; dist = KINDA_SMALL_NUMBER; }
+            if (dist < KINDA_SMALL_NUMBER) {
+                dist = KINDA_SMALL_NUMBER;
+            }
 
             double invDist = 1.0 / dist;
             double nDirX = pnx * invDist, nDirY = pny * invDist, nDirZ = pnz * invDist;
@@ -745,9 +764,7 @@ public class SoftBodyVehicle {
 
             double reducedMass = (mN * mRail) / (mN + mRail);
             double maxSafeSpring = reducedMass * invDt * invDt;
-
-            double activeSpring = slidenodes.spring[i];
-            if (Math.abs(activeSpring) > maxSafeSpring) activeSpring = maxSafeSpring;
+            double activeSpring = Math.min(slidenodes.spring[i], maxSafeSpring);
 
             // Keep original rest offset, no forced snap
             double springForce = activeSpring * (dist - slidenodes.restDist[i]);
@@ -758,10 +775,9 @@ public class SoftBodyVehicle {
             double vpz = nodes.velZ[aId] * (1 - t) + nodes.velZ[bId] * t;
 
             double relVel = (nodes.velX[nId] - vpx) * nDirX + (nodes.velY[nId] - vpy) * nDirY + (nodes.velZ[nId] - vpz) * nDirZ;
-            double dampForce = slidenodes.damp[i] * relVel;
 
-            double maxDamp = (reducedMass * Math.abs(relVel)) * invDt;
-            if (Math.abs(dampForce) > maxDamp) dampForce = maxDamp * Math.signum(relVel);
+            double activeDamp = Math.min(slidenodes.damp[i], reducedMass * invDt);
+            double dampForce = activeDamp * relVel;
 
             // Apply slide constraint force
             double fx = (springForce + dampForce) * nDirX;
@@ -799,7 +815,7 @@ public class SoftBodyVehicle {
             nodes.velZ[i] *= factor;
 
             // 清洗极端的 NaN (应对除以0等极端异常)
-            if (Double.isNaN(nodes.velX[i])) {
+            if (Double.isNaN(nodes.velX[i]) || Double.isNaN(nodes.velY[i]) || Double.isNaN(nodes.velZ[i])) {
                 nodes.velX[i] = 0; nodes.velY[i] = 0; nodes.velZ[i] = 0;
             }
 
