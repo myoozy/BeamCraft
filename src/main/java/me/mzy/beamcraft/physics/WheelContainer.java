@@ -41,7 +41,7 @@ public class WheelContainer {
     /**
      * 生成轮毂 (Hub)
      */
-    public void generateHub(String wheelName, int n1, int n2, Integer nodeS, Integer nodeArm, int rays,
+    public void generateHub(String wheelName, int n1, int n2, Integer nodeS, Integer nodeArm, int wheelDir, int rays,
                             double radius, double width, double offset,
                             double nodeWeight, double frictionCoef,
                             double hubTreadS, double hubTreadD,
@@ -64,7 +64,7 @@ public class WheelContainer {
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
-        calculateWheelBasis(n1, n2, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
+        calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
         // n1 是车轮的绝对几何原点，offset 沿着轮轴方向偏移
         double centerX = vehicle.nodes.posX[n1] + axisX[0] * offset;
@@ -109,8 +109,9 @@ public class WheelContainer {
             int hOutCur = hubOuterNodes[baseOffset + i], hOutNext = hubOuterNodes[baseOffset + next];
 
             // --- 碰撞面 ---
-            vehicle.triangles.addTriangle(n1, hInNext, hInCur, partId, COLLISION);
-            vehicle.triangles.addTriangle(n2, hOutCur, hOutNext, partId, COLLISION);
+            // 须把 n1 (外侧点) 连给 Out 面，n2 (内侧点) 连给 In 面！
+            vehicle.triangles.addTriangle(n1, hOutNext, hOutCur, partId, COLLISION);
+            vehicle.triangles.addTriangle(n2, hInCur, hInNext, partId, COLLISION);
 
             // ================= 1. 轮辋蒙皮 =================
             // 周长支撑 (Tread)
@@ -124,12 +125,12 @@ public class WheelContainer {
 
             // ================= 2. 自行车交叉辐条 (Spokes) =================
             // a) 直连辐条 (内圈连内侧轴，外圈连外侧轴)
-            addFastBeam(hInCur, n1, hubSideS, hubSideD, deform, strength);
-            addFastBeam(hOutCur, n2, hubSideS, hubSideD, deform, strength);
+            addFastBeam(hOutCur, n1, hubSideS, hubSideD, deform, strength);
+            addFastBeam(hInCur, n2, hubSideS, hubSideD, deform, strength);
 
             // b) 交叉辐条 (内圈连外侧轴，外圈连内侧轴)
-            addFastBeam(hInCur, n2, hubSideS, hubSideD, deform, strength);
-            addFastBeam(hOutCur, n1, hubSideS, hubSideD, deform, strength);
+            addFastBeam(hOutCur, n2, hubSideS, hubSideD, deform, strength);
+            addFastBeam(hInCur, n1, hubSideS, hubSideD, deform, strength);
 
             // ================= 3. 稳定节点支撑 (nodeS) =================
             // 将轮毂内外圈所有节点都与 nodeS 相连，分摊 n2 的受力
@@ -145,7 +146,7 @@ public class WheelContainer {
     /**
      * 生成轮胎 (Tire)
      */
-    public void generateTire(String wheelName, int n1, int n2, int rays, double radius, double width, double offset,
+    public void generateTire(String wheelName, int n1, int n2, int wheelDir, int rays, double radius, double width, double offset,
                              double nodeWeight, double frictionCoef, double pressure,
                              double treadSpring, double treadDamp, double periSpring, double periDamp,
                              double sideSpring, double sideDamp, double reinfS, double reinfD) {
@@ -166,7 +167,7 @@ public class WheelContainer {
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
-        calculateWheelBasis(n1, n2, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
+        calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
         double centerX = vehicle.nodes.posX[n1] + axisX[0] * offset;
         double centerY = vehicle.nodes.posY[n1] + axisY[0] * offset;
@@ -223,9 +224,9 @@ public class WheelContainer {
 
             // 预计算气压带来的额外刚度
             double[] pressureBonus = calculatePressureBonus(wIdx, pressure);
-            double finalTreadS = treadSpring + pressureBonus[0];
-            double finalPeriS = periSpring + pressureBonus[1];
-            double finalSideS = sideSpring + pressureBonus[2];
+            double finalTreadS = treadSpring;
+            double finalPeriS = periSpring;
+            double finalSideS = sideSpring;
 
             // 轮胎周长支撑
             addFastBeam(tInCur, tInNext, finalTreadS, treadDamp, deform, strength);
@@ -239,6 +240,11 @@ public class WheelContainer {
             // 这里使用 TreadReinfS (胎面加强刚度)
             addFastBeam(tInCur, tInNext2, finalTreadS, treadDamp, deform, strength);
             addFastBeam(tOutCur, tOutNext2, finalTreadS, treadDamp, deform, strength);
+
+            // 🚀 内部截面 X 型支撑 (wheelReinfBeam)
+            // 跨越内部空气空间，连接 Hub 侧和 Tire 对侧，实现形变传导
+            addFastBeam(hInCur, tOutCur, reinfS, reinfD, deform, strength);
+            addFastBeam(hOutCur, tInCur, reinfS, reinfD, deform, strength);
 
             // 轮胎横向支撑
             addFastBeam(tInCur, tOutCur, finalPeriS, periDamp, deform, strength);
@@ -265,11 +271,12 @@ public class WheelContainer {
             vehicle.normalBeams.addBeam(id1, id2, dist, reducedMass, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
         }
 
-    private void calculateWheelBasis(int n1, int n2, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
+    private void calculateWheelBasis(int n1, int n2, int wheelDir, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
         double n1x = vehicle.nodes.posX[n1], n1y = vehicle.nodes.posY[n1], n1z = vehicle.nodes.posZ[n1];
         double n2x = vehicle.nodes.posX[n2], n2y = vehicle.nodes.posY[n2], n2z = vehicle.nodes.posZ[n2];
 
-        ax[0] = n2x - n1x; ay[0] = n2y - n1y; az[0] = n2z - n1z;
+        // 🚀 修正 1：n1 永远是外侧，n2 是内侧。因此 n1 - n2 永远指向【车外(Outward)】！
+        ax[0] = n1x - n2x; ay[0] = n1y - n2y; az[0] = n1z - n2z;
         double len = Math.sqrt(ax[0]*ax[0] + ay[0]*ay[0] + az[0]*az[0]);
         if (len > 0) { ax[0]/=len; ay[0]/=len; az[0]/=len; }
 
@@ -285,6 +292,11 @@ public class WheelContainer {
         ux[0] = vy[0] * az[0] - vz[0] * ay[0];
         uy[0] = vz[0] * ax[0] - vx[0] * az[0];
         uz[0] = vx[0] * ay[0] - vy[0] * ax[0];
+
+        // 🚀 修正 2：利用 wheelDir 修正轮胎旋转的缠绕顺序，防止左右轮滚动物理特性错乱
+        if (wheelDir < 0) {
+            ux[0] = -ux[0]; uy[0] = -uy[0]; uz[0] = -uz[0];
+        }
     }
 
     /**

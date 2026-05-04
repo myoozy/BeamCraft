@@ -22,11 +22,15 @@ public class JBeamAssembler {
         JsonObject json;
         int partId;
         String partName;
+        double offX, offY, offZ;
 
-        PartEntry(JsonObject j, int id, String name) {
+        PartEntry(JsonObject j, int id, String name, double offX, double offY, double offZ) {
             this.json = j;
             this.partId = id;
             this.partName = name;
+            this.offX = offX;
+            this.offY = offY;
+            this.offZ = offZ;
         }
     }
 
@@ -46,7 +50,7 @@ public class JBeamAssembler {
         // Phase 0: Recursively collect all required parts before assembly
         JsonObject rootPart = registry.get(rootPartName);
         if (rootPart != null) {
-            collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts);
+            collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, 0.0, 0.0, 0.0);//根节点（车架）的初始偏移量是 0, 0, 0
         }
 
         System.out.println("====== 🛠️ Starting 3-Pass Assembly ======");
@@ -56,7 +60,7 @@ public class JBeamAssembler {
         // Critical: Nodes must exist before beams reference them to avoid broken connections
         for (PartEntry entry : activeParts) {
             if (entry.json.has("nodes")) {
-                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId, couplerRegistry);
+                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId, couplerRegistry, entry.offX, entry.offY, entry.offZ);
             }
         }
         System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
@@ -99,11 +103,13 @@ public class JBeamAssembler {
         // 🚀 Pass 3: 逆向解析车轮 (解决子零件属性覆盖问题)
         // ==========================================
         System.out.println("====== 🛞 Assembling Wheels ======");
-        PressureWheelsState pwState = new PressureWheelsState();
+        // 1. 初始化黑板状态 (清除上一辆车的残留数据)
+        JBeamPressureWheelsParser.resetBlackboard();
 
         for (PartEntry entry : activeParts) {
             if (entry.json.has("pressureWheels")) {
-                JBeamParser.parsePressureWheels(entry.json.getAsJsonArray("pressureWheels"), vehicle, pwState);
+                // 2. 调用我们新写的解析器
+                JBeamPressureWheelsParser.parsePressureWheels(entry.json.getAsJsonArray("pressureWheels"), vehicle);
             }
         }
         System.out.println("✅ Pass 3 Complete: Wheels generated.");
@@ -171,21 +177,15 @@ public class JBeamAssembler {
      * Recursively collects all dependent parts
      * Pure collection logic - no physics world modifications here
      */
-    private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts) {
+    private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, double offX, double offY, double offZ) {
         currentPartId++;
-        activeParts.add(new PartEntry(part, currentPartId, partName));
+        activeParts.add(new PartEntry(part, currentPartId, partName, offX, offY, offZ));
 
-        if (part.has("slots3")) {
-            parseSlotsArray(part.getAsJsonArray("slots3"), partName, userConfig, registry, activeParts);
-        }
         if (part.has("slots2")) {
-            parseSlotsArray(part.getAsJsonArray("slots2"), partName, userConfig, registry, activeParts);
-        }
-        if (part.has("slots1")) {
-            parseSlotsArray(part.getAsJsonArray("slots1"), partName, userConfig, registry, activeParts);
+            parseSlotsArray(part.getAsJsonArray("slots2"), partName, userConfig, registry, activeParts, offX, offY, offZ);
         }
         if (part.has("slots")) {
-            parseSlotsArray(part.getAsJsonArray("slots"), partName, userConfig, registry, activeParts);
+            parseSlotsArray(part.getAsJsonArray("slots"), partName, userConfig, registry, activeParts, offX, offY, offZ);
         }
     }
 
@@ -193,7 +193,7 @@ public class JBeamAssembler {
      * Parses slot arrays and loads child parts based on user config or defaults
      * Handles JBeam slot table format with headers and data rows
      */
-    private void parseSlotsArray(JsonArray slotsArray, String partName, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts) {
+    private void parseSlotsArray(JsonArray slotsArray, String partName, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, double parentOffX, double parentOffY, double parentOffZ) {
         boolean isHeader = true;
         int typeIdx = 0;
         int defaultIdx = 1;
@@ -226,7 +226,21 @@ public class JBeamAssembler {
                 if (!partToLoad.equals("none") && !partToLoad.isEmpty()) {
                     JsonObject childPart = registry.get(partToLoad);
                     if (childPart != null) {
-                        collectPartsRecursive(partToLoad, childPart, userConfig, registry, activeParts);
+                        double slotOffX = 0, slotOffY = 0, slotOffZ = 0;
+                        if (row.get(row.size() - 1).isJsonObject()) {
+                            JsonObject mod = row.get(row.size() - 1).getAsJsonObject();
+                            if (mod.has("nodeOffset")) {
+                                JsonObject no = mod.getAsJsonObject("nodeOffset");
+                                Double ox = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), new java.util.HashMap<>());
+                                Double oy = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), new java.util.HashMap<>());
+                                Double oz = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), new java.util.HashMap<>());
+                                if (ox != null) slotOffX = ox;
+                                if (oy != null) slotOffY = oy;
+                                if (oz != null) slotOffZ = oz;
+                            }
+                        }
+                        // 递归时，把父零件的绝对偏移量和当前插槽的局部偏移量累加
+                        collectPartsRecursive(partToLoad, childPart, userConfig, registry, activeParts, parentOffX + slotOffX, parentOffY + slotOffY, parentOffZ + slotOffZ);
                     } else {
                         System.err.println("🚨 Part [" + partName + "] slot [" + slotName + "] tried to load missing part: " + partToLoad);
                     }

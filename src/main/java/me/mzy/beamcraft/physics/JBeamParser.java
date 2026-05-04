@@ -62,7 +62,7 @@ public class JBeamParser {
      * Parses node definitions and creates physical nodes
      * Handles coordinate system conversion and inline property modifiers
      */
-    public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, int partId, CouplerRegistry couplerRegistry) {
+    public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, int partId, CouplerRegistry couplerRegistry, double offX, double offY, double offZ) {
         boolean isHeader = true;
 
         // Default values from Rig of Rods
@@ -135,10 +135,23 @@ public class JBeamParser {
                 double z = 0.0;
 
                 try {
-                    // Coordinate system conversion: flip X, swap Y and Z
-                    x = +row.get(1).getAsDouble();
-                    y = +row.get(3).getAsDouble();
-                    z = -row.get(2).getAsDouble();
+                    // 先读取 BeamNG 的原始坐标，并加上插槽偏移量
+                    double originalX = row.get(1).getAsDouble();
+                    double appliedOffX = offX;
+                    // 如果节点原本在车辆右侧 (BeamNG里右侧X为负)，则偏移量取反！
+                    if (originalX < 0.0) {
+                        appliedOffX = -offX;
+                    }
+
+                    // 加上修正后的偏移量
+                    double rawX = originalX + appliedOffX;
+                    double rawY = row.get(2).getAsDouble() + offY;
+                    double rawZ = row.get(3).getAsDouble() + offZ;
+
+                    // 然后再执行坐标系转换：flip X, swap Y and Z
+                    x = +rawX;
+                    y = +rawZ;
+                    z = -rawY;
                 } catch (Exception e) {
                     System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
                     continue;
@@ -477,115 +490,6 @@ public class JBeamParser {
 
                     // TODO: 存入 vehicle.renderEngine.addFlexbody(...)
                     // System.out.println("Registered Mesh: " + meshName + " bound to " + targetGroups);
-                }
-            }
-        }
-    }
-
-    // --- 8. PressureWheels Parsing ---
-    public static void parsePressureWheels(JsonArray pressureWheels, SoftBodyVehicle vehicle, PressureWheelsState pool) {
-        if (true)return;
-
-        boolean isHeader = true;
-
-        for (JsonElement element : pressureWheels) {
-            if (element.isJsonObject()) {
-                JsonObject mod = element.getAsJsonObject();
-                // 检查是否有给后续修饰符命名的键
-                if (mod.has("name") && mod.get("name").isJsonPrimitive()) {
-                    pool.setGroupName(mod.get("name").getAsString());
-                } else if (mod.has("group") && mod.get("group").isJsonPrimitive()) {
-                    pool.setGroupName(mod.get("group").getAsString());
-                } else if (mod.has("hubGroup") && mod.get("hubGroup").isJsonPrimitive()) {
-                    pool.setGroupName(mod.get("hubGroup").getAsString());
-                }
-
-                // 将属性存入当前组
-                pool.updateCurrentState(mod);
-                continue;
-            }
-
-            if (element.isJsonArray()) {
-                JsonArray row = element.getAsJsonArray();
-                if (isHeader) { isHeader = false; continue; }
-
-                if (row.size() >= 5) {
-                    String wheelName = row.get(0).getAsString();
-                    String hubGroup = row.get(1).isJsonNull() ? "default" : row.get(1).getAsString(); // 从数据行获取组名
-                    String tireGroup = row.get(2).isJsonNull() ? "default" : row.get(2).getAsString();
-
-                    Integer n1 = vehicle.nodes.nameToIndex.get(row.get(3).getAsString());
-                    Integer n2 = vehicle.nodes.nameToIndex.get(row.get(4).getAsString());
-                    if (n1 == null || n2 == null) continue;
-
-                    // 注意：有时候后轮可能没有 nodeArm，或者参数不够长，做好防越界和判空
-                    // 🚀 正确提取 nodeS (索引 5)
-                    Integer nodeS = null;
-                    if (row.size() > 5 && !row.get(5).isJsonNull()) {
-                        String sName = row.get(5).getAsString();
-                        if (!sName.equals("9999")) { // 9999 在 BeamNG 中代表禁用此节点
-                            nodeS = vehicle.nodes.nameToIndex.get(sName);
-                        }
-                    }
-
-                    // 🚀 修正 nodeArm 的提取 (索引 6)
-                    Integer nodeArm = null;
-                    if (row.size() > 6 && !row.get(6).isJsonNull()) {
-                        String armName = row.get(6).getAsString();
-                        if (!armName.equals("9999")) {
-                            nodeArm = vehicle.nodes.nameToIndex.get(armName);
-                        }
-                    }
-
-                    // 🚀 获取该车轴所属组累积的属性 (优先取轮胎组名，如果没有取轮毂组名)
-                    String targetGroup = tireGroup.equals("default") ? hubGroup : tireGroup;
-                    PressureWheelsState.WheelState finalState = pool.getMergedState(targetGroup);
-
-                    // 如果行末有行内覆盖，直接更新
-                    if (row.get(row.size() - 1).isJsonObject()) {
-                        finalState.updateFrom(row.get(row.size() - 1).getAsJsonObject());
-                    }
-
-                    // 提取最终下发参数
-                    boolean finalHasTire = finalState.hasTire != null ? finalState.hasTire : true;
-                    int finalRays = finalState.numRays != null ? finalState.numRays : 12;
-                    double finalOff = finalState.wheelOffset != null ? finalState.wheelOffset : 0.0;
-
-                    double hubR = finalState.hubRadius != null ? finalState.hubRadius : 0.5;
-                    double hubW = finalState.hubWidth != null ? finalState.hubWidth : 0.2;
-                    double hubMass = finalState.nodeWeight != null ? finalState.nodeWeight : 0.75; // 回退使用 nodeWeight
-                    double hubFric = finalState.frictionCoef != null ? finalState.frictionCoef : 0.5;
-
-                    double tireR = finalState.radius != null ? finalState.radius : 1;
-                    double tireW = finalState.tireWidth != null ? finalState.tireWidth : 0.2;
-                    double tireMass = finalState.nodeWeight != null ? finalState.nodeWeight : 0.15;
-                    double tireFric = finalState.frictionCoef != null ? finalState.frictionCoef : 1.0;
-                    double press = finalState.pressurePSI != null ? finalState.pressurePSI : 30.0;
-
-                    // 兜底刚度
-                    double hTS = finalState.treadS != null ? finalState.treadS : 1.5e6;
-                    double hTD = finalState.treadD != null ? finalState.treadD : 15;
-                    double hPS = finalState.periS != null ? finalState.periS : 1.5e6;
-                    double hPD = finalState.periD != null ? finalState.periD : 15;
-                    double hSS = finalState.sideS != null ? finalState.sideS : 1.5e6;
-                    double hSD = finalState.sideD != null ? finalState.sideD : 15;
-
-                    double tTS = finalState.treadS != null ? finalState.treadS : 40000;
-                    double tTD = finalState.treadD != null ? finalState.treadD : 80;
-                    double tPS = finalState.periS != null ? finalState.periS : 40000;
-                    double tPD = finalState.periD != null ? finalState.periD : 40;
-                    double tSS = finalState.sideS != null ? finalState.sideS : 15000;
-                    double tSD = finalState.sideD != null ? finalState.sideD : 30;
-
-                    double rS = finalState.reinfS != null ? finalState.reinfS : 20000;
-                    double rD = finalState.reinfD != null ? finalState.reinfD : 180;
-
-                    // 生成
-                    vehicle.wheels.generateHub(wheelName, n1, n2, nodeS, nodeArm, finalRays, hubR, hubW, finalOff, hubMass, hubFric, hTS, hTD, hPS, hPD, hSS, hSD);
-
-                    if (finalHasTire) {
-                        vehicle.wheels.generateTire(wheelName, n1, n2, finalRays, tireR, tireW, finalOff, tireMass, tireFric, press, tTS, tTD, tPS, tPD, tSS, tSD, rS, rD);
-                    }
                 }
             }
         }
