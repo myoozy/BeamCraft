@@ -41,6 +41,7 @@ public class JBeamAssembler {
             SoftBodyVehicle vehicle)
     {
         List<PartEntry> activeParts = new ArrayList<>();
+        CouplerRegistry couplerRegistry = new CouplerRegistry();
 
         // Phase 0: Recursively collect all required parts before assembly
         JsonObject rootPart = registry.get(rootPartName);
@@ -55,7 +56,7 @@ public class JBeamAssembler {
         // Critical: Nodes must exist before beams reference them to avoid broken connections
         for (PartEntry entry : activeParts) {
             if (entry.json.has("nodes")) {
-                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId);
+                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId, couplerRegistry);
             }
         }
         System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
@@ -106,6 +107,58 @@ public class JBeamAssembler {
             }
         }
         System.out.println("✅ Pass 3 Complete: Wheels generated.");
+
+        // ==========================================
+        // 🚀 Pass 4: Resolve Couplers (执行虚拟电焊)
+        // ==========================================
+        System.out.println("====== 🔗 Resolving Couplers ======");
+        int weldedCount = 0;
+        for (CouplerRegistry.CouplerDef source : couplerRegistry.definitions) {
+            if (source.couplerTag != null && !source.couplerTag.isEmpty()) {
+                CouplerRegistry.CouplerDef bestTarget = null;
+                double minDistanceSq = Double.MAX_VALUE;
+                double precompTime = 1.0;
+
+                Integer sourceIdx = vehicle.nodes.nameToIndex.get(source.nodeName);
+                if (sourceIdx == null) continue;
+                double sx = vehicle.nodes.posX[sourceIdx], sy = vehicle.nodes.posY[sourceIdx], sz = vehicle.nodes.posZ[sourceIdx];
+
+                for (CouplerRegistry.CouplerDef target : couplerRegistry.definitions) {
+                    if (source != target && source.couplerTag.equals(target.tag)) {
+                        Integer targetIdx = vehicle.nodes.nameToIndex.get(target.nodeName);
+                        if (targetIdx == null) continue;
+
+                        double dx = sx - vehicle.nodes.posX[targetIdx], dy = sy - vehicle.nodes.posY[targetIdx], dz = sz - vehicle.nodes.posZ[targetIdx];
+                        double distSq = dx*dx + dy*dy + dz*dz;
+
+                        // 半径检查 + 最近匹配
+                        if (distSq <= source.startRadius * source.startRadius && distSq < minDistanceSq) {
+                            minDistanceSq = distSq;
+                            bestTarget = target;
+                            double dist = Math.sqrt(distSq);
+                            precompTime = dist / Math.max(source.latchSpeed, PhysicsWorld.KINDA_SMALL_NUMBER);
+                        }
+                    }
+                }
+
+                if (bestTarget != null) {
+                    double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
+
+                    // 🚀 生成 Coupler 虚拟梁
+                    vehicle.addBeam(BeamContainer.BEAM_NORMAL,
+                            source.nodeName, bestTarget.nodeName,
+                            1e9, 1e7, // 超大刚度/阻尼，交由底层 maxSafe 自动截断
+                            PhysicsWorld.KINDA_BIG_NUMBER, finalStrength,
+                            0.0, 0.0, precompTime,  // precomp=0, precompTime=latchSpeed/dist
+                            1.0, 1.0, -1.0, -1.0,
+                            0.0, 0.0,
+                            -1.0, -1.0, -1.0, -1.0
+                    );
+                    weldedCount++;
+                }
+            }
+        }
+        System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
 
         // Print final assembly manifest
         System.out.println("====== 📦 Active Parts Assembly List ======");

@@ -62,7 +62,7 @@ public class JBeamParser {
      * Parses node definitions and creates physical nodes
      * Handles coordinate system conversion and inline property modifiers
      */
-    public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, int partId) {
+    public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, int partId, CouplerRegistry couplerRegistry) {
         boolean isHeader = true;
 
         // Default values from Rig of Rods
@@ -71,6 +71,14 @@ public class JBeamParser {
         double currentSlidingFriction = -1;
         boolean currentCollision = true;
         boolean currentSelfCollision = false;
+
+        // TODO: JBeam中关于coupler的部分貌似全部都是inline的，如果未来发现不inline的定义，再做修改
+        // String currentTag = "";
+        // String currentCouplerTag = "";
+        // double currentStartRadius = 0.2;
+        // double currentCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        // boolean currentCouplerWeld = false;
+        // double currentCouplerLatchSpeed = 0.2;
 
         for (JsonElement element : nodes) {
             if (element.isJsonObject()) {
@@ -95,6 +103,15 @@ public class JBeamParser {
                 double inlineSlidingFriction = currentSlidingFriction;
                 boolean inlineCollision = currentCollision;
                 boolean inlineSelfCollision = currentSelfCollision;
+
+                // coupler
+                String inlineTag = "";
+                String inlineCouplerTag = "";
+                double inlineStartRadius = 0.2;
+                double inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+                boolean inlineCouplerWeld = false;
+                double inlineCouplerLatchSpeed = 0.2;
+
                 if (row.get(row.size() - 1).isJsonObject()) {
                     JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
                     inlineWeight = getDoubleSafe(inline, "nodeWeight", inlineWeight);
@@ -102,6 +119,14 @@ public class JBeamParser {
                     inlineSlidingFriction = getDoubleSafe(inline, "slidingFrictionCoef", inlineSlidingFriction);
                     inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
                     inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
+
+                    inlineTag = getStringSafe(inline, "tag", inlineTag);
+                    inlineCouplerTag = getStringSafe(inline, "couplerTag", inlineCouplerTag);
+                    inlineStartRadius = getDoubleSafe(inline, "couplerStartRadius", inlineStartRadius);
+                    inlineCouplerStrength = getDoubleSafe(inline, "couplerStrength", inlineCouplerStrength);
+                    if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
+                    else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
+                    inlineCouplerLatchSpeed = getDoubleSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed);
                 }
 
                 String id = row.get(0).getAsString();
@@ -117,6 +142,11 @@ public class JBeamParser {
                 } catch (Exception e) {
                     System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
                     continue;
+                }
+
+                // 注入到注册表
+                if (!inlineTag.isEmpty() || !inlineCouplerTag.isEmpty()) {
+                    couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld);
                 }
 
                 vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, partId, inlineCollision, inlineSelfCollision);
@@ -454,6 +484,8 @@ public class JBeamParser {
 
     // --- 8. PressureWheels Parsing ---
     public static void parsePressureWheels(JsonArray pressureWheels, SoftBodyVehicle vehicle, PressureWheelsState pool) {
+        if (true)return;
+
         boolean isHeader = true;
 
         for (JsonElement element : pressureWheels) {
