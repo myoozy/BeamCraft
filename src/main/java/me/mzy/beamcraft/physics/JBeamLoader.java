@@ -201,6 +201,8 @@ public class JBeamLoader {
         if (commonZip.exists()) scanZip(commonZip, targetVehicleName, null, partRegistry, pcContentBox, loadedCount, true);
         if (commonDir.exists()) scanFolder(commonDir, targetVehicleName, null, partRegistry, pcContentBox, loadedCount, true);
 
+        // TODO: 未来可加入自动探测 Steam 安装路径及 AppData 用户配置路径 (当前先使用传入的 vehiclesRootDir)
+
         // 2. 扫描 vehiclesRootDir 下的其他文件寻找目标车辆的路径
         File[] files = vehiclesRootDir.listFiles();
         if (files != null) {
@@ -208,10 +210,13 @@ public class JBeamLoader {
                 String name = file.getName();
                 if (name.equals("common.zip") || name.equals("common")) continue;
 
-                if (file.isDirectory()) {
-                    scanFolder(file, targetVehicleName, pcFileName, partRegistry, pcContentBox, loadedCount, false);
-                } else if (name.endsWith(".zip")) {
-                    scanZip(file, targetVehicleName, pcFileName, partRegistry, pcContentBox, loadedCount, false);
+                // 只要压缩包/文件夹的名字里不包含我们要找的车（比如 "sunburst"），直接跳过
+                if (name.toLowerCase().contains(targetVehicleName.toLowerCase())) {
+                    if (file.isDirectory()) {
+                        scanFolder(file, targetVehicleName, pcFileName, partRegistry, pcContentBox, loadedCount, false);
+                    } else if (name.endsWith(".zip")) {
+                        scanZip(file, targetVehicleName, pcFileName, partRegistry, pcContentBox, loadedCount, false);
+                    }
                 }
             }
         }
@@ -260,21 +265,26 @@ public class JBeamLoader {
     }
 
     private static void scanZip(File zipFile, String targetVehicleName, String targetPcName, Map<String, JsonObject> registry, String[] pcContentBox, int[] loadedCount, boolean isCommon) {
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(zipFile)) {
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zf.entries();
+
+            while (entries.hasMoreElements()) {
+                java.util.zip.ZipEntry entry = entries.nextElement();
                 String name = entry.getName();
 
-                // 仅处理属于 common 或目标车辆路径的文件
+                // 只有文件名匹配，且不是目录/Mac垃圾文件时，才去真正解压读取数据
                 boolean isTarget = isCommon || name.contains("vehicles/" + targetVehicleName + "/");
 
                 if (isTarget && !entry.isDirectory() && !name.contains("__MACOSX") && (name.endsWith(".jbeam") || name.endsWith(".pc"))) {
-                    String content = readInputStream(zis);
 
-                    // 提取纯文件名用于后续匹配
-                    String[] parts = name.split("/");
-                    String fileName = parts[parts.length - 1];
-                    processFileContent(fileName, content, targetPcName, registry, pcContentBox, loadedCount);
+                    try (InputStream is = zf.getInputStream(entry)) {
+                        String content = readInputStream(is);
+
+                        // 提取纯文件名用于后续匹配
+                        String[] parts = name.split("/");
+                        String fileName = parts[parts.length - 1];
+                        processFileContent(fileName, content, targetPcName, registry, pcContentBox, loadedCount);
+                    }
                 }
             }
         } catch (Exception e) {
