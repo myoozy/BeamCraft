@@ -258,7 +258,11 @@ public class WheelContainer {
             double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
             double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-            vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
+
+            double m1 = vehicle.nodes.mass[id1];
+            double m2 = vehicle.nodes.mass[id2];
+            double reducedMass = m1 * m2 / (m1 + m2);
+            vehicle.normalBeams.addBeam(id1, id2, dist, reducedMass, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
         }
 
     private void calculateWheelBasis(int n1, int n2, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {

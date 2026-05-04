@@ -52,7 +52,7 @@ public class BoundedBeamContainer extends BeamContainer {
      * @param inDampRebound     回弹阻尼，<0 时回退至普通阻尼
      * @param inDampReboundFast 高速回弹阻尼，<0 时回退至 inDampRebound
      */
-    public void addBeam(int node1Idx, int node2Idx, double nodeDist,
+    public void addBeam(int node1Idx, int node2Idx, double nodeDist, double reducedMass,
                         double beamSpring, double beamDamp,
                         double beamDeform, double beamStrength,
                         double precomp, double precompRange, double precompTime,
@@ -76,7 +76,7 @@ public class BoundedBeamContainer extends BeamContainer {
         double finalReboundFast = (inDampReboundFast < 0) ? finalRebound : inDampReboundFast;
 
         // 复用父类公共属性的添加
-        int idx = addBeamInternal(node1Idx, node2Idx, nodeDist,
+        int idx = addBeamInternal(node1Idx, node2Idx, nodeDist, reducedMass,
                 beamSpring, beamDamp, beamDeform, beamStrength,
                 precomp, precompRange, precompTime);
 
@@ -89,5 +89,17 @@ public class BoundedBeamContainer extends BeamContainer {
         dampFast[idx] = finalFast;
         dampRebound[idx] = finalRebound;
         dampReboundFast[idx] = finalReboundFast;
+
+
+        if (!Double.isNaN(reducedMass)) {
+            double invDt = PhysicsWorld.invPhysicsDT;
+            double maxSafeSpring = reducedMass * invDt * invDt;
+            double maxSafeDamp = reducedMass * invDt;
+            limitSpring[idx] = Math.min(maxSafeSpring, beamLimitSpring);
+            limitDamp[idx] = Math.min(maxSafeDamp, beamLimitDamp);
+            dampFast[idx] = Math.min(maxSafeDamp, finalFast);
+            dampRebound[idx] = Math.min(maxSafeDamp, finalRebound);
+            dampReboundFast[idx] = Math.min(maxSafeDamp, finalReboundFast);
+        }
     }
 }

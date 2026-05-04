@@ -22,6 +22,7 @@ public class PhysicsWorld {
     public static final double KINDA_SMALL_NUMBER = 1e-8;
     public static final double KINDA_BIG_NUMBER = 1e8;
     public static final int MAX_AABB_SIZE = 5;
+    public static final double invPhysicsDT = 2000;
 
     // 用于处理和mc世界的碰撞
     public final VoxelSnapshot voxelSnapshot = new VoxelSnapshot();
@@ -78,7 +79,7 @@ public class PhysicsWorld {
      * Main physics update loop
      */
     public void step(World mcWorld, double dt) {
-        int subSteps = 100;
+        int subSteps = (int)Math.ceil(dt * invPhysicsDT);
         double subDt = dt / subSteps;
         int broadphaseRate = 10;
 

@@ -65,7 +65,7 @@ public class BeamContainer {
         broken = Utility.expand(broken, newSize);
     }
 
-    protected int addBeamInternal(int node1Idx, int node2Idx, double nodeDist,
+    protected int addBeamInternal(int node1Idx, int node2Idx, double nodeDist, double reducedMass,
                                   double beamSpring, double beamDamp,
                                   double beamDeform, double beamStrength,
                                   double precomp, double precompRange, double precompTime) {
@@ -95,15 +95,26 @@ public class BeamContainer {
         strength[idx] = beamStrength;
         broken[idx] = false;
 
+        if (Double.isNaN(reducedMass)) {
+            broken[idx] = true;
+        }
+        else {
+            double invDt = PhysicsWorld.invPhysicsDT;
+            double maxSafeSpring = reducedMass * invDt * invDt;
+            double maxSafeDamp = reducedMass * invDt;
+            spring[idx] = Math.min(maxSafeSpring, beamSpring);
+            damp[idx] = Math.min(maxSafeDamp, beamDamp);
+        }
+
         count++;
         return idx;
     }
 
-    public void addBeam(int node1Idx, int node2Idx, double nodeDist,
+    public void addBeam(int node1Idx, int node2Idx, double nodeDist, double reducedMass,
                         double beamSpring, double beamDamp,
                         double beamDeform, double beamStrength,
                         double precomp, double precompRange, double precompTime) {
-        addBeamInternal(node1Idx, node2Idx, nodeDist, beamSpring, beamDamp,
+        addBeamInternal(node1Idx, node2Idx, nodeDist, reducedMass, beamSpring, beamDamp,
                 beamDeform, beamStrength, precomp, precompRange, precompTime);
     }
 

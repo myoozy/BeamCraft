@@ -129,11 +129,15 @@ public class SoftBodyVehicle {
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
+            double m1 = nodes.mass[n1];
+            double m2 = nodes.mass[n2];
+            double reducedMass = (m1 * m2) / (m1 + m2);
+
             if (type == BeamContainer.BEAM_SUPPORT) {
-                supportBeams.addBeam(n1, n2, dist, spring, damp,
+                supportBeams.addBeam(n1, n2, dist, reducedMass, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
             } else if (type == BeamContainer.BEAM_BOUNDED) {
-                boundedBeams.addBeam(n1, n2, dist,
+                boundedBeams.addBeam(n1, n2, dist, reducedMass,
                         spring, damp, deform, strength,
                         precomp, precompRange, precompTime,
                         shortBound, longBound,
@@ -142,7 +146,7 @@ public class SoftBodyVehicle {
                         dampVelSplit, dampFast,
                         dampRebound, dampReboundFast);
             } else {
-                normalBeams.addBeam(n1, n2, dist, spring, damp,
+                normalBeams.addBeam(n1, n2, dist, reducedMass, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
             }
         }
@@ -396,12 +400,6 @@ public class SoftBodyVehicle {
 
             int n1 = normalBeams.node1[i];
             int n2 = normalBeams.node2[i];
-            double m1 = nodes.mass[n1];
-            double m2 = nodes.mass[n2];
-            if (m1 * m2 < KINDA_SMALL_NUMBER) {
-                normalBeams.broken[i] = true;
-                continue;
-            }
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
@@ -412,10 +410,8 @@ public class SoftBodyVehicle {
             double invDist = 1.0 / dist;
 
             double restL = normalBeams.restLength[i];
-            double reducedMass = (m1 * m2) / (m1 + m2);
-            double maxSafeSpring = reducedMass * invDt * invDt;
-            double activeSpring = Math.min(normalBeams.spring[i], maxSafeSpring);
-            double springForce = activeSpring * (dist - restL);
+            double activeSpring = normalBeams.spring[i];
+            double springForce = normalBeams.spring[i] * (dist - restL);
 
             double vx = nodes.velX[n2] - nodes.velX[n1];
             double vy = nodes.velY[n2] - nodes.velY[n1];
@@ -423,10 +419,9 @@ public class SoftBodyVehicle {
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
             double activeDamp = normalBeams.damp[i];
-            double maxDamp = reducedMass * invDt;
-            if (activeDamp > maxDamp) activeDamp = maxDamp;
+            double dampForce = activeDamp * relVel;
 
-            double totalForce = springForce + (relVel * activeDamp);
+            double totalForce = springForce + dampForce;
             double absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > normalBeams.strength[i]) {
@@ -455,12 +450,6 @@ public class SoftBodyVehicle {
 
             int n1 = supportBeams.node1[i];
             int n2 = supportBeams.node2[i];
-            double m1 = nodes.mass[n1];
-            double m2 = nodes.mass[n2];
-            if (m1 * m2 < KINDA_SMALL_NUMBER) {
-                supportBeams.broken[i] = true;
-                continue;
-            }
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
@@ -475,9 +464,7 @@ public class SoftBodyVehicle {
             // 支撑梁：只抗压，不抗拉（拉伸时跳过）
             if (dist > restL) continue;
 
-            double reducedMass = (m1 * m2) / (m1 + m2);
-            double maxSafeSpring = reducedMass * invDt * invDt;
-            double activeSpring = Math.min(supportBeams.spring[i], maxSafeSpring);
+            double activeSpring = supportBeams.spring[i];
             double springForce = activeSpring * (dist - restL);  // dist <= restL，力为负（压力）
 
             double vx = nodes.velX[n2] - nodes.velX[n1];
@@ -486,10 +473,9 @@ public class SoftBodyVehicle {
             double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
             double activeDamp = supportBeams.damp[i];
-            double maxDamp = reducedMass * invDt;
-            if (activeDamp > maxDamp) activeDamp = maxDamp;
+            double dampForce = activeDamp * relVel;
 
-            double totalForce = springForce + (relVel * activeDamp);
+            double totalForce = springForce + dampForce;
             double absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > supportBeams.strength[i]) {
@@ -518,12 +504,6 @@ public class SoftBodyVehicle {
 
             int n1 = boundedBeams.node1[i];
             int n2 = boundedBeams.node2[i];
-            double m1 = nodes.mass[n1];
-            double m2 = nodes.mass[n2];
-            if (m1 * m2 < KINDA_SMALL_NUMBER) {
-                boundedBeams.broken[i] = true;
-                continue;
-            }
 
             double dx = nodes.posX[n2] - nodes.posX[n1];
             double dy = nodes.posY[n2] - nodes.posY[n1];
@@ -534,9 +514,7 @@ public class SoftBodyVehicle {
             double invDist = 1.0 / dist;
 
             double restL = boundedBeams.restLength[i];
-            double reducedMass = (m1 * m2) / (m1 + m2);
-            double maxSafeSpring = reducedMass * invDt * invDt;
-            double activeSpring = Math.min(boundedBeams.spring[i], maxSafeSpring);
+            double activeSpring = boundedBeams.spring[i];
             double springForce = activeSpring * (dist - restL);
 
             double vx = nodes.velX[n2] - nodes.velX[n1];
@@ -559,21 +537,15 @@ public class SoftBodyVehicle {
             // ----- 限位逻辑 -----
             double shortBoundary = restL * (1.0 - boundedBeams.shortBound[i]);
             double longBoundary  = restL * (1.0 + boundedBeams.longBound[i]);
-            double limitSpring = Math.min(boundedBeams.limitSpring[i], maxSafeSpring);
+            double limitSpring = boundedBeams.limitSpring[i];
 
             if (dist < shortBoundary) {
                 springForce += limitSpring * (dist - shortBoundary);
-                double lDamp = boundedBeams.limitDamp[i];
-                if (lDamp > activeDamp) activeDamp = lDamp;
+                activeDamp = boundedBeams.limitDamp[i];
             } else if (dist > longBoundary) {
                 springForce += limitSpring * (dist - longBoundary);
-                double lDamp = boundedBeams.limitDamp[i];
-                if (lDamp > activeDamp) activeDamp = lDamp;
+                activeDamp = boundedBeams.limitDamp[i];
             }
-
-            // 最大阻尼限幅
-            double maxDamp = reducedMass * invDt;
-            if (activeDamp > maxDamp) activeDamp = maxDamp;
 
             double totalForce = springForce + (relVel * activeDamp);
             double absTotalForce = Math.abs(totalForce);
