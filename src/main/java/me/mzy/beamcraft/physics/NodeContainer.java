@@ -56,6 +56,8 @@ public class NodeContainer {
     public int[] collisionRate = new int[INIT_NODE_CAP];
     public int[] sleepRate = new int[INIT_NODE_CAP];
 
+    public int[] degree = new int[INIT_NODE_CAP];
+
     private void ensureNodeCapacity() {
         if (count >= posX.length) {
             int newSize = posX.length * 2;
@@ -69,6 +71,7 @@ public class NodeContainer {
             mass = Utility.expand(mass, newSize);   friction = Utility.expand(friction, newSize); slidingFriction = Utility.expand(slidingFriction, newSize);
             collision = Utility.expand(collision, newSize); selfCollision = Utility.expand(selfCollision, newSize);
             collisionRate = Utility.expand(collisionRate, newSize); sleepRate = Utility.expand(sleepRate, newSize);
+            degree = Utility.expand(degree, newSize);
 
             System.out.println("⚠️ [NodeContainer] Resized to: " + newSize);
         }
@@ -106,6 +109,7 @@ public class NodeContainer {
 
         collisionRate[count] = 0;
         sleepRate[count] = 0;
+        degree[count] = 0;
 
         count++;
     }

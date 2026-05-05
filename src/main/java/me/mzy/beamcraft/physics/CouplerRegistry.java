@@ -11,8 +11,9 @@ public class CouplerRegistry {
         public double latchSpeed;
         public double strength;
         public boolean weld;
+        public double lockRadius;
 
-        public CouplerDef(String nodeName, String tag, String couplerTag, double startRadius, double latchSpeed, double strength, boolean weld) {
+        public CouplerDef(String nodeName, String tag, String couplerTag, double startRadius, double latchSpeed, double strength, boolean weld, double lockRadius) {
             this.nodeName = nodeName;
             this.tag = tag;
             this.couplerTag = couplerTag;
@@ -20,14 +21,15 @@ public class CouplerRegistry {
             this.latchSpeed = latchSpeed;
             this.strength = strength;
             this.weld = weld;
+            this.lockRadius = lockRadius;
         }
     }
 
     public final List<CouplerDef> definitions = new ArrayList<>();
 
-    public void register(String nodeName, String tag, String couplerTag, double startRadius, double latchSpeed, double strength, boolean weld) {
+    public void register(String nodeName, String tag, String couplerTag, double startRadius, double latchSpeed, double strength, boolean weld, double lockRadius) {
         if ((tag != null && !tag.isEmpty()) || (couplerTag != null && !couplerTag.isEmpty())) {
-            definitions.add(new CouplerDef(nodeName, tag, couplerTag, startRadius, latchSpeed, strength, weld));
+            definitions.add(new CouplerDef(nodeName, tag, couplerTag, startRadius, latchSpeed, strength, weld, lockRadius));
         }
     }
 }

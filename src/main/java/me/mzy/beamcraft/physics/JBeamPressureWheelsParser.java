@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import java.util.HashMap;
 import java.util.Map;
 
+// TODO:参考BeamNG documentation，把所有pressure wheel的属性都解析出来
 public class JBeamPressureWheelsParser {
 
     private static final Map<String, String> activeConfig = new HashMap<>();

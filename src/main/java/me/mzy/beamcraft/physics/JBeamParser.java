@@ -107,10 +107,11 @@ public class JBeamParser {
                 // coupler
                 String inlineTag = "";
                 String inlineCouplerTag = "";
-                double inlineStartRadius = 0.2;
+                double inlineStartRadius = 0.25;
                 double inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
                 boolean inlineCouplerWeld = false;
-                double inlineCouplerLatchSpeed = 0.2;
+                double inlineCouplerLatchSpeed = 0.3;
+                double inlineCouplerLockRadius = 0.025;
 
                 if (row.get(row.size() - 1).isJsonObject()) {
                     JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
@@ -127,6 +128,7 @@ public class JBeamParser {
                     if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
                     else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
                     inlineCouplerLatchSpeed = getDoubleSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed);
+                    inlineCouplerLockRadius = getDoubleSafe(inline, "couplerLockRadius", inlineCouplerLockRadius);
                 }
 
                 String id = row.get(0).getAsString();
@@ -159,7 +161,7 @@ public class JBeamParser {
 
                 // 注入到注册表
                 if (!inlineTag.isEmpty() || !inlineCouplerTag.isEmpty()) {
-                    couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld);
+                    couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
                 }
 
                 vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, partId, inlineCollision, inlineSelfCollision);

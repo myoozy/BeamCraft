@@ -129,15 +129,14 @@ public class SoftBodyVehicle {
             double dz = nodes.posZ[n2] - nodes.posZ[n1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-            double m1 = nodes.mass[n1];
-            double m2 = nodes.mass[n2];
-            double reducedMass = (m1 * m2) / (m1 + m2);
+            nodes.degree[n1]++;
+            nodes.degree[n2]++;
 
             if (type == BeamContainer.BEAM_SUPPORT) {
-                supportBeams.addBeam(n1, n2, dist, reducedMass, spring, damp,
+                supportBeams.addBeam(n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
             } else if (type == BeamContainer.BEAM_BOUNDED) {
-                boundedBeams.addBeam(n1, n2, dist, reducedMass,
+                boundedBeams.addBeam(n1, n2, dist,
                         spring, damp, deform, strength,
                         precomp, precompRange, precompTime,
                         shortBound, longBound,
@@ -146,7 +145,7 @@ public class SoftBodyVehicle {
                         dampVelSplit, dampFast,
                         dampRebound, dampReboundFast);
             } else {
-                normalBeams.addBeam(n1, n2, dist, reducedMass, spring, damp,
+                normalBeams.addBeam(n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
             }
         }
@@ -244,6 +243,88 @@ public class SoftBodyVehicle {
         // Pass calculated index data to slide node container
         if (bestA != -1 && bestB != -1) {
             slidenodes.addSlideNode(nId, bestA, bestB, spring, damp, bestRestDist);
+        }
+    }
+
+    public void finalizePhysicsSetup() {
+        double invDt = PhysicsWorld.invPhysicsDT;
+        double safeFractionSpring = 0.95;
+        double safeFractionDamp = 0.95;
+        double avgCosSq = 1.0;
+
+        // ==========================================
+        // 1. 处理普通梁 (Normal Beams)
+        // ==========================================
+        for (int i = 0; i < normalBeams.count; i++) {
+            int n1 = normalBeams.node1[i];
+            int n2 = normalBeams.node2[i];
+
+            // --- A. 刚度质量 (Scaled by Degree) ---
+            double effM1 = nodes.mass[n1] / Math.max(1.0, nodes.degree[n1] * avgCosSq);
+            double effM2 = nodes.mass[n2] / Math.max(1.0, nodes.degree[n2] * avgCosSq);
+            double effReducedMass = (effM1 * effM2) / (effM1 + effM2);
+
+            // --- B. 阻尼质量 (Unscaled) ---
+            double realM1 = nodes.mass[n1];
+            double realM2 = nodes.mass[n2];
+            double unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
+
+            // 弹簧截断：使用带 degree 惩罚的质量，乘以 4.0 的绝对极限
+            double maxSafeSpring = 4.0 * effReducedMass * invDt * invDt * safeFractionSpring;
+            normalBeams.spring[i] = Math.min(normalBeams.spring[i], maxSafeSpring);
+
+            // 阻尼截断：使用你推导出的物理公式 (Unscaled Mass * invDt)
+            double maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
+            normalBeams.damp[i] = Math.min(normalBeams.damp[i], maxSafeDamp);
+        }
+
+        // ==========================================
+        // 2. 处理支撑梁 (Support Beams)
+        // ==========================================
+        for (int i = 0; i < supportBeams.count; i++) {
+            int n1 = supportBeams.node1[i];
+            int n2 = supportBeams.node2[i];
+
+            double effM1 = nodes.mass[n1] / Math.max(1.0, nodes.degree[n1] * avgCosSq);
+            double effM2 = nodes.mass[n2] / Math.max(1.0, nodes.degree[n2] * avgCosSq);
+            double effReducedMass = (effM1 * effM2) / (effM1 + effM2);
+
+            double realM1 = nodes.mass[n1];
+            double realM2 = nodes.mass[n2];
+            double unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
+
+            double maxSafeSpring = 4.0 * effReducedMass * invDt * invDt * safeFractionSpring;
+            supportBeams.spring[i] = Math.min(supportBeams.spring[i], maxSafeSpring);
+
+            double maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
+            supportBeams.damp[i] = Math.min(supportBeams.damp[i], maxSafeDamp);
+        }
+
+        // ==========================================
+        // 3. 处理限界梁 (Bounded Beams)
+        // ==========================================
+        for (int i = 0; i < boundedBeams.count; i++) {
+            int n1 = boundedBeams.node1[i];
+            int n2 = boundedBeams.node2[i];
+
+            double effM1 = nodes.mass[n1] / Math.max(1.0, nodes.degree[n1] * avgCosSq);
+            double effM2 = nodes.mass[n2] / Math.max(1.0, nodes.degree[n2] * avgCosSq);
+            double effReducedMass = (effM1 * effM2) / (effM1 + effM2);
+
+            double realM1 = nodes.mass[n1];
+            double realM2 = nodes.mass[n2];
+            double unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
+
+            double maxSafeSpring = 4.0 * effReducedMass * invDt * invDt * safeFractionSpring;
+            boundedBeams.spring[i] = Math.min(boundedBeams.spring[i], maxSafeSpring);
+            boundedBeams.limitSpring[i] = Math.min(boundedBeams.limitSpring[i], maxSafeSpring);
+
+            double maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
+            boundedBeams.damp[i] = Math.min(boundedBeams.damp[i], maxSafeDamp);
+            boundedBeams.limitDamp[i] = Math.min(boundedBeams.limitDamp[i], maxSafeDamp);
+            boundedBeams.dampFast[i] = Math.min(boundedBeams.dampFast[i], maxSafeDamp);
+            boundedBeams.dampRebound[i] = Math.min(boundedBeams.dampRebound[i], maxSafeDamp);
+            boundedBeams.dampReboundFast[i] = Math.min(boundedBeams.dampReboundFast[i], maxSafeDamp);
         }
     }
 
@@ -535,8 +616,22 @@ public class SoftBodyVehicle {
             }
 
             // ----- 限位逻辑 -----
-            double shortBoundary = restL * (1.0 - boundedBeams.shortBound[i]);
-            double longBoundary  = restL * (1.0 + boundedBeams.longBound[i]);
+            double shortBoundary, longBoundary;
+
+            // 短边界：如果指定了 Range（绝对米），就用 restL 减去它；否则用比例直接乘。
+            if (boundedBeams.shortBoundRange[i] >= 0) {
+                shortBoundary = restL - boundedBeams.shortBoundRange[i];
+            } else {
+                shortBoundary = restL * (1.0 - boundedBeams.shortBound[i]);
+            }
+
+            // 长边界：如果指定了 Range（绝对米），就用 restL 加上它；否则用比例直接乘。
+            if (boundedBeams.longBoundRange[i] >= 0) {
+                longBoundary = restL + boundedBeams.longBoundRange[i];
+            } else {
+                longBoundary = restL * (1.0 + boundedBeams.longBound[i]);
+            }
+
             double limitSpring = boundedBeams.limitSpring[i];
 
             if (dist < shortBoundary) {

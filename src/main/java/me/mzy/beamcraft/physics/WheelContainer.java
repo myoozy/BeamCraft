@@ -66,10 +66,15 @@ public class WheelContainer {
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
-        // n1 是车轮的绝对几何原点，offset 沿着轮轴方向偏移
-        double centerX = vehicle.nodes.posX[n1] + axisX[0] * offset;
-        double centerY = vehicle.nodes.posY[n1] + axisY[0] * offset;
-        double centerZ = vehicle.nodes.posZ[n1] + axisZ[0] * offset;
+        // 🚀 1. 算出 n1 和 n2 的物理中点
+        double midX = (vehicle.nodes.posX[n1] + vehicle.nodes.posX[n2]) * 0.5;
+        double midY = (vehicle.nodes.posY[n1] + vehicle.nodes.posY[n2]) * 0.5;
+        double midZ = (vehicle.nodes.posZ[n1] + vehicle.nodes.posZ[n2]) * 0.5;
+
+        // 🚀 2. 基于中点施加 Offset 偏距 (减号保持不变，因为 axisX 指向外侧，减去负 offset 刚好向外拓展)
+        double centerX = midX - axisX[0] * offset;
+        double centerY = midY - axisY[0] * offset;
+        double centerZ = midZ - axisZ[0] * offset;
 
         // 2. 生成 Hub 节点
         for (int i = 0; i < rays; i++) {
@@ -99,7 +104,7 @@ public class WheelContainer {
         }
 
         // 默认的塑性变形和断裂强度（合金轮毂非常坚硬）
-        double deform = 50000, strength = 500000;
+        double deform = 50000, strength = 500000; // 魔法数字，或许能从JBeam读取？
         boolean COLLISION = false;
 
         // 3. 生成物理拓扑 (Beams)
@@ -108,18 +113,13 @@ public class WheelContainer {
             int hInCur = hubInnerNodes[baseOffset + i], hInNext = hubInnerNodes[baseOffset + next];
             int hOutCur = hubOuterNodes[baseOffset + i], hOutNext = hubOuterNodes[baseOffset + next];
 
-            // --- 碰撞面 ---
-            // 须把 n1 (外侧点) 连给 Out 面，n2 (内侧点) 连给 In 面！
-            vehicle.triangles.addTriangle(n1, hOutNext, hOutCur, partId, COLLISION);
-            vehicle.triangles.addTriangle(n2, hInCur, hInNext, partId, COLLISION);
-
             // ================= 1. 轮辋蒙皮 =================
             // 周长支撑 (Tread)
             addFastBeam(hInCur, hInNext, hubTreadS, hubTreadD, deform, strength);
             addFastBeam(hOutCur, hOutNext, hubTreadS, hubTreadD, deform, strength);
 
             // 横向支撑与 X 型交叉防扭曲 (Periphery)
-            addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, strength); // 直连
+            //addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, strength); // 直连  <--直连和交叉只能二选一，不然会不稳定，根据观察，BeamNG只有交叉梁
             addFastBeam(hInCur, hOutNext, hubPeriS, hubPeriD, deform, strength); // 交叉 1
             addFastBeam(hOutCur, hInNext, hubPeriS, hubPeriD, deform, strength); // 交叉 2
 
@@ -169,9 +169,15 @@ public class WheelContainer {
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
-        double centerX = vehicle.nodes.posX[n1] + axisX[0] * offset;
-        double centerY = vehicle.nodes.posY[n1] + axisY[0] * offset;
-        double centerZ = vehicle.nodes.posZ[n1] + axisZ[0] * offset;
+        // 🚀 1. 算出 n1 和 n2 的物理中点
+        double midX = (vehicle.nodes.posX[n1] + vehicle.nodes.posX[n2]) * 0.5;
+        double midY = (vehicle.nodes.posY[n1] + vehicle.nodes.posY[n2]) * 0.5;
+        double midZ = (vehicle.nodes.posZ[n1] + vehicle.nodes.posZ[n2]) * 0.5;
+
+        // 🚀 2. 基于中点施加 Offset 偏距 (减号保持不变，因为 axisX 指向外侧，减去负 offset 刚好向外拓展)
+        double centerX = midX - axisX[0] * offset;
+        double centerY = midY - axisY[0] * offset;
+        double centerZ = midZ - axisZ[0] * offset;
 
         // 1. 生成轮胎外圈节点
         for (int i = 0; i < rays; i++) {
@@ -224,9 +230,9 @@ public class WheelContainer {
 
             // 预计算气压带来的额外刚度
             double[] pressureBonus = calculatePressureBonus(wIdx, pressure);
-            double finalTreadS = treadSpring;
-            double finalPeriS = periSpring;
-            double finalSideS = sideSpring;
+            double finalTreadS = treadSpring + pressureBonus[0];
+            double finalPeriS = periSpring + pressureBonus[1];
+            double finalSideS = sideSpring + pressureBonus[2];
 
             // 轮胎周长支撑
             addFastBeam(tInCur, tInNext, finalTreadS, treadDamp, deform, strength);
@@ -265,17 +271,14 @@ public class WheelContainer {
             double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
             double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-            double m1 = vehicle.nodes.mass[id1];
-            double m2 = vehicle.nodes.mass[id2];
-            double reducedMass = m1 * m2 / (m1 + m2);
-            vehicle.normalBeams.addBeam(id1, id2, dist, reducedMass, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
+            vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, defrom, strength, 1.0, 0.0, 0.0);
         }
 
     private void calculateWheelBasis(int n1, int n2, int wheelDir, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
         double n1x = vehicle.nodes.posX[n1], n1y = vehicle.nodes.posY[n1], n1z = vehicle.nodes.posZ[n1];
         double n2x = vehicle.nodes.posX[n2], n2y = vehicle.nodes.posY[n2], n2z = vehicle.nodes.posZ[n2];
 
-        // 🚀 修正 1：n1 永远是外侧，n2 是内侧。因此 n1 - n2 永远指向【车外(Outward)】！
+        // n1 永远是外侧，n2 是内侧。因此 n1 - n2 永远指向车外
         ax[0] = n1x - n2x; ay[0] = n1y - n2y; az[0] = n1z - n2z;
         double len = Math.sqrt(ax[0]*ax[0] + ay[0]*ay[0] + az[0]*az[0]);
         if (len > 0) { ax[0]/=len; ay[0]/=len; az[0]/=len; }
@@ -293,7 +296,6 @@ public class WheelContainer {
         uy[0] = vz[0] * ax[0] - vx[0] * az[0];
         uz[0] = vx[0] * ay[0] - vy[0] * ax[0];
 
-        // 🚀 修正 2：利用 wheelDir 修正轮胎旋转的缠绕顺序，防止左右轮滚动物理特性错乱
         if (wheelDir < 0) {
             ux[0] = -ux[0]; uy[0] = -uy[0]; uz[0] = -uz[0];
         }
@@ -319,9 +321,10 @@ public class WheelContainer {
         double sideArea = (Math.PI * (rTire * rTire - rHub * rHub)) / rays;
 
         // 2. 形变参考量 (Delta X)
-        // 假设刚度的物理意义是：当轮胎被压扁胎壁高度的 100% 时，恰好提供等同于该区域气压总推力的反力
+        // 假设刚度的物理意义是：当轮胎被压扁胎壁高度的 50% 时，恰好提供等同于该区域气压总推力的反力 <--这个效果非常差
+        // TODO:找出BeamNG如何实现。或许参考rigs of rods
         double sidewallHeight = rTire - rHub;
-        double refDeflection = sidewallHeight * 100; // 参考形变量
+        double refDeflection = sidewallHeight * 0.5; // 参考形变量
 
         // 3. 刚度计算 (k = F / dx = (P * A) / dx)
         double treadBonus = (pressurePa * treadArea) / refDeflection;

@@ -3,6 +3,8 @@ package me.mzy.beamcraft.physics;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.mzy.beamcraft.BeamCraft;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -53,7 +55,7 @@ public class JBeamAssembler {
             collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, 0.0, 0.0, 0.0);//根节点（车架）的初始偏移量是 0, 0, 0
         }
 
-        System.out.println("====== 🛠️ Starting 3-Pass Assembly ======");
+        System.out.println("====== 🛠️ Starting multi-Pass Assembly ======");
         System.out.println("Collected " + activeParts.size() + " valid part modules.");
 
         // Pass 1: Create all nodes FIRST
@@ -124,6 +126,7 @@ public class JBeamAssembler {
                 CouplerRegistry.CouplerDef bestTarget = null;
                 double minDistanceSq = Double.MAX_VALUE;
                 double precompTime = 1.0;
+                double precompRange = 0.0;
 
                 Integer sourceIdx = vehicle.nodes.nameToIndex.get(source.nodeName);
                 if (sourceIdx == null) continue;
@@ -142,7 +145,13 @@ public class JBeamAssembler {
                             minDistanceSq = distSq;
                             bestTarget = target;
                             double dist = Math.sqrt(distSq);
-                            precompTime = dist / Math.max(source.latchSpeed, PhysicsWorld.KINDA_SMALL_NUMBER);
+                            double targetDist = source.lockRadius;
+                            double distanceToTravel = dist - source.lockRadius;
+
+                            if (distanceToTravel > 0) {
+                                precompTime = distanceToTravel / Math.max(source.latchSpeed, 1e-12);
+                                precompRange = targetDist;
+                            }
                         }
                     }
                 }
@@ -150,13 +159,12 @@ public class JBeamAssembler {
                 if (bestTarget != null) {
                     double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
 
-                    // 🚀 生成 Coupler 虚拟梁
                     vehicle.addBeam(BeamContainer.BEAM_NORMAL,
                             source.nodeName, bestTarget.nodeName,
-                            1e9, 1e7, // 超大刚度/阻尼，交由底层 maxSafe 自动截断
+                            1e9, 1e7, // 超大刚度/阻尼
                             PhysicsWorld.KINDA_BIG_NUMBER, finalStrength,
-                            0.0, 0.0, precompTime,  // precomp=0, precompTime=latchSpeed/dist
-                            1.0, 1.0, -1.0, -1.0,
+                            0.0, 0.0, precompTime,
+                            0.0, 0.0, -1.0, -1.0,
                             0.0, 0.0,
                             -1.0, -1.0, -1.0, -1.0
                     );
@@ -166,11 +174,12 @@ public class JBeamAssembler {
         }
         System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
 
-        // Print final assembly manifest
-        System.out.println("====== 📦 Active Parts Assembly List ======");
-        for (PartEntry entry : activeParts) {
-            System.out.println(" 🔧 " + entry.partName);
-        }
+        // 🚀 Pass 5: 最终物理安全审查
+        vehicle.finalizePhysicsSetup();
+        //System.out.println("====== 📦 Active Parts Assembly List ======");
+        //for (PartEntry entry : activeParts) {
+        //    System.out.println(" 🔧 " + entry.partName);
+        //}
     }
 
     /**
