@@ -228,15 +228,9 @@ public class WheelContainer {
             vehicle.triangles.addTriangle(tInCur, tInNext, tOutNext, partId, COLLISION);
             vehicle.triangles.addTriangle(tInCur, tOutNext, tOutCur, partId, COLLISION);
 
-            // 预计算气压带来的额外刚度
-            double[] pressureBonus = calculatePressureBonus(wIdx, pressure);
-            double finalTreadS = treadSpring + pressureBonus[0];
-            double finalPeriS = periSpring + pressureBonus[1];
-            double finalSideS = sideSpring + pressureBonus[2];
-
             // 轮胎周长支撑
-            addFastBeam(tInCur, tInNext, finalTreadS, treadDamp, deform, strength);
-            addFastBeam(tOutCur, tOutNext, finalTreadS, treadDamp, deform, strength);
+            addFastBeam(tInCur, tInNext, treadSpring, treadDamp, deform, strength);
+            addFastBeam(tOutCur, tOutNext, treadSpring, treadDamp, deform, strength);
 
             // 🚀 胎面 加强筋 (i 连 i+2)
             int next2 = (i + 2) % rays;
@@ -244,8 +238,8 @@ public class WheelContainer {
             int tOutNext2 = tireOuterNodes[baseOffset + next2];
 
             // 这里使用 TreadReinfS (胎面加强刚度)
-            addFastBeam(tInCur, tInNext2, finalTreadS, treadDamp, deform, strength);
-            addFastBeam(tOutCur, tOutNext2, finalTreadS, treadDamp, deform, strength);
+            addFastBeam(tInCur, tInNext2, treadSpring, treadDamp, deform, strength);
+            addFastBeam(tOutCur, tOutNext2, treadSpring, treadDamp, deform, strength);
 
             // 🚀 内部截面 X 型支撑 (wheelReinfBeam)
             // 跨越内部空气空间，连接 Hub 侧和 Tire 对侧，实现形变传导
@@ -253,15 +247,15 @@ public class WheelContainer {
             addFastBeam(hOutCur, tInCur, reinfS, reinfD, deform, strength);
 
             // 轮胎横向支撑
-            addFastBeam(tInCur, tOutCur, finalPeriS, periDamp, deform, strength);
-            addFastBeam(tInCur, tOutNext, finalPeriS, periDamp, deform, strength);
-            addFastBeam(tOutCur, tInNext, finalPeriS, periDamp, deform, strength);
+            addFastBeam(tInCur, tOutCur, periSpring, periDamp, deform, strength);
+            addFastBeam(tInCur, tOutNext, periSpring, periDamp, deform, strength);
+            addFastBeam(tOutCur, tInNext, periSpring, periDamp, deform, strength);
 
             // 轮胎侧壁支撑 (这里是将 Tire 挂在 Hub 上的关键)
-            addFastBeam(hInCur, tInCur, finalSideS, sideDamp, deform, strength);
-            addFastBeam(hOutCur, tOutCur, finalSideS, sideDamp, deform, strength);
-            addFastBeam(hInCur, tOutCur, finalSideS, sideDamp, deform, strength);
-            addFastBeam(hOutCur, tInCur, finalSideS, sideDamp, deform, strength);
+            addFastBeam(hInCur, tInCur, sideSpring, sideDamp, deform, strength);
+            addFastBeam(hOutCur, tOutCur, sideSpring, sideDamp, deform, strength);
+            addFastBeam(hInCur, tOutCur, sideSpring, sideDamp, deform, strength);
+            addFastBeam(hOutCur, tInCur, sideSpring, sideDamp, deform, strength);
         }
     }
 
@@ -299,41 +293,6 @@ public class WheelContainer {
         if (wheelDir < 0) {
             ux[0] = -ux[0]; uy[0] = -uy[0]; uz[0] = -uz[0];
         }
-    }
-
-    /**
-     * 纯物理推导：将气压转换为附加强度 (无魔法数字)
-     * 返回一个包含三个元素的数组: [TreadBonus, PeriBonus, SideBonus]
-     */
-    public double[] calculatePressureBonus(int wheelIndex, double currentPSI) {
-        // 1 PSI ≈ 6894.76 Pa (N/m^2)
-        double pressurePa = currentPSI * 6894.76;
-
-        int rays = numRays[wheelIndex];
-        double rTire = tireRadius[wheelIndex];
-        double rHub = hubRadius[wheelIndex];
-        double width = tireWidth[wheelIndex];
-
-        // 1. 面积计算 (Area)
-        // 胎面单扇区面积 = 弧长 * 宽度
-        double treadArea = ((2.0 * Math.PI * rTire) / rays) * width;
-        // 单侧胎壁单扇区面积 = 扇环面积
-        double sideArea = (Math.PI * (rTire * rTire - rHub * rHub)) / rays;
-
-        // 2. 形变参考量 (Delta X)
-        // 假设刚度的物理意义是：当轮胎被压扁胎壁高度的 50% 时，恰好提供等同于该区域气压总推力的反力 <--这个效果非常差
-        // TODO:找出BeamNG如何实现。或许参考rigs of rods
-        double sidewallHeight = rTire - rHub;
-        double refDeflection = sidewallHeight * 0.5; // 参考形变量
-
-        // 3. 刚度计算 (k = F / dx = (P * A) / dx)
-        double treadBonus = (pressurePa * treadArea) / refDeflection;
-        double sideBonus = (pressurePa * sideArea) / refDeflection;
-
-        // 轮胎宽度方向的横向支撑 (Periphery) 共享胎面的压力效应，但通常打个折以模拟张力分配
-        double periBonus = treadBonus * 0.5;
-
-        return new double[]{treadBonus, periBonus, sideBonus};
     }
 
     private void ensureWheelCapacity() {
