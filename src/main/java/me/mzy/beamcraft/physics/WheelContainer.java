@@ -25,6 +25,10 @@ public class WheelContainer {
     public double[] frictionCoef = new double[INIT_WHEEL_CAP];
     public double[] pressurePSI = new double[INIT_WHEEL_CAP];
 
+    //double stribeckVelMult, double stribeckExponent,
+    //double treadCoef, double noLoadCoef, double loadSensitivitySlope, double fullLoadCoef,
+    //double softnessCoef, double maxPressurePSI,
+
     // 🚀 一维展平数组：内存地址 100% 连续
     // 寻址方式： index = (wheelIndex * MAX_RAYS) + rayIndex
     public int[] hubInnerNodes = new int[INIT_WHEEL_CAP * MAX_RAYS];
@@ -35,6 +39,11 @@ public class WheelContainer {
     // 储存三角形的index (必须确保它们在数组中连续排列)
     public int[] tireTriangleIdxStart = new int[INIT_WHEEL_CAP];
     public int[] tireTriangleIdxEnd = new int[INIT_WHEEL_CAP];
+
+    public double[] initialVolume = new double[INIT_WHEEL_CAP];
+
+    public double[] prevVolume = new double[INIT_WHEEL_CAP];
+    public double[] normalSign = new double[INIT_WHEEL_CAP];
 
     private final SoftBodyVehicle vehicle;
 
@@ -128,8 +137,6 @@ public class WheelContainer {
             hubOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
-        boolean COLLISION = false;
-
         // 3. 生成物理拓扑 (Beams)
         for (int i = 0; i < rays; i++) {
             int next = (i + 1) % rays;
@@ -185,12 +192,14 @@ public class WheelContainer {
             // --- 各向异性梁参数 (前缀 Tread / Periph / Side / Reinf) ---
             double treadSpring, double treadDamp, double treadDeform, double treadStrength,
             double periSpring, double periDamp, double periDeform, double periStrength,
-            double sideSpring, double sideDamp, double sideSpringExp, double sideDampExp,
+            double sideSpring, double sideDamp,
+            double sideSpringExp, double sideDampExp, double sideTransZone,
             double sideDeform, double sideStrength,
             double reinfSpring, double reinfDamp, double reinfDeform, double reinfStrength,
             double treadReinfSpring, double treadReinfDamp,
             double periReinfSpring, double periReinfDamp,
-            double sideReinfSpring, double sideReinfDamp, double sideReinfSpringExp, double sideReinfDampExp,
+            double sideReinfSpring, double sideReinfDamp,
+            double sideReinfSpringExp, double sideReinfDampExp,
             // --- 功能开关 (enableXxx) ---
             boolean enableTireLBeams, boolean enableTireReinfBeams, boolean enableTireSideReinfBeams,
             boolean enableTreadReinfBeams, boolean enableTirePeripheryReinfBeams, boolean enableTireSupportBeams,
@@ -326,13 +335,17 @@ public class WheelContainer {
             // 3. 侧壁梁 (Sidewall Beams) —— 连 Hub 和 Tire，由气压主导
             // ========================================================
             // 普通侧壁支撑 (沿半径直连)
-            addFastBeam(hInCur,  tInCur,  sideSpring, sideDamp, sideDeform, sideStrength);
-            addFastBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength);
+            addFastAnisotropicBeam(hInCur,  tInCur,  sideSpring, sideDamp, sideDeform, sideStrength,
+                    sideSpringExp, sideDampExp, sideTransZone);
+            addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
+                    sideSpringExp, sideDampExp, sideTransZone);
 
             // 侧壁加强筋 (侧壁交叉防扭曲，连目标环带的 i+2，文档中的 sidewall +-2 nodes)
             if (enableTireSideReinfBeams) {
-                addFastBeam(hInCur,  tInNext2,  sideReinfSpring, sideReinfDamp, sideDeform, sideStrength);
-                addFastBeam(hOutCur, tOutNext2, sideReinfSpring, sideReinfDamp, sideDeform, sideStrength);
+                addFastAnisotropicBeam(hInCur,  tInNext2,  sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
+                        sideReinfSpringExp, sideReinfDampExp, sideTransZone);
+                addFastAnisotropicBeam(hOutCur, tOutNext2, sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
+                        sideReinfSpringExp, sideReinfDampExp, sideTransZone);
             }
 
             // ========================================================
@@ -356,12 +369,37 @@ public class WheelContainer {
             // 5. 防瘪兜底梁 (Tire Support Beams) —— 仅做物理限位缓冲
             // ========================================================
             if (enableTireSupportBeams) {
+                // TODO: 优先级不高
                 // 这里的梁应当存入 supportBeams 容器，并且设置 beamPrecompression（如 0.85）
                 // 使得它们平时处于松弛状态，只有当轮胎快要彻底压死碰壁时才提供极强的推力
                 // vehicle.supportBeams.addBeam(...);
             }
         }
         tireTriangleIdxEnd[wIdx] = vehicle.triangles.count - 1;
+
+        // 废弃圆柱公式，使用离散网格精准求积，保证初始内外压强比绝对为 1.0
+        double volSum = 0.0;
+        for (int i = tireTriangleIdxStart[wIdx]; i <= tireTriangleIdxEnd[wIdx]; i++) {
+            int nA = vehicle.triangles.node1[i];
+            int nB = vehicle.triangles.node2[i];
+            int nC = vehicle.triangles.node3[i];
+
+            double ax = vehicle.nodes.posX[nA], ay = vehicle.nodes.posY[nA], az = vehicle.nodes.posZ[nA];
+            double bx = vehicle.nodes.posX[nB], by = vehicle.nodes.posY[nB], bz = vehicle.nodes.posZ[nB];
+            double cx = vehicle.nodes.posX[nC], cy = vehicle.nodes.posY[nC], cz = vehicle.nodes.posZ[nC];
+
+            double crossX = by * cz - bz * cy;
+            double crossY = bz * cx - bx * cz;
+            double crossZ = bx * cy - by * cx;
+
+            volSum += (ax * crossX + ay * crossY + az * crossZ);
+        }
+        // 记录绝对静止体积
+        initialVolume[wIdx] = Math.abs(volSum / 6.0);
+
+        // 不要忘记初始化！！！
+        prevVolume[wIdx] = initialVolume[wIdx];
+        normalSign[wIdx] = (volSum < 0.0) ? -1.0 : 1.0;
     }
 
     private void addFastBeam(int id1, int id2, double spring, double damp, double deform, double strength) {
@@ -369,7 +407,8 @@ public class WheelContainer {
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, deform, strength, 1.0, 0.0, 0.0);
+        vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, deform, strength,
+                1.0, 0.0, 0.0);
     }
 
     private void addFastLBeam(int id1, int id2, int id3, double spring, double damp, double deform, double strength) {
@@ -388,7 +427,18 @@ public class WheelContainer {
         dy = vehicle.nodes.posY[id3] - vehicle.nodes.posY[id2];
         dz = vehicle.nodes.posZ[id3] - vehicle.nodes.posZ[id2];
         double dist23 = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        vehicle.lBeams.addBeam(id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength, 1.0, 0.0, 0.0);
+        vehicle.lBeams.addBeam(id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength,
+                1.0, 0.0, 0.0);
+    }
+
+    private void addFastAnisotropicBeam(int id1, int id2, double spring, double damp, double deform, double strength, double springExp, double dampExp, double transitionZone) {
+        double dx = vehicle.nodes.posX[id2] - vehicle.nodes.posX[id1];
+        double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
+        double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
+        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        vehicle.anisotropicBeams.addBeam(id1, id2, dist, spring, damp, deform, strength,
+                1.0, 0.0, 0.0,
+                springExp, dampExp, transitionZone);
     }
 
     private void calculateWheelBasis(int n1, int n2, int wheelDir, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
@@ -412,10 +462,6 @@ public class WheelContainer {
         ux[0] = vy[0] * az[0] - vz[0] * ay[0];
         uy[0] = vz[0] * ax[0] - vx[0] * az[0];
         uz[0] = vx[0] * ay[0] - vy[0] * ax[0];
-
-        if (wheelDir < 0) {
-            ux[0] = -ux[0]; uy[0] = -uy[0]; uz[0] = -uz[0];
-        }
     }
 
     private void ensureWheelCapacity() {
@@ -434,6 +480,10 @@ public class WheelContainer {
 
             tireTriangleIdxStart = Utility.expand(tireTriangleIdxStart, newSize);
             tireTriangleIdxEnd = Utility.expand(tireTriangleIdxEnd, newSize);
+
+            initialVolume = Utility.expand(initialVolume, newSize);
+            prevVolume = Utility.expand(prevVolume, newSize);
+            normalSign = Utility.expand(normalSign, newSize);
 
             // 扩容展平数组（每个车轮 MAX_RAYS 个射线槽位）
             int newFlatSize = newSize * MAX_RAYS;

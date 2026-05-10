@@ -196,6 +196,10 @@ public class JBeamParser {
         double currentDampRebound = -1.0;
         double currentDampReboundFast = -1.0;
 
+        double currentSpringExpansion = currentSpring;
+        double currentDampExpansion = currentDamp;
+        double currentTransitionZone = 0.0;
+
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
@@ -227,6 +231,8 @@ public class JBeamParser {
 
                 currentShortBound = getDoubleSafe(modifier, "beamShortBound", currentShortBound);
                 currentLongBound = getDoubleSafe(modifier, "beamLongBound", currentLongBound);
+                currentShortBoundRange = getDoubleSafe(modifier, "shortBoundRange", currentShortBoundRange);
+                currentLongBoundRange = getDoubleSafe(modifier, "longBoundRange", currentLongBoundRange);
                 currentLimitSpring = getDoubleSafe(modifier, "beamLimitSpring", currentLimitSpring);
                 currentLimitDamp = getDoubleSafe(modifier, "beamLimitDamp", currentLimitDamp);
 
@@ -235,11 +241,10 @@ public class JBeamParser {
                 currentDampRebound = getDoubleSafe(modifier, "beamDampRebound", currentDampRebound);
                 currentDampReboundFast = getDoubleSafe(modifier, "beamDampReboundFast", currentDampReboundFast);
 
-                if (modifier.has("beamShortBound")) currentShortBoundRange = -1.0;
-                if (modifier.has("beamLongBound")) currentLongBoundRange = -1.0;
+                currentSpringExpansion = getDoubleSafe(modifier, "springExpansion", currentSpringExpansion);
+                currentDampExpansion = getDoubleSafe(modifier, "dampExpansion", currentDampExpansion);
+                currentTransitionZone = getDoubleSafe(modifier, "transitionZone", currentTransitionZone);
 
-                currentShortBoundRange = getDoubleSafe(modifier, "shortBoundRange", currentShortBoundRange);
-                currentLongBoundRange = getDoubleSafe(modifier, "longBoundRange", currentLongBoundRange);
                 continue;
             }
 
@@ -250,17 +255,17 @@ public class JBeamParser {
 
                     // Copy current state to local inline variables
                     int inlineType = currentType;
-                    double inlineSpring = currentSpring, inlineDamp = currentDamp;
-                    double inlineDeform = currentDeform, inlineStrength = currentStrength;
-                    double inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange;
+                    double inlineSpring = currentSpring,                    inlineDamp = currentDamp;
+                    double inlineDeform = currentDeform,                    inlineStrength = currentStrength;
+                    double inlinePrecomp = currentPrecomp,                  inlinePrecompRange = currentPrecompRange;
                     double inlinePrecompTime = currentPrecompTime;
-                    double inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
-                    double inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
-                    double inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
-                    double inlineDampVelSplit = currentDampVelSplit;
-                    double inlineDampFast = currentDampFast;
-                    double inlineDampRebound = currentDampRebound;
-                    double inlineDampReboundFast = currentDampReboundFast;
+                    double inlineShortBound = currentShortBound,            inlineLongBound = currentLongBound;
+                    double inlineShortBoundRange = currentShortBoundRange,  inlineLongBoundRange = currentLongBoundRange;
+                    double inlineLimitS = currentLimitSpring,               inlineLimitD = currentLimitDamp;
+                    double inlineDampVelSplit = currentDampVelSplit,        inlineDampFast = currentDampFast;
+                    double inlineDampRebound = currentDampRebound,          inlineDampReboundFast = currentDampReboundFast;
+                    double inlineSpringExpansion = currentSpringExpansion,  inlineDampExpansion = currentDampExpansion;
+                    double inlineTransitionZone = currentTransitionZone;
                     String inlineId3 = null;
 
                     // Apply inline properties from the end of the row
@@ -287,6 +292,10 @@ public class JBeamParser {
                         inlineDampRebound = getDoubleSafe(inline, "beamDampRebound", inlineDampRebound);
                         inlineDampReboundFast = getDoubleSafe(inline, "beamDampReboundFast", inlineDampReboundFast);
 
+                        inlineSpringExpansion = getDoubleSafe(inline, "springExpansion", inlineSpringExpansion);
+                        inlineDampExpansion = getDoubleSafe(inline, "dampExpansion", inlineDampExpansion);
+                        inlineTransitionZone = getDoubleSafe(inline, "transitionZone", inlineTransitionZone);
+
                         String bt = getStringSafe(inline, "beamType", "");
                         if (!bt.isEmpty()) {
                             if (bt.equals("|NORMAL")) inlineType = BeamContainer.BEAM_NORMAL;
@@ -312,7 +321,8 @@ public class JBeamParser {
                             inlineShortBoundRange, inlineLongBoundRange,
                             inlineLimitS, inlineLimitD,
                             inlineDampVelSplit, inlineDampFast,
-                            inlineDampRebound, inlineDampReboundFast
+                            inlineDampRebound, inlineDampReboundFast,
+                            inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone
                     );
                 }
             }

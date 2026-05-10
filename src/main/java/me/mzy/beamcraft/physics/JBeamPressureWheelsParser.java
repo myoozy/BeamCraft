@@ -119,6 +119,7 @@ public class JBeamPressureWheelsParser {
                 double wheelSideBeamDamp = getVal("wheelSideBeamDamp", 30);
                 double wheelSideBeamSpringExpansion = getVal("wheelSideBeamSpringExpansion", 281000);
                 double wheelSideBeamDampExpansion = getVal("wheelSideBeamDampExpansion", 30);
+                double wheelSideTransitionZone = getVal("wheelSideTransitionZone", 0);
                 double wheelSideBeamDeform = getVal("wheelSideBeamDeform", 11000);
                 double wheelSideBeamStrength = getVal("wheelSideBeamStrength", 15000);
                 double wheelSideReinfBeamSpring = getVal("wheelSideReinfBeamSpring", 15000);
@@ -241,7 +242,8 @@ public class JBeamPressureWheelsParser {
                             dragCoef, skinDragCoef,
                             wheelTreadBeamSpring, wheelTreadBeamDamp, wheelTreadBeamDeform, wheelTreadBeamStrength,
                             wheelPeripheryBeamSpring, wheelPeripheryBeamDamp, wheelPeripheryBeamDeform, wheelPeripheryBeamStrength,
-                            wheelSideBeamSpring, wheelSideBeamDamp, wheelSideBeamSpringExpansion, wheelSideBeamDampExpansion,
+                            wheelSideBeamSpring, wheelSideBeamDamp,
+                            wheelSideBeamSpringExpansion, wheelSideBeamDampExpansion, wheelSideTransitionZone,
                             wheelSideBeamDeform, wheelSideBeamStrength,
                             wheelReinfBeamSpring, wheelReinfBeamDamp, wheelReinfBeamDeform, wheelReinfBeamStrength,
                             wheelTreadReinfBeamSpring, wheelTreadReinfBeamDamp,

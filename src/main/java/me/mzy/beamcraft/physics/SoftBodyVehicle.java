@@ -25,6 +25,7 @@ public class SoftBodyVehicle {
     public final BeamContainer supportBeams = new BeamContainer();
     public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
     public final LBeamContainer lBeams = new LBeamContainer();
+    public final AnisotropicBeamContainer anisotropicBeams = new AnisotropicBeamContainer();
     public final TriangleContainer triangles = new TriangleContainer();
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
@@ -80,6 +81,7 @@ public class SoftBodyVehicle {
         supportBeams.updatePrecompression(dt);
         boundedBeams.updatePrecompression(dt);
         lBeams.updatePrecompression(dt);
+        anisotropicBeams.updatePrecompression(dt);
     }
 
     /**
@@ -130,7 +132,8 @@ public class SoftBodyVehicle {
                         double shortBoundRange, double longBoundRange,
                         double limitSpring, double limitDamp,
                         double dampVelSplit, double dampFast,
-                        double dampRebound, double dampReboundFast) {
+                        double dampRebound, double dampReboundFast,
+                        double springExpansion, double dampExpansion, double transitionZone) {
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
             int n1 = nodes.nameToIndex.get(name1);
             int n2 = nodes.nameToIndex.get(name2);
@@ -168,6 +171,10 @@ public class SoftBodyVehicle {
                 double node23Dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
                 lBeams.addBeam(n1, n2, n3, node12Dist, node13Dist, node23Dist,
                         spring, damp, deform, strength, precomp, precompRange, precompTime);
+            } else if (type == BeamContainer.BEAM_ANISOTROPIC) {
+                anisotropicBeams.addBeam(n1, n2, dist, spring, damp,
+                        deform, strength, precomp, precompRange, precompTime,
+                        springExpansion, dampExpansion, transitionZone);
             } else {
                 normalBeams.addBeam(n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
@@ -376,6 +383,34 @@ public class SoftBodyVehicle {
             double maxSafeDamp = genMass * invDt * safeFractionDamp;
             lBeams.damp[i] = Math.min(lBeams.damp[i], maxSafeDamp);
         }
+
+        // ==========================================================
+        // 5. 处理各向异性梁 (Anisotropic Beams) 安全截断
+        // ==========================================================
+        for (int i = 0; i < anisotropicBeams.count; i++) {
+            int n1 = anisotropicBeams.node1[i];
+            int n2 = anisotropicBeams.node2[i];
+
+            // 计算质量乘子 (与普通梁逻辑保持一致)
+            double effM1 = nodes.mass[n1] / Math.max(1.0, nodes.degree[n1] * avgCosSq);
+            double effM2 = nodes.mass[n2] / Math.max(1.0, nodes.degree[n2] * avgCosSq);
+            double effReducedMass = (effM1 * effM2) / (effM1 + effM2);
+
+            double realM1 = nodes.mass[n1];
+            double realM2 = nodes.mass[n2];
+            double unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
+
+            // 基础刚度与阻尼压制
+            double maxSafeSpring = 4.0 * effReducedMass * invDt * invDt * safeFractionSpring;
+            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], maxSafeSpring);
+
+            double maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
+            anisotropicBeams.damp[i] = Math.min(anisotropicBeams.damp[i], maxSafeDamp);
+
+            // ⚠️ 极其关键：对爆炸级的 Expansion 参数同步应用物理边界拦截！
+            anisotropicBeams.springExpansion[i] = Math.min(anisotropicBeams.springExpansion[i], maxSafeSpring);
+            anisotropicBeams.dampExpansion[i]   = Math.min(anisotropicBeams.dampExpansion[i],   maxSafeDamp);
+        }
     }
 
     /**
@@ -508,6 +543,69 @@ public class SoftBodyVehicle {
         }
     }
 
+    // ==========================================================
+    // 💨 散度定理极限单循环气压解算 (访存带宽开销减半)
+    // ==========================================================
+    public void solveTirePressure() {
+        for (int w = 0; w < wheels.count; w++) {
+            int start = wheels.tireTriangleIdxStart[w];
+            int end = wheels.tireTriangleIdxEnd[w];
+            if (start >= end || start == 0) continue;
+
+            // 1. 🚀 直接读取【上一子步】缓存的静止体积与自适应符号，当场算出压强！
+            // 0.0005秒的反馈延迟对流体体积而言完全可以忽略不计，绝对稳定
+            double currentVolume = wheels.prevVolume[w];
+            if (currentVolume < KINDA_SMALL_NUMBER) continue;
+
+            double p0_Pa = wheels.pressurePSI[w] * 6894.76;
+            double absP0_Pa = p0_Pa + 101325.0;
+            double currentAbsPressurePa = absP0_Pa * (wheels.initialVolume[w] / currentVolume);
+            double pressureDiffPa = currentAbsPressurePa - 101325.0;
+
+            // 均摊乘子 (结合上一子步提取的网格自适应朝向符号)
+            double forceMultiplier = (pressureDiffPa * wheels.normalSign[w]) / 6.0;
+
+            double nextVolumeSum = 0.0;
+
+            // 2. 🚀 终极单循环：读取一次节点坐标，同时完成【推力施加】与【下步体积积分】！
+            for (int i = start; i <= end; i++) {
+                int nA = triangles.node1[i];
+                int nB = triangles.node2[i];
+                int nC = triangles.node3[i];
+
+                // CPU L1 缓存命中：仅拉取一次 A, B, C 的内存
+                double ax = nodes.posX[nA], ay = nodes.posY[nA], az = nodes.posZ[nA];
+                double bx = nodes.posX[nB], by = nodes.posY[nB], bz = nodes.posZ[nB];
+                double cx = nodes.posX[nC], cy = nodes.posY[nC], cz = nodes.posZ[nC];
+
+                double abx = bx - ax, aby = by - ay, abz = bz - az;
+                double acx = cx - ax, acy = cy - ay, acz = cz - az;
+
+                // 算叉乘 (天然包含 2 倍面积与法线方向)
+                double nx = aby * acz - abz * acy;
+                double ny = abz * acx - abx * acz;
+                double nz = abx * acy - aby * acx;
+
+                // --- A. 施加真实的气压外推力 ---
+                double fx = nx * forceMultiplier;
+                double fy = ny * forceMultiplier;
+                double fz = nz * forceMultiplier;
+
+                nodes.forceX[nA] += fx; nodes.forceY[nA] += fy; nodes.forceZ[nA] += fz;
+                nodes.forceX[nB] += fx; nodes.forceY[nB] += fy; nodes.forceZ[nB] += fz;
+                nodes.forceX[nC] += fx; nodes.forceY[nC] += fy; nodes.forceZ[nC] += fz;
+
+                // --- B. 顺手使用标量三重积累加当前网格体积 (供下一子步解算使用) ---
+                // 完美复用已加载的寄存器数据
+                nextVolumeSum += (ax * nx + ay * ny + az * nz);
+            }
+
+            // 3. 更新黑板缓存
+            wheels.normalSign[w] = (nextVolumeSum < 0.0) ? -1.0 : 1.0;
+            wheels.prevVolume[w] = Math.abs(nextVolumeSum / 6.0);
+        }
+    }
+
     public void solveInternalForces(double dt){
         double invDt = 1.0 / dt;
 
@@ -521,6 +619,8 @@ public class SoftBodyVehicle {
             nodes.prevPosY[i] = nodes.posY[i];
             nodes.prevPosZ[i] = nodes.posZ[i];
         }
+
+        solveTirePressure();
 
         // ==========================================
         // 🛡️ 梁计算 (Beams)
@@ -834,6 +934,93 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += f1x; nodes.forceY[n1] += f1y; nodes.forceZ[n1] += f1z;
             nodes.forceX[n2] += f2x; nodes.forceY[n2] += f2y; nodes.forceZ[n2] += f2z;
             nodes.forceX[n3] += f3x; nodes.forceY[n3] += f3y; nodes.forceZ[n3] += f3z;
+        }
+
+        // ========== 5. 各向异性梁计算 (Anisotropic Beams) ==========
+        for (int i = 0; i < anisotropicBeams.count; i++) {
+            if (anisotropicBeams.broken[i]) continue;
+
+            int n1 = anisotropicBeams.node1[i];
+            int n2 = anisotropicBeams.node2[i];
+
+            double dx = nodes.posX[n2] - nodes.posX[n1];
+            double dy = nodes.posY[n2] - nodes.posY[n1];
+            double dz = nodes.posZ[n2] - nodes.posZ[n1];
+            double distSq = dx*dx + dy*dy + dz*dz;
+            if (distSq < KINDA_SMALL_NUMBER) continue;
+            double dist = Math.sqrt(distSq);
+            double invDist = 1.0 / dist;
+
+            // 初始生成原长 (Spawned Length)
+            double restL = anisotropicBeams.restLength[i];
+
+            // 默认输出基础刚度和阻尼 (适用于 压缩区 dist <= restL)
+            double activeSpring = anisotropicBeams.spring[i];
+            double activeDamp   = anisotropicBeams.damp[i];
+
+            // 🚀 仅在 Expansion (拉伸区 dist > restL) 触发高级逻辑
+            if (dist > restL) {
+                double expSpring = anisotropicBeams.springExpansion[i];
+                double expDamp   = anisotropicBeams.dampExpansion[i];
+                double tZoneRatio = anisotropicBeams.transitionZone[i];
+
+                if (tZoneRatio > KINDA_SMALL_NUMBER) {
+                    // 1. 算出绝对过渡区长度 (比例 × 原长)
+                    double absoluteTZone = tZoneRatio * restL;
+                    // 2. 算出当前拉伸量
+                    double stretch = dist - restL;
+
+                    if (stretch >= absoluteTZone) {
+                        // 彻底越过过渡区，完全使用 Expansion 属性
+                        activeSpring = expSpring;
+                        activeDamp   = expDamp;
+                    } else {
+                        // 处于过渡区斜坡内部，进行线性插值 (Lerp)
+                        double factor = stretch / absoluteTZone;
+                        activeSpring += (expSpring - activeSpring) * factor;
+                        activeDamp   += (expDamp   - activeDamp)   * factor;
+                    }
+                } else {
+                    // 默认情况 (transitionZone == 0)，瞬间越变
+                    activeSpring = expSpring;
+                    activeDamp   = expDamp;
+                }
+            }
+
+            // 计算弹簧力
+            double springForce = activeSpring * (dist - restL);
+
+            // 计算阻尼力
+            double vx = nodes.velX[n2] - nodes.velX[n1];
+            double vy = nodes.velY[n2] - nodes.velY[n1];
+            double vz = nodes.velZ[n2] - nodes.velZ[n1];
+            double relVel = (vx*dx + vy*dy + vz*dz) * invDist;
+            double dampForce = activeDamp * relVel;
+
+            double totalForce = springForce + dampForce;
+            double absTotalForce = Math.abs(totalForce);
+
+            // 断裂判定
+            if (absTotalForce > anisotropicBeams.strength[i]) {
+                anisotropicBeams.broken[i] = true;
+                continue;
+            }
+
+            // 塑性形变
+            if (absTotalForce > anisotropicBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - anisotropicBeams.deform[i];
+                double deformAmount = ((overForce * overForce) / (anisotropicBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+                if (dist > restL) anisotropicBeams.restLength[i] += deformAmount;
+                else anisotropicBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
+            }
+
+            // 施加力
+            double fx = totalForce * dx * invDist;
+            double fy = totalForce * dy * invDist;
+            double fz = totalForce * dz * invDist;
+
+            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
+            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
 
         // ==========================================
@@ -1165,16 +1352,35 @@ public class SoftBodyVehicle {
                 // 撞了哪面墙，就把坐标回退，并彻底削减那个方向的速度！
                 if (hitY) {
                     nodes.velY[i] *= -PhysicsWorld.BLOCK_REBOUND;
+
+                    // 🚀 核心修复：PBD 位置级摩擦力锁！直接消除水平蠕动漂移！
+                    double creepX = nodes.posX[i] - oldLocalX;
+                    double creepZ = nodes.posZ[i] - oldLocalZ;
+                    nodes.posX[i] = oldLocalX + creepX * friction;
+                    nodes.posZ[i] = oldLocalZ + creepZ * friction;
+
                     nodes.velX[i] *= friction; nodes.velZ[i] *= friction;
                     nodes.posY[i] = oldLocalY;
                 }
                 if (hitX) {
                     nodes.velX[i] *= -PhysicsWorld.BLOCK_REBOUND;
+
+                    double creepY = nodes.posY[i] - oldLocalY;
+                    double creepZ = nodes.posZ[i] - oldLocalZ;
+                    nodes.posY[i] = oldLocalY + creepY * friction;
+                    nodes.posZ[i] = oldLocalZ + creepZ * friction;
+
                     nodes.velY[i] *= friction; nodes.velZ[i] *= friction;
                     nodes.posX[i] = oldLocalX;
                 }
                 if (hitZ) {
                     nodes.velZ[i] *= -PhysicsWorld.BLOCK_REBOUND;
+
+                    double creepX = nodes.posX[i] - oldLocalX;
+                    double creepY = nodes.posY[i] - oldLocalY;
+                    nodes.posX[i] = oldLocalX + creepX * friction;
+                    nodes.posY[i] = oldLocalY + creepY * friction;
+
                     nodes.velX[i] *= friction; nodes.velY[i] *= friction;
                     nodes.posZ[i] = oldLocalZ;
                 }
