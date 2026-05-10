@@ -24,6 +24,7 @@ public class NodeContainer {
     public int count = 0;
     public String[] names = new String[INIT_NODE_CAP];
     public int[] partId = new int[INIT_NODE_CAP];
+    public int[] wheelId = new int[INIT_NODE_CAP];
 
     // Initial local coordinates from JBeam
     public double[] baseX = new double[INIT_NODE_CAP];
@@ -62,7 +63,7 @@ public class NodeContainer {
         if (count >= posX.length) {
             int newSize = posX.length * 2;
             names = Utility.expand(names, newSize);
-            partId = Utility.expand(partId, newSize);
+            partId = Utility.expand(partId, newSize); wheelId = Utility.expand(wheelId, newSize);
             baseX = Utility.expand(baseX, newSize); baseY = Utility.expand(baseY, newSize); baseZ = Utility.expand(baseZ, newSize);
             posX = Utility.expand(posX, newSize);   posY = Utility.expand(posY, newSize);   posZ = Utility.expand(posZ, newSize);
             prevPosX = Utility.expand(prevPosX, newSize); prevPosY = Utility.expand(prevPosY, newSize); prevPosZ = Utility.expand(prevPosZ, newSize);
@@ -104,6 +105,7 @@ public class NodeContainer {
         slidingFriction[count] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
         nameToIndex.put(name, count);
         partId[count] = nodePartId;
+        wheelId[count] = -1;
         collision[count] = nodeCollision;
         selfCollision[count] = nodeSelfCollision;
 
@@ -112,6 +114,13 @@ public class NodeContainer {
         degree[count] = 0;
 
         count++;
+    }
+
+    public void addTireNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
+                            int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, int nodeWheelId){
+        addNode(name, x, y, z, nodeMass, nodeFriction, nodeSlidingFriction, nodePartId, nodeCollision, nodeSelfCollision);
+        int idx = nameToIndex.get(name);
+        wheelId[idx] = nodeWheelId;
     }
 
     public void clear() {

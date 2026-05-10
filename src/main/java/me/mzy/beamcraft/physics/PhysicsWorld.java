@@ -78,10 +78,12 @@ public class PhysicsWorld {
     /**
      * Main physics update loop
      */
-    public void step(World mcWorld, double dt) {
+    public void step(World mcWorld, double dt, double[] lastPhycisMsDetail) {
         int subSteps = (int)Math.ceil(dt * invPhysicsDT);
         double subDt = dt / subSteps;
         int broadphaseRate = 10;
+
+        long t1 = System.nanoTime();
 
         voxelSnapshot.clear();
         // 让每辆车自己去扫描周围的方块并写入全局 snapshot
@@ -90,15 +92,25 @@ public class PhysicsWorld {
             vehicle.updateVoxelSnapshot(mcWorld, voxelSnapshot, mutablePos, dt);
         }
 
+        long t2 = System.nanoTime();
+        double mcWorldScanMs = (t2 - t1) / 1_000_000.0;
+        double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
+
         for (int s = 0; s < subSteps; s++) {
+
+            long ti1 = System.nanoTime();
 
             // 1. 算内力并积分预测坐标【完全独立并行】
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveInternalForces(subDt);
             });
 
+            long ti2 = System.nanoTime();
+            internalForceMs += (ti2 - ti1) / 1_000_000.0;
+
             // 2. 宽阶段：降频更新树与接触缓存
             if (s % broadphaseRate == 0) {
+                long tii1 = System.nanoTime();
                 globalSap.clear();
 
                 // ★ 动态内存紧凑 (Dynamic Packing) ★
@@ -116,6 +128,10 @@ public class PhysicsWorld {
                 // if (activeOffset >= SoftBodyCollisionManager.MAX_GLOBAL_NODES) { ... }
 
                 globalSap.updateAndSort();
+
+                long tii2 = System.nanoTime();
+                globalSAPMs += (tii2 - tii1) / 1_000_000.0;
+
                 collisionManager.clearContacts();
 
                 // 并行查树
@@ -125,21 +141,52 @@ public class PhysicsWorld {
 
                 // 极速图染色分批
                 collisionManager.buildAndColorBatches();
+
+                long tii3 = System.nanoTime();
+                dyeCollisionMs += (tii3 - tii2) / 1_000_000.0;
             }
+
+            long ti3 = System.nanoTime();
 
             // 3. 窄阶段：多车/单车智能动态并行求解
             solveCachedContacts(subDt);
+
+            long ti4 = System.nanoTime();
+            softCollisionMs += (ti4 - ti3) / 1_000_000.0;
 
             // 4. 环境方块碰撞【车辆级别完全独立并行！】
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveEnvironmentCollisions(voxelSnapshot, subDt);
             });
+
+            long ti5 = System.nanoTime();
+            mcCollisionMs += (ti5 - ti4) / 1_000_000.0;
         }
+
+        long t3 = System.nanoTime();
+        vehicles.parallelStream().forEach(vehicle -> {
+            vehicle.updateLocalCOMCache();
+            vehicle.updateBeamPrecompression(dt);
+        });
+        long t4 = System.nanoTime();
+        double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.updateEntityLocation();
-            vehicle.updateBeamPrecompression(dt);
         }
+        long t5 = System.nanoTime();
+        double moveEntityMs = (t5 - t4) / 1_000_000.0;
+
+        double totalMs = (t5 - t1) / 1_000_000.0;
+        lastPhycisMsDetail[0] = totalMs;
+        lastPhycisMsDetail[1] = mcWorldScanMs;
+        lastPhycisMsDetail[2] = internalForceMs;
+        lastPhycisMsDetail[3] = globalSAPMs;
+        lastPhycisMsDetail[4] = dyeCollisionMs;
+        lastPhycisMsDetail[5] = softCollisionMs;
+        lastPhycisMsDetail[6] = mcCollisionMs;
+        lastPhycisMsDetail[7] = postUpdateMs;
+        lastPhycisMsDetail[8] = moveEntityMs;
     }
 
     /**

@@ -24,6 +24,7 @@ public class SoftBodyVehicle {
     public final BeamContainer normalBeams = new BeamContainer();
     public final BeamContainer supportBeams = new BeamContainer();
     public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
+    public final LBeamContainer lBeams = new LBeamContainer();
     public final TriangleContainer triangles = new TriangleContainer();
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
@@ -54,22 +55,31 @@ public class SoftBodyVehicle {
         entityZ = this.parentEntity.getZ();
     }
 
-    public void updateEntityLocation() {
+    /*
+    Must call updateEntityLocation after
+     */
+    public void updateLocalCOMCache() {
         nodes.getCenterOfMass(localCOM);
+        nodes.moveNodes(-localCOM[0], -localCOM[1], -localCOM[2]);
+    }
 
+    /*
+    Must call updateLocalCOMCache before
+     */
+    public void updateEntityLocation() {
         this.parentEntity.setVelocity(0, 0, 0);
 
         double newEntityX = entityX + localCOM[0];
         double newEntityY = entityY + localCOM[1];
         double newEntityZ = entityZ + localCOM[2];
         this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
-        nodes.moveNodes(-localCOM[0], -localCOM[1], -localCOM[2]);
     }
 
     public void updateBeamPrecompression(double dt) {
         normalBeams.updatePrecompression(dt);
         supportBeams.updatePrecompression(dt);
         boundedBeams.updatePrecompression(dt);
+        lBeams.updatePrecompression(dt);
     }
 
     /**
@@ -112,7 +122,7 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(int type,
-                        String name1, String name2,
+                        String name1, String name2, String name3,
                         double spring, double damp,
                         double deform, double strength,
                         double precomp, double precompRange, double precompTime,
@@ -144,6 +154,20 @@ public class SoftBodyVehicle {
                         limitSpring, limitDamp,
                         dampVelSplit, dampFast,
                         dampRebound, dampReboundFast);
+            } else if (type == BeamContainer.BEAM_LBEAM && nodes.nameToIndex.containsKey(name3)) {
+                int n3 = nodes.nameToIndex.get(name3);
+                nodes.degree[n3]++;
+                double node12Dist = dist;
+                dx = nodes.posX[n3] - nodes.posX[n1];
+                dy = nodes.posY[n3] - nodes.posY[n1];
+                dz = nodes.posZ[n3] - nodes.posZ[n1];
+                double node13Dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                dx = nodes.posX[n3] - nodes.posX[n2];
+                dy = nodes.posY[n3] - nodes.posY[n2];
+                dz = nodes.posZ[n3] - nodes.posZ[n2];
+                double node23Dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                lBeams.addBeam(n1, n2, n3, node12Dist, node13Dist, node23Dist,
+                        spring, damp, deform, strength, precomp, precompRange, precompTime);
             } else {
                 normalBeams.addBeam(n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
@@ -326,6 +350,32 @@ public class SoftBodyVehicle {
             boundedBeams.dampRebound[i] = Math.min(boundedBeams.dampRebound[i], maxSafeDamp);
             boundedBeams.dampReboundFast[i] = Math.min(boundedBeams.dampReboundFast[i], maxSafeDamp);
         }
+
+        // ==========================================
+        // 4. 处理角阻抗梁 (L-Beams)
+        // ==========================================
+        for (int i = 0; i < lBeams.count; i++) {
+            int n1 = lBeams.node1[i];
+            int n2 = lBeams.node2[i];
+            int n3 = lBeams.node3[i];
+
+            // 读取真实节点质量
+            double m1 = nodes.mass[n1];
+            double m2 = nodes.mass[n2];
+            double m3 = nodes.mass[n3];
+
+            // 计算 L-Beam 的广义反质量 (拐点 n3 承受两侧反力，权重取 2.0)
+            double wTotal = (1.0 / m1) + (1.0 / m2) + (2.0 / m3);
+            double genMass = 1.0 / wTotal;
+
+            // 刚度安全截断
+            double maxSafeSpring = 4.0 * genMass * invDt * invDt * safeFractionSpring;
+            lBeams.spring[i] = Math.min(lBeams.spring[i], maxSafeSpring);
+
+            // 阻尼安全截断 (极其关键！将强制把 180 截断到安全的 47.5 以内，彻底消灭 -2.6 倍数爆炸)
+            double maxSafeDamp = genMass * invDt * safeFractionDamp;
+            lBeams.damp[i] = Math.min(lBeams.damp[i], maxSafeDamp);
+        }
     }
 
     /**
@@ -348,6 +398,7 @@ public class SoftBodyVehicle {
         normalBeams.clear();
         supportBeams.clear();
         boundedBeams.clear();
+        lBeams.clear();
         triangles.clear();
         torsionbars.clear();
         slidenodes.clear();
@@ -663,6 +714,126 @@ public class SoftBodyVehicle {
 
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
+        }
+
+        // ========== 4. LBeams ==========
+        for (int i = 0; i < lBeams.count; i++) {
+            if (lBeams.broken[i]) continue;
+
+            int n1 = lBeams.node1[i]; // 端点 1 (例如 hInCur)
+            int n2 = lBeams.node2[i]; // 端点 2 (例如 tOutCur)
+            int n3 = lBeams.node3[i]; // 共享拐点 3 (例如 tInCur)
+
+            // 1. 读取三点实时坐标
+            double x1 = nodes.posX[n1], y1 = nodes.posY[n1], z1 = nodes.posZ[n1];
+            double x2 = nodes.posX[n2], y2 = nodes.posY[n2], z2 = nodes.posZ[n2];
+            double x3 = nodes.posX[n3], y3 = nodes.posY[n3], z3 = nodes.posZ[n3];
+
+            // 2. 计算三边向量与长度
+            // 臂 1-3
+            double dx13 = x1 - x3, dy13 = y1 - y3, dz13 = z1 - z3;
+            double l1Sq = dx13*dx13 + dy13*dy13 + dz13*dz13;
+
+            // 臂 2-3
+            double dx23 = x2 - x3, dy23 = y2 - y3, dz23 = z2 - z3;
+            double l2Sq = dx23*dx23 + dy23*dy23 + dz23*dz23;
+
+            // 对角线 1-2
+            double dx12 = x2 - x1, dy12 = y2 - y1, dz12 = z2 - z1;
+            double distSq = dx12*dx12 + dy12*dy12 + dz12*dz12;
+
+            // 防御性拦截极小距离，防止 NaN 传染
+            if (l1Sq < KINDA_SMALL_NUMBER || l2Sq < KINDA_SMALL_NUMBER || distSq < KINDA_SMALL_NUMBER) continue;
+
+            double l1 = Math.sqrt(l1Sq);
+            double l2 = Math.sqrt(l2Sq);
+            double dist = Math.sqrt(distSq);
+
+            double invL1 = 1.0 / l1;
+            double invL2 = 1.0 / l2;
+            double invDist = 1.0 / dist;
+
+            // 3. 计算动态目标对角线长度 D_target
+            double cosTheta0 = lBeams.restCosTheta[i];
+            double targetDistSq = l1Sq + l2Sq - 2.0 * l1 * l2 * cosTheta0;
+            if (targetDistSq < KINDA_SMALL_NUMBER) continue;
+            double targetDist = Math.sqrt(targetDistSq);
+            double invTargetDist = 1.0 / targetDist;
+
+            // 4. 计算链式求导放大因子
+            double g1 = (l1 - l2 * cosTheta0) * invTargetDist;
+            double g2 = (l2 - l1 * cosTheta0) * invTargetDist;
+
+            // 5. 计算真实的相对阻尼速率 (彻底消灭垂直压缩抖动)
+            double vx1 = nodes.velX[n1], vy1 = nodes.velY[n1], vz1 = nodes.velZ[n1];
+            double vx2 = nodes.velX[n2], vy2 = nodes.velY[n2], vz2 = nodes.velZ[n2];
+            double vx3 = nodes.velX[n3], vy3 = nodes.velY[n3], vz3 = nodes.velZ[n3];
+
+            // 臂 1-3 的伸缩速率
+            double v13x = vx1 - vx3, v13y = vy1 - vy3, v13z = vz1 - vz3;
+            double l1Dot = (v13x*dx13 + v13y*dy13 + v13z*dz13) * invL1;
+
+            // 臂 2-3 的伸缩速率
+            double v23x = vx2 - vx3, v23y = vy2 - vy3, v23z = vz2 - vz3;
+            double l2Dot = (v23x*dx23 + v23y*dy23 + v23z*dz23) * invL2;
+
+            // 目标对角线长度随外挂臂形变产生的理论收缩速率
+            double targetDistDot = g1 * l1Dot + g2 * l2Dot;
+
+            // 物理对角线的实际接近速率
+            double v12x = vx2 - vx1, v12y = vy2 - vy1, v12z = vz2 - vz1;
+            double distDot = (v12x*dx12 + v12y*dy12 + v12z*dz12) * invDist;
+
+            // 真正的弹性相对速率 = 实际速率 - 理论速率
+            double dampVel = distDot - targetDistDot;
+
+            // 6. 标量合力计算
+            double activeSpring = lBeams.spring[i];
+            double springForce = activeSpring * (dist - targetDist);
+            double dampForce = lBeams.damp[i] * dampVel;
+            double totalForce = springForce + dampForce;
+
+            double absTotalForce = Math.abs(totalForce);
+            if (absTotalForce > lBeams.strength[i]) {
+                lBeams.broken[i] = true;
+                continue;
+            }
+
+            // 塑性形变逻辑兜底：通过微调常驻角度吸收冲击
+            if (absTotalForce > lBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
+                double overForce = absTotalForce - lBeams.deform[i];
+                double deformAmount = ((overForce * overForce) / (lBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
+                double sign = Math.signum(dist - targetDist);
+                lBeams.restCosTheta[i] -= sign * deformAmount * invL1 * invL2;
+                // 限制余弦范围防止崩坏
+                if (lBeams.restCosTheta[i] > 1.0) lBeams.restCosTheta[i] = 1.0;
+                if (lBeams.restCosTheta[i] < -1.0) lBeams.restCosTheta[i] = -1.0;
+            }
+
+            // 7. 🚀 三点梯度力分配
+            // 各边的单位向量
+            double u13x = dx13 * invL1,   u13y = dy13 * invL1,   u13z = dz13 * invL1;
+            double u23x = dx23 * invL2,   u23y = dy23 * invL2,   u23z = dz23 * invL2;
+            double u12x = dx12 * invDist, u12y = dy12 * invDist, u12z = dz12 * invDist;
+
+            // 施加给 端点 1 的力 (注意是 + g1)
+            double f1x = totalForce * (u12x + g1 * u13x);
+            double f1y = totalForce * (u12y + g1 * u13y);
+            double f1z = totalForce * (u12z + g1 * u13z);
+
+            // 施加给 端点 2 的力 (注意是 + g2)
+            double f2x = totalForce * (-u12x + g2 * u23x);
+            double f2y = totalForce * (-u12y + g2 * u23y);
+            double f2z = totalForce * (-u12z + g2 * u23z);
+
+            // 施加给 拐点 3 的反作用力 (注意是全部取负！完美抵消 f1 和 f2 附加的额外分量)
+            double f3x = totalForce * (-g1 * u13x - g2 * u23x);
+            double f3y = totalForce * (-g1 * u13y - g2 * u23y);
+            double f3z = totalForce * (-g1 * u13z - g2 * u23z);
+
+            nodes.forceX[n1] += f1x; nodes.forceY[n1] += f1y; nodes.forceZ[n1] += f1z;
+            nodes.forceX[n2] += f2x; nodes.forceY[n2] += f2y; nodes.forceZ[n2] += f2z;
+            nodes.forceX[n3] += f3x; nodes.forceY[n3] += f3y; nodes.forceZ[n3] += f3z;
         }
 
         // ==========================================

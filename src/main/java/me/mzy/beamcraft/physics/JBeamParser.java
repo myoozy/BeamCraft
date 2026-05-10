@@ -261,6 +261,7 @@ public class JBeamParser {
                     double inlineDampFast = currentDampFast;
                     double inlineDampRebound = currentDampRebound;
                     double inlineDampReboundFast = currentDampReboundFast;
+                    String inlineId3 = null;
 
                     // Apply inline properties from the end of the row
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
@@ -295,12 +296,15 @@ public class JBeamParser {
                             else if (bt.equals("|HYDRO")) inlineType = BeamContainer.BEAM_HYDRO;
                             else if (bt.equals("|ANISOTROPIC")) inlineType = BeamContainer.BEAM_ANISOTROPIC;
                         }
+
+                        inlineId3 = getStringSafe(inline, "id3:", null);
                     }
 
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
+                    String id3 = inlineId3;
 
-                    vehicle.addBeam(inlineType, id1, id2,
+                    vehicle.addBeam(inlineType, id1, id2, id3,
                             inlineSpring, inlineDamp,
                             inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,

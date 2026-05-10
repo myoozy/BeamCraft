@@ -121,10 +121,14 @@ public class JBeamPressureWheelsParser {
                 double wheelSideBeamDampExpansion = getVal("wheelSideBeamDampExpansion", 30);
                 double wheelSideBeamDeform = getVal("wheelSideBeamDeform", 11000);
                 double wheelSideBeamStrength = getVal("wheelSideBeamStrength", 15000);
+                double wheelSideReinfBeamSpring = getVal("wheelSideReinfBeamSpring", 15000);
+                double wheelSideReinfBeamDamp = getVal("wheelSideReinfBeamDamp", 30);
+                double wheelSideReinfBeamSpringExpansion = getVal("wheelSideReinfBeamSpringExpansion", 281000);
+                double wheelSideReinfBeamDampExpansion = getVal("wheelSideReinfBeamDampExpansion", 30);
                 double wheelReinfBeamSpring = getFirstVal("wheelReinfBeamSpring", "wheelTreadReinfBeamSpring", 120000);
                 double wheelReinfBeamDamp = getFirstVal("wheelReinfBeamDamp", "wheelTreadReinfBeamDamp", 40);
-                double wheelReinfBeamDeform = getVal("wheelReinfBeamDeform", 0);
-                double wheelReinfBeamStrength = getVal("wheelReinfBeamStrength", 0);
+                double wheelReinfBeamDeform = getVal("wheelReinfBeamDeform", 220000);
+                double wheelReinfBeamStrength = getVal("wheelReinfBeamStrength", PhysicsWorld.KINDA_BIG_NUMBER);
                 double wheelTreadBeamSpring = getVal("wheelTreadBeamSpring", 50000);
                 double wheelTreadBeamDamp = getVal("wheelTreadBeamDamp", 50);
                 double wheelTreadBeamDeform = getVal("wheelTreadBeamDeform", 10000);
@@ -137,11 +141,11 @@ public class JBeamPressureWheelsParser {
                 double wheelPeripheryBeamStrength = getVal("wheelPeripheryBeamStrength", 40000);
                 double wheelPeripheryReinfBeamSpring = getVal("wheelPeripheryReinfBeamSpring", 95000);
                 double wheelPeripheryReinfBeamDamp = getVal("wheelPeripheryReinfBeamDamp", 23);
-                boolean enableTireReinBeams = getBool("enableTireReinBeams", false);
-                boolean enableTireBeams = getBool("enableTireBeams", false);
-                boolean enableTireSideReinBeams = getBool("enableTireSideReinBeams", false);
-                boolean enableTreadReinBeams = getBool("enableTreadReinBeams", false);
-                boolean enableTirePeripheryReinBeams = getBool("enableTirePeripheryReinBeams", false);
+                boolean enableTireReinfBeams = getBool("enableTireReinfBeams", true);
+                boolean enableTireLBeams = getBool("enableTireLBeams", true);
+                boolean enableTireSideReinfBeams = getBool("enableTireSideReinfBeams", true);
+                boolean enableTreadReinfBeams = getBool("enableTreadReinfBeams", true);
+                boolean enableTirePeripheryReinfBeams = getBool("enableTirePeripheryReinfBeams", true);
                 boolean enableTireSupportBeams = getBool("enableTireSupportBeams", false);
                 double tireSupportBeamSpring = getVal("tireSupportBeamSpring", 0);
                 double tireSupportBeamDamp = getVal("tireSupportBeamDamp", 0);
@@ -205,20 +209,57 @@ public class JBeamPressureWheelsParser {
                 // 简化车辆专用
                 double hubRadiusSimple = getVal("hubRadiusSimple", -1);
 
-                // ========== 调用原有生成方法（参数不变） ==========
-                vehicle.wheels.generateHub(wheelName, n1, n2, nodeS, nodeArm, wheelDir, numRays,
-                        hubRadius, hubWidth, wheelOffset, hubNodeWeight, hubFrictionCoef,
+                vehicle.wheels.generateHub(
+                        wheelName, n1, n2, nodeS, nodeArm, wheelDir, numRays,
+                        hubRadius, hubWidth, wheelOffset,
+                        hubNodeWeight, hubFrictionCoef,
+                        hubBeamSpring, hubBeamDamp, hubBeamDeform, hubBeamStrength,
                         hubTreadBeamSpring, hubTreadBeamDamp,
                         hubPeripheryBeamSpring, hubPeripheryBeamDamp,
-                        hubSideBeamSpring, hubSideBeamDamp);
+                        hubSideBeamSpring, hubSideBeamDamp,
+                        hubReinfBeamSpring, hubReinfBeamDamp,
+                        hubTriangleCollision, hubSide1TriangleCollision, hubSide2TriangleCollision,
+                        hubNodeMaterial,
+                        enableHubcaps, hubcapBreakGroup, hubcapGroup,
+                        hubcapCollision, hubcapSelfCollision, enableExtraHubcapBeams,
+                        hubcapOffset, hubcapWidth, hubcapRadius,
+                        hubcapBeamSpring, hubcapBeamDamp, hubcapBeamDeform, hubcapBeamStrength,
+                        hubcapAttachBeamSpring, hubcapAttachBeamDamp, hubcapAttachBeamDeform, hubcapAttachBeamStrength,
+                        hubcapSupportBeamDeform, hubcapSupportBeamStrength,
+                        hubcapNodeWeight, hubcapCenterNodeWeight, hubcapNodeMaterial, hubcapFrictionCoef,
+                        hubRadiusSimple
+                );
 
                 if (hasTire) {
-                    vehicle.wheels.generateTire(wheelName, n1, n2, wheelDir, numRays,
-                            radius, tireWidth, wheelOffset, tireNodeWeight, tireFrictionCoef, pressurePSI,
-                            wheelTreadBeamSpring, wheelTreadBeamDamp,
-                            wheelPeripheryBeamSpring, wheelPeripheryBeamDamp,
-                            wheelSideBeamSpring, wheelSideBeamDamp,
-                            wheelReinfBeamSpring, wheelReinfBeamDamp);
+                    vehicle.wheels.generateTire(
+                            wheelName, n1, n2, wheelDir, numRays,
+                            radius, tireWidth, wheelOffset,
+                            tireNodeWeight, tireFrictionCoef, pressurePSI,
+                            slidingFrictionCoef, stribeckVelMult, stribeckExponent,
+                            treadCoef, noLoadCoef, loadSensitivitySlope, fullLoadCoef,
+                            softnessCoef, maxPressurePSI,
+                            dragCoef, skinDragCoef,
+                            wheelTreadBeamSpring, wheelTreadBeamDamp, wheelTreadBeamDeform, wheelTreadBeamStrength,
+                            wheelPeripheryBeamSpring, wheelPeripheryBeamDamp, wheelPeripheryBeamDeform, wheelPeripheryBeamStrength,
+                            wheelSideBeamSpring, wheelSideBeamDamp, wheelSideBeamSpringExpansion, wheelSideBeamDampExpansion,
+                            wheelSideBeamDeform, wheelSideBeamStrength,
+                            wheelReinfBeamSpring, wheelReinfBeamDamp, wheelReinfBeamDeform, wheelReinfBeamStrength,
+                            wheelTreadReinfBeamSpring, wheelTreadReinfBeamDamp,
+                            wheelPeripheryReinfBeamSpring, wheelPeripheryReinfBeamDamp,
+                            wheelSideReinfBeamSpring, wheelSideReinfBeamDamp, wheelSideReinfBeamSpringExpansion, wheelSideReinfBeamDampExpansion,
+                            enableTireLBeams, enableTireReinfBeams, enableTireSideReinfBeams,
+                            enableTreadReinfBeams, enableTirePeripheryReinfBeams, enableTireSupportBeams,
+                            tireSupportBeamSpring, tireSupportBeamDamp,
+                            triangleCollision, treadTriangleCollision, side1TriangleCollision, side2TriangleCollision,
+                            nodeMaterial,
+                            brakeTorque, parkingTorque, brakeSpring,
+                            enableBrakeThermals, brakeDiameter, brakeMass,
+                            brakeType, rotorMaterial, brakeVentingCoef, padMaterial,
+                            brakeInputSplit, brakeSplitCoef,
+                            squealCoefNatural, squealCoefLowSpeed, squealCoefGlazing,
+                            enableABS, absSlipRatioTarget, absHz,
+                            brakePressureInDelay, brakePressureOutDelay
+                    );
                 }
             }
         }
@@ -230,6 +271,8 @@ public class JBeamPressureWheelsParser {
         if (!activeConfig.containsKey(key)) return def;
         String val = activeConfig.get(key);
         if (val.contains("$=")) {
+            if (!globalVariables.containsKey("tirepressure_F")) globalVariables.put("tirepressure_F", 30.0);
+            if (!globalVariables.containsKey("tirepressure_R")) globalVariables.put("tirepressure_R", 30.0);
             Double parsed = evaluateBeamNGExpression(val, globalVariables);
             return parsed != null ? parsed : def;
         }

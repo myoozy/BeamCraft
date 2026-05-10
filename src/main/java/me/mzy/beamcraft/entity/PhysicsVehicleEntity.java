@@ -25,7 +25,7 @@ public class PhysicsVehicleEntity extends Entity {
         // 注意：这里不要直接 new SoftBodyVehicle，等初始化时再 new
     }
 
-    // 【你自己的初始化方法】当你在游戏里用代码/物品生成车时，手动调用这个
+    // 当在游戏里用代码/物品生成车时，手动调用这个
     public void initializeVehicle(String rootPartName, String pcFileName) {
         this.rootPartName = rootPartName;
         this.pcFileName = pcFileName;
@@ -41,7 +41,6 @@ public class PhysicsVehicleEntity extends Entity {
             // 确保绝不重复添加SoftBody到PhysicsWorld
             BeamCraft.PHYSICS_WORLD.removeVehicle(this.softBody);
 
-            // 为这辆车创建一次性的临时图纸库和配置表
             // Parts Registry: The key is the part name (e.g., “pickup_frame”), and the value is the corresponding JSON object.
             java.util.Map<String, com.google.gson.JsonObject> localRegistry = new java.util.HashMap<>();
             // Player configuration: “Key” is the slot name, and “Value” is the name of the selected part.
@@ -64,9 +63,12 @@ public class PhysicsVehicleEntity extends Entity {
             BeamCraft.PHYSICS_WORLD.addVehicle(this.softBody);
 
             int beamsCount = softBody.normalBeams.count + softBody.supportBeams.count + softBody.boundedBeams.count;
-            BeamCraft.LOGGER.info("Physics Vehicle assembled: nodes = " + softBody.nodes.count + " | beams = " + beamsCount + " | triangles = " + softBody.triangles.count + " | torsion bars = " + softBody.torsionbars.count);
-
-            // 方法结束时，localRegistry 会被自动销毁，内存永不爆炸！
+            BeamCraft.LOGGER.info("Physics Vehicle assembled: " +
+                    "nodes = " + softBody.nodes.count +
+                    " | beams = " + beamsCount +
+                    " | triangles = " + softBody.triangles.count +
+                    " | torsion bars = " + softBody.torsionbars.count
+            );
         }
     }
 
@@ -100,9 +102,9 @@ public class PhysicsVehicleEntity extends Entity {
     @Override
     public void setPitch(float pitch) {
         super.setPitch(pitch);
-        if (this.softBody != null) {
-            softBody.nodes.rotateNodes(0, pitch, 0);
-        }
+        //if (this.softBody != null) {
+        //    softBody.nodes.rotateNodes(0, pitch, 0);
+        //}
     }
 
     @Override

@@ -28,6 +28,7 @@ public class BeamCraftClient implements ClientModInitializer {
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
+	public static double[] lastPhysicsMsDetail = new double[9];
 
 	@Override
 	public void onInitializeClient() {
@@ -66,7 +67,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			// 统一执行物理世界所有车辆的更新
 			if (!world.vehicles.isEmpty()) {
 				long t1 = System.nanoTime();
-				world.step(client.world, DELTA_TIME);
+				world.step(client.world, DELTA_TIME, lastPhysicsMsDetail);
 				long t2 = System.nanoTime();
 
 				lastPhysicsMs = (t2 - t1) / 1_000_000.0;
@@ -79,11 +80,40 @@ public class BeamCraftClient implements ClientModInitializer {
 			if (client.options.hudHidden) return; // 如果按了 F1 隐藏界面，就不画
 
 			String physicsStepText = String.format("BeamCraft Physics: %.2f ms", lastPhysicsMs);
+			String[] lines = {
+					String.format("mcWorldScan: %.2f ms", lastPhysicsMsDetail[1]),
+					String.format("internalForce: %.2f ms", lastPhysicsMsDetail[2]),
+					String.format("globalSAP: %.2f ms", lastPhysicsMsDetail[3]),
+					String.format("dyeCollision: %.2f ms", lastPhysicsMsDetail[4]),
+					String.format("softCollision: %.2f ms", lastPhysicsMsDetail[5]),
+					String.format("mcCollision: %.2f ms", lastPhysicsMsDetail[6]),
+					String.format("postUpdate: %.2f ms", lastPhysicsMsDetail[7]),
+					String.format("moveEntity: %.2f ms", lastPhysicsMsDetail[8])
+			};
 
-			// 耗时超过 10ms 变红警告，否则亮绿
 			int color = (lastPhysicsMs > 10.0) ? 0xFF0000 : 0x00FF00;
 
-			drawContext.drawTextWithShadow(client.textRenderer, physicsStepText, 10, 10, color);
+			// 标题
+			drawContext.drawTextWithShadow(
+					client.textRenderer,
+					physicsStepText,
+					10,
+					10,
+					color
+			);
+
+			// 逐行绘制 detail
+			int startY = 25;
+
+			for (int i = 0; i < lines.length; i++) {
+				drawContext.drawTextWithShadow(
+						client.textRenderer,
+						lines[i],
+						10,
+						startY + i * 10,
+						color
+				);
+			}
 		});
 
 		// 3. 渲染循环 (遍历所有车，并将局部坐标叠加上实体坐标)
@@ -181,6 +211,30 @@ public class BeamCraftClient implements ClientModInitializer {
 							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
 							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
 						} else if (vehicle.boundedBeams.broken[i]) {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
+						} else {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(0, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(0, 255, 0, 255).normal(0, 1, 0);
+						}
+					}
+
+					// === 3. 渲染LBeam===
+					for (int i = 0; i < vehicle.lBeams.count; i++) {
+						int n1 = vehicle.lBeams.node1[i];
+						int n2 = vehicle.lBeams.node2[i];
+
+						float x1 = (float) (vehicle.nodes.posX[n1] + eX);
+						float y1 = (float) (vehicle.nodes.posY[n1] + eY);
+						float z1 = (float) (vehicle.nodes.posZ[n1] + eZ);
+						float x2 = (float) (vehicle.nodes.posX[n2] + eX);
+						float y2 = (float) (vehicle.nodes.posY[n2] + eY);
+						float z2 = (float) (vehicle.nodes.posZ[n2] + eZ);
+
+						if (vehicle.lBeams.restCosTheta[i] != vehicle.lBeams.targetCosTheta[i]) {
+							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 255, 0, 255).normal(0, 1, 0);
+							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 255, 0, 255).normal(0, 1, 0);
+						} else if (vehicle.lBeams.broken[i]) {
 							beamBuffer.vertex(matrix, x1, y1, z1).color(255, 0, 0, 255).normal(0, 1, 0);
 							beamBuffer.vertex(matrix, x2, y2, z2).color(255, 0, 0, 255).normal(0, 1, 0);
 						} else {
