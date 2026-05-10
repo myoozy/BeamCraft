@@ -54,7 +54,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			// 检测 G 键 (调试功能：瞬间重置所有现存车辆，并传送到玩家头顶)
 			boolean isG = InputUtil.isKeyPressed(client.getWindow().getHandle(), GLFW.GLFW_KEY_G);
 			if (isG && !gWasPressed) {
-				double HEIGHT_OFFSET = 2;
+				double HEIGHT_OFFSET = 1;
 				for (SoftBodyVehicle vehicle : world.vehicles) {
 					vehicle.reset();
 					// 把 MC 实体强行瞬移过来
