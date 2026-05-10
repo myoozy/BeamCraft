@@ -18,6 +18,7 @@ public class PhysicsWorld {
     public static final double GRAVITY = -9.81;
     public static final double SOUND_SPEED = 340;
     public static final double BLOCK_REBOUND = 0.0;
+    public static final double BLOCK_FRICTION = 1.0;
     public static final double METAL_PLASTIC_FLOW_RATE = 10.0;
     public static final double KINDA_SMALL_NUMBER = 1e-8;
     public static final double KINDA_BIG_NUMBER = 1e8;
@@ -192,7 +193,7 @@ public class PhysicsWorld {
     /**
      * 智能动态多线程调度器：根据批次大小动态决定是否开启并行
      */
-    private void solveCachedContacts(double subDt) {
+    private void solveCachedContacts(double dt) {
         // 动态阈值：你可以根据测试结果调整。
         final int PARALLEL_THRESHOLD = 1024;
 
@@ -207,13 +208,13 @@ public class PhysicsWorld {
                 // 【单线程快车道】点数太少，唤醒线程池反而亏本，直接主线程纯数学速通！
                 for (int idx = 0; idx < currentBatchSize; idx++) {
                     int contactId = collisionManager.batches[batchIndex][idx];
-                    resolveSingleContact(contactId, subDt);
+                    resolveSingleContact(contactId, dt);
                 }
             } else {
                 // 【多核重火力网】点数巨大（严重连环相撞），放开枷锁，多线程火力全开！
                 java.util.stream.IntStream.range(0, currentBatchSize).parallel().forEach(idx -> {
                     int contactId = collisionManager.batches[batchIndex][idx];
-                    resolveSingleContact(contactId, subDt);
+                    resolveSingleContact(contactId, dt);
                 });
             }
         }
@@ -222,12 +223,13 @@ public class PhysicsWorld {
     /**
      * 被提取出来的纯数学 PBD 解算器
      */
-    private void resolveSingleContact(int contactId, double subDt) {
+    private void resolveSingleContact(int contactId, double dt) {
         // 物理参数（可根据车辆材质调整）
         double THICKNESS = 0.01;
         double PBD_RELAXATION = 1;
         double MAX_POS_PUSH = 0.1;
         double RESTITUTION = 0.0;
+        double invDt = 1.0 / dt;
 
         SoftBodyVehicle nVeh = collisionManager.contactNodeVeh[contactId];
         int nHit = collisionManager.contactNodeId[contactId];
@@ -288,7 +290,7 @@ public class PhysicsWorld {
                 (nVeh.nodes.velY[nHit] - triVy) * ny +
                 (nVeh.nodes.velZ[nHit] - triVz) * nz;
 
-        double distPrev = distCurr - approxRelV * subDt;
+        double distPrev = distCurr - approxRelV * dt;
 
         // 3. 确定碰撞侧并计算穿透
         double pushDir = (distPrev > 0) ? 1.0 : -1.0;
@@ -318,11 +320,12 @@ public class PhysicsWorld {
 
         double wTotal = (1.0 / massNode) + (wA*wA / massA) + (wB*wB / massB) + (wC*wC / massC);
         if (wTotal < 1e-8) return;
+        double invWTotal = 1.0 / wTotal;
 
         // 5. 位置修正 (PBD 硬约束)
         double pushAmount = penetration * PBD_RELAXATION;
         if (pushAmount > MAX_POS_PUSH) pushAmount = MAX_POS_PUSH;
-        double posImpulse = pushAmount / wTotal;
+        double posImpulse = pushAmount * invWTotal;
         double dpX = posImpulse * effNx;
         double dpY = posImpulse * effNy;
         double dpZ = posImpulse * effNz;
@@ -344,7 +347,7 @@ public class PhysicsWorld {
         // 6.1 法向弹性冲量
         if (approachSpeed < 0) {
             double deltaRelVel = -(1 + RESTITUTION) * approachSpeed;
-            jn = deltaRelVel / wTotal;
+            jn = deltaRelVel * invWTotal;
             dvX += jn * effNx;
             dvY += jn * effNy;
             dvZ += jn * effNz;
@@ -354,16 +357,11 @@ public class PhysicsWorld {
         // 即便速度为 0 (静止靠在斜坡上)，如果有位置推挤，说明重力在挤压，也要产生摩擦力支撑！
         double equivalentJn = jn;
         if (penetration > 0 && approachSpeed >= -1e-4) {
-            equivalentJn += (pushAmount / subDt) / wTotal;
+            equivalentJn += (pushAmount * invDt) * invWTotal;
         }
 
-        // 6.3 库仑摩擦力模型 (Static vs Kinetic)
+        // 6.3 库仑摩擦力模型 (基于重心坐标插值与乘积混合法则)
         if (equivalentJn > 0) {
-            // 静摩擦系数
-            double mu_s = 0.25 * (nVeh.nodes.friction[nHit] + tVeh.nodes.friction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
-
-            // 滑动摩擦系数
-            double mu_k = 0.25 * (nVeh.nodes.slidingFriction[nHit] + tVeh.nodes.slidingFriction[nA] + tVeh.nodes.friction[nB] + tVeh.nodes.friction[nC]);
 
             // 计算切向相对速度
             double tangentVx = relVx - (approachSpeed * effNx);
@@ -372,9 +370,63 @@ public class PhysicsWorld {
 
             double vtLen = Math.sqrt(tangentVx * tangentVx + tangentVy * tangentVy + tangentVz * tangentVz);
 
+            // 1. 🚀 利用现成的重心坐标 (wA, wB, wC) 精准插值出目标三角形表面的基础摩擦力
+            double tri_mu_s = wA * tVeh.nodes.friction[nA] + wB * tVeh.nodes.friction[nB] + wC * tVeh.nodes.friction[nC];
+            double tri_mu_k = wA * tVeh.nodes.slidingFriction[nA] + wB * tVeh.nodes.slidingFriction[nB] + wC * tVeh.nodes.slidingFriction[nC];
+
+            double mu_s;
+            double mu_k;
+
+            // 2. 🚀 O(1) 检查发生碰撞的节点是否为轮胎
+            int wIdx = nVeh.nodes.wheelId[nHit];
+
+            if (wIdx != -1) {
+                // ==========================================================
+                // 🚗 轮胎节点：启用 BeamNG 高级载荷敏感与速度过渡乘子模型
+                // ==========================================================
+                double staticBase  = nVeh.wheels.frictionCoef[wIdx];
+                double slidingBase = nVeh.wheels.slidingFrictionCoef[wIdx];
+                double noLoad      = nVeh.wheels.noLoadCoef[wIdx];
+                double fullLoad    = nVeh.wheels.fullLoadCoef[wIdx];
+                double slope       = nVeh.wheels.loadSensitivitySlope[wIdx];
+
+                // --- A. 将当前累积的等效冲量转化为物理载荷力 (牛顿) ---
+                double equivalentLoadN = equivalentJn * invDt;
+
+                // --- B. 计算载荷敏感度衰减 (Load Sensitivity) ---
+                double loadFactor = noLoad - (slope * equivalentLoadN);
+                if (loadFactor < fullLoad) loadFactor = fullLoad; // 触底保护
+
+                // --- C. 斯特里贝克速度过渡曲线 (Stribeck Curve) ---
+                double stribeckVel = nVeh.wheels.stribeckVelMult[wIdx];
+                double exponent    = nVeh.wheels.stribeckExponent[wIdx];
+
+                double speedFactor = 1.0;
+                if (vtLen > 1e-4 && stribeckVel > 1e-4) {
+                    double velRatio = vtLen / stribeckVel;
+                    speedFactor = Math.exp(-Math.pow(velRatio, exponent));
+                }
+
+                // 动态滑动乘子插值
+                double dynamicMuMultiplier = slidingBase + (staticBase - slidingBase) * speedFactor;
+                double treadCoef = nVeh.wheels.treadCoef[wIdx];
+
+                // 🚀 核心物理混合：轮胎乘子 × 目标表面插值基础值
+                mu_s = (staticBase * loadFactor * treadCoef)  * tri_mu_s;
+                mu_k = (dynamicMuMultiplier * loadFactor * treadCoef) * tri_mu_k;
+
+            } else {
+                // ==========================================================
+                // 🛡️ 普通车身节点：采用标准乘积法则兜底
+                // ==========================================================
+                // 普通金属/塑料撞击，同样严格遵循乘积法则而不是算术平均
+                mu_s = nVeh.nodes.friction[nHit] * tri_mu_s;
+                mu_k = nVeh.nodes.slidingFriction[nHit] * tri_mu_k;
+            }
+
             if (vtLen > 1e-8) {
                 // 完全抵消切向相对速度所需的冲量
-                double jtMax = vtLen / wTotal;
+                double jtMax = vtLen * invWTotal;
 
                 double frictionImpulse;
                 if (jtMax <= mu_s * equivalentJn) {
@@ -386,9 +438,10 @@ public class PhysicsWorld {
                 }
 
                 // 切向单位向量
-                double tDirX = tangentVx / vtLen;
-                double tDirY = tangentVy / vtLen;
-                double tDirZ = tangentVz / vtLen;
+                double invVtLen = 1.0 / vtLen;
+                double tDirX = tangentVx * invVtLen;
+                double tDirY = tangentVy * invVtLen;
+                double tDirZ = tangentVz * invVtLen;
 
                 // 施加摩擦冲量
                 dvX -= frictionImpulse * tDirX;

@@ -22,12 +22,18 @@ public class WheelContainer {
     public double[] hubRadius = new double[INIT_WHEEL_CAP];
     public double[] tireRadius = new double[INIT_WHEEL_CAP];
     public double[] tireWidth = new double[INIT_WHEEL_CAP];
-    public double[] frictionCoef = new double[INIT_WHEEL_CAP];
     public double[] pressurePSI = new double[INIT_WHEEL_CAP];
 
-    //double stribeckVelMult, double stribeckExponent,
-    //double treadCoef, double noLoadCoef, double loadSensitivitySlope, double fullLoadCoef,
-    //double softnessCoef, double maxPressurePSI,
+    // 轮胎节点摩擦参数
+    public double[] frictionCoef         = new double[INIT_WHEEL_CAP];
+    public double[] slidingFrictionCoef  = new double[INIT_WHEEL_CAP];
+    public double[] stribeckVelMult      = new double[INIT_WHEEL_CAP];
+    public double[] stribeckExponent     = new double[INIT_WHEEL_CAP];
+    public double[] treadCoef            = new double[INIT_WHEEL_CAP];
+    public double[] noLoadCoef           = new double[INIT_WHEEL_CAP];
+    public double[] loadSensitivitySlope = new double[INIT_WHEEL_CAP];
+    public double[] fullLoadCoef         = new double[INIT_WHEEL_CAP];
+    public double[] softnessCoef         = new double[INIT_WHEEL_CAP];
 
     // 🚀 一维展平数组：内存地址 100% 连续
     // 寻址方式： index = (wheelIndex * MAX_RAYS) + rayIndex
@@ -227,8 +233,17 @@ public class WheelContainer {
 
         tireRadius[wIdx] = radius;
         tireWidth[wIdx] = width;
-        this.frictionCoef[wIdx] = frictionCoef;
         this.pressurePSI[wIdx] = pressurePSI;
+
+        this.frictionCoef[wIdx] = frictionCoef;
+        this.slidingFrictionCoef[wIdx] = slidingFrictionCoef;
+        this.stribeckVelMult[wIdx] = stribeckVelMult;
+        this.stribeckExponent[wIdx] = stribeckExponent;
+        this.treadCoef[wIdx] = treadCoef;
+        this.noLoadCoef[wIdx] = noLoadCoef;
+        this.loadSensitivitySlope[wIdx] = loadSensitivitySlope;
+        this.fullLoadCoef[wIdx] = fullLoadCoef;
+        this.softnessCoef[wIdx] = softnessCoef;
 
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
@@ -475,8 +490,17 @@ public class WheelContainer {
             hubRadius = Utility.expand(hubRadius, newSize);
             tireRadius = Utility.expand(tireRadius, newSize);
             tireWidth = Utility.expand(tireWidth, newSize);
-            frictionCoef = Utility.expand(frictionCoef, newSize);
             pressurePSI = Utility.expand(pressurePSI, newSize);
+
+            frictionCoef = Utility.expand(frictionCoef, newSize);
+            slidingFrictionCoef = Utility.expand(slidingFrictionCoef, newSize);
+            stribeckVelMult = Utility.expand(stribeckVelMult, newSize);
+            stribeckExponent = Utility.expand(stribeckExponent, newSize);
+            treadCoef = Utility.expand(treadCoef, newSize);
+            noLoadCoef = Utility.expand(noLoadCoef, newSize);
+            loadSensitivitySlope = Utility.expand(loadSensitivitySlope, newSize);
+            fullLoadCoef = Utility.expand(fullLoadCoef, newSize);
+            softnessCoef = Utility.expand(softnessCoef, newSize);
 
             tireTriangleIdxStart = Utility.expand(tireTriangleIdxStart, newSize);
             tireTriangleIdxEnd = Utility.expand(tireTriangleIdxEnd, newSize);

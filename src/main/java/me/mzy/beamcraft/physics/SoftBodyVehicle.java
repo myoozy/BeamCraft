@@ -1347,42 +1347,179 @@ public class SoftBodyVehicle {
                 boolean hitY = snapshot.isSolid(oldWorldX, worldY, oldWorldZ);
                 boolean hitZ = snapshot.isSolid(oldWorldX, oldWorldY, worldZ);
 
-                double friction = Math.max(0, 1.0 - nodes.friction[i]);
+                if (hitY || hitX || hitZ) {
+                    double invDt = 1.0 / dt;
 
-                // 撞了哪面墙，就把坐标回退，并彻底削减那个方向的速度！
-                if (hitY) {
-                    nodes.velY[i] *= -PhysicsWorld.BLOCK_REBOUND;
+                    // TODO: 从缓存中读取动态的摩擦系数和回弹系数？但是回弹系数即便是0也很弹，因为beam有弹性。
+                    double reboundCoef = PhysicsWorld.BLOCK_REBOUND;
+                    double blockFriction = PhysicsWorld.BLOCK_FRICTION;
 
-                    // 🚀 核心修复：PBD 位置级摩擦力锁！直接消除水平蠕动漂移！
-                    double creepX = nodes.posX[i] - oldLocalX;
-                    double creepZ = nodes.posZ[i] - oldLocalZ;
-                    nodes.posX[i] = oldLocalX + creepX * friction;
-                    nodes.posZ[i] = oldLocalZ + creepZ * friction;
+                    // 提取常驻重力在一小段时间内向下施加的冲量大小标量
+                    double gravityImpulse = nodes.mass[i] * Math.abs(PhysicsWorld.GRAVITY) * dt;
 
-                    nodes.velX[i] *= friction; nodes.velZ[i] *= friction;
-                    nodes.posY[i] = oldLocalY;
-                }
-                if (hitX) {
-                    nodes.velX[i] *= -PhysicsWorld.BLOCK_REBOUND;
+                    // 1. 🚀 无分支提取 3D 合成法向推挤向量 (天然兼容单面、双面棱边与三面内角接触)
+                    // 仅当该轴发生碰撞时，才计入位置修正量，利用三元运算符避免跳转开销
+                    double pushX = hitX ? Math.abs(nodes.posX[i] - oldLocalX) : 0.0;
+                    double pushY = hitY ? Math.abs(nodes.posY[i] - oldLocalY) : 0.0;
+                    double pushZ = hitZ ? Math.abs(nodes.posZ[i] - oldLocalZ) : 0.0;
 
-                    double creepY = nodes.posY[i] - oldLocalY;
-                    double creepZ = nodes.posZ[i] - oldLocalZ;
-                    nodes.posY[i] = oldLocalY + creepY * friction;
-                    nodes.posZ[i] = oldLocalZ + creepZ * friction;
+                    // 真实的立体合成法向挤压距离 (欧几里得长度)
+                    double totalNormalPush = Math.sqrt(pushX*pushX + pushY*pushY + pushZ*pushZ);
 
-                    nodes.velY[i] *= friction; nodes.velZ[i] *= friction;
-                    nodes.posX[i] = oldLocalX;
-                }
-                if (hitZ) {
-                    nodes.velZ[i] *= -PhysicsWorld.BLOCK_REBOUND;
+                    // 2. 🚀 计算统一的等效立体载荷力 Fn (牛顿)
+                    double equivalentLoadN = (nodes.mass[i] * totalNormalPush) * (invDt * invDt);
+                    double minGravityLoad = nodes.mass[i] * Math.abs(PhysicsWorld.GRAVITY);
+                    if (equivalentLoadN < minGravityLoad) equivalentLoadN = minGravityLoad;
 
-                    double creepX = nodes.posX[i] - oldLocalX;
-                    double creepY = nodes.posY[i] - oldLocalY;
-                    nodes.posX[i] = oldLocalX + creepX * friction;
-                    nodes.posY[i] = oldLocalY + creepY * friction;
+                    // 提取基础摩擦
+                    double mu_s = nodes.friction[i] * blockFriction;
+                    double mu_k = nodes.slidingFriction[i] * blockFriction;
 
-                    nodes.velX[i] *= friction; nodes.velY[i] *= friction;
-                    nodes.posZ[i] = oldLocalZ;
+                    // 3. 针对轮胎节点计算统一的高级载荷衰减与 Stribeck 乘子
+                    int wIdx = nodes.wheelId[i];
+                    if (wIdx != -1) {
+                        double staticBase  = wheels.frictionCoef[wIdx];
+                        double slidingBase = wheels.slidingFrictionCoef[wIdx];
+                        double noLoad      = wheels.noLoadCoef[wIdx];
+                        double fullLoad    = wheels.fullLoadCoef[wIdx];
+                        double slope       = wheels.loadSensitivitySlope[wIdx];
+                        double treadCoef   = wheels.treadCoef[wIdx];
+
+                        // 载荷衰减 (此时使用完美兼容多面的 equivalentLoadN)
+                        double loadFactor = noLoad - (slope * equivalentLoadN);
+                        if (loadFactor < fullLoad) loadFactor = fullLoad;
+
+                        // 计算 3D 真实的切向滑移速率 (剔除已碰撞轴向的法向分量)
+                        // 哪面墙撞了，那个轴的速度就是法向分量，剩余轴的速度平方和即为切向滑移速率
+                        double vx = nodes.velX[i], vy = nodes.velY[i], vz = nodes.velZ[i];
+                        double tVelSq = (hitX ? 0 : vx*vx) + (hitY ? 0 : vy*vy) + (hitZ ? 0 : vz*vz);
+                        double vtLen = Math.sqrt(tVelSq);
+
+                        // Stribeck 曲线过渡
+                        double stribeckVel = wheels.stribeckVelMult[wIdx];
+                        double exponent    = wheels.stribeckExponent[wIdx];
+                        double speedFactor = 1.0;
+                        if (vtLen > 1e-4 && stribeckVel > 1e-4) {
+                            double velRatio = vtLen / stribeckVel;
+                            speedFactor = Math.exp(-Math.pow(velRatio, exponent));
+                        }
+
+                        double dynamicMuMultiplier = slidingBase + (staticBase - slidingBase) * speedFactor;
+                        mu_s = (staticBase * loadFactor * treadCoef)  * blockFriction;
+                        mu_k = (dynamicMuMultiplier * loadFactor * treadCoef) * blockFriction;
+                    }
+
+                    // ==========================================================
+                    // 2. 🚀 物理精确映射：动量守恒与独立解耦衰减
+                    // ==========================================================
+
+                    if (hitY) {
+                        // 🚀 终极修正：真实的法向总冲量 = 反弹动量差值 + 重力压迫冲量
+                        // J = m * |v| * (1 + e) + m * |g| * dt
+                        double jn = nodes.mass[i] * Math.abs(nodes.velY[i]) * (1.0 + reboundCoef) + gravityImpulse;
+
+                        // 执行垂直反弹与位置回退
+                        nodes.velY[i] *= -reboundCoef;
+                        nodes.posY[i] = oldLocalY;
+
+                        // --- 解耦层 1：速度层真实冲量衰减 ---
+                        double vx = nodes.velX[i], vz = nodes.velZ[i];
+                        double vtLen = Math.sqrt(vx*vx + vz*vz);
+                        double jtReq = vtLen * nodes.mass[i]; // 完全制停所需的真实动量
+
+                        double velKeepRatio = 0.0;
+                        if (jtReq > 1e-8) {
+                            if (jtReq <= mu_s * jn) {
+                                nodes.velX[i] = 0.0; nodes.velZ[i] = 0.0; // 静摩擦咬死
+                            } else {
+                                // 动摩擦恒定阻力剥离
+                                double frictionImpulse = mu_k * jn;
+                                velKeepRatio = Math.max(0.0, 1.0 - (frictionImpulse / jtReq));
+                                nodes.velX[i] *= velKeepRatio;
+                                nodes.velZ[i] *= velKeepRatio;
+                            }
+                        }
+
+                        // --- 解耦层 2：PBD 几何位置层蠕动约束 ---
+                        // 位置的拉扯极限同样由当前接触面的库仑上限决定
+                        double creepX = nodes.posX[i] - oldLocalX, creepZ = nodes.posZ[i] - oldLocalZ;
+                        double creepLen = Math.sqrt(creepX*creepX + creepZ*creepZ);
+                        double posForceReq = (creepLen * nodes.mass[i]) * (invDt * invDt);
+
+                        if (posForceReq <= mu_s * (jn * invDt)) {
+                            // 几何位置完全锁死 (不发生蠕动)
+                            nodes.posX[i] = oldLocalX; nodes.posZ[i] = oldLocalZ;
+                        } else {
+                            // 发生微观打滑，位置蠕动按速度层相同的比例或动摩擦比例衰减
+                            // 采用 velKeepRatio 能够保证位置滑动与速度滑动在视觉上绝对同步
+                            nodes.posX[i] = oldLocalX + creepX * velKeepRatio;
+                            nodes.posZ[i] = oldLocalZ + creepZ * velKeepRatio;
+                        }
+                    }
+
+                    if (hitX) {
+                        double jn = nodes.mass[i] * Math.abs(nodes.velX[i]) * (1.0 + reboundCoef) + gravityImpulse;
+                        nodes.velX[i] *= -reboundCoef;
+                        nodes.posX[i] = oldLocalX;
+
+                        double vy = nodes.velY[i], vz = nodes.velZ[i];
+                        double vtLen = Math.sqrt(vy*vy + vz*vz);
+                        double jtReq = vtLen * nodes.mass[i];
+
+                        double velKeepRatio = 0.0;
+                        if (jtReq > 1e-8) {
+                            if (jtReq <= mu_s * jn) {
+                                nodes.velY[i] = 0.0; nodes.velZ[i] = 0.0;
+                            } else {
+                                velKeepRatio = Math.max(0.0, 1.0 - ((mu_k * jn) / jtReq));
+                                nodes.velY[i] *= velKeepRatio;
+                                nodes.velZ[i] *= velKeepRatio;
+                            }
+                        }
+
+                        double creepY = nodes.posY[i] - oldLocalY, creepZ = nodes.posZ[i] - oldLocalZ;
+                        double creepLen = Math.sqrt(creepY*creepY + creepZ*creepZ);
+                        double posForceReq = (creepLen * nodes.mass[i]) * (invDt * invDt);
+
+                        if (posForceReq <= mu_s * (jn * invDt)) {
+                            nodes.posY[i] = oldLocalY; nodes.posZ[i] = oldLocalZ;
+                        } else {
+                            nodes.posY[i] = oldLocalY + creepY * velKeepRatio;
+                            nodes.posZ[i] = oldLocalZ + creepZ * velKeepRatio;
+                        }
+                    }
+
+                    if (hitZ) {
+                        double jn = nodes.mass[i] * Math.abs(nodes.velZ[i]) * (1.0 + reboundCoef) + gravityImpulse;
+                        nodes.velZ[i] *= -reboundCoef;
+                        nodes.posZ[i] = oldLocalZ;
+
+                        double vx = nodes.velX[i], vy = nodes.velY[i];
+                        double vtLen = Math.sqrt(vx*vx + vy*vy);
+                        double jtReq = vtLen * nodes.mass[i];
+
+                        double velKeepRatio = 0.0;
+                        if (jtReq > 1e-8) {
+                            if (jtReq <= mu_s * jn) {
+                                nodes.velX[i] = 0.0; nodes.velY[i] = 0.0;
+                            } else {
+                                velKeepRatio = Math.max(0.0, 1.0 - ((mu_k * jn) / jtReq));
+                                nodes.velX[i] *= velKeepRatio;
+                                nodes.velY[i] *= velKeepRatio;
+                            }
+                        }
+
+                        double creepX = nodes.posX[i] - oldLocalX, creepY = nodes.posY[i] - oldLocalY;
+                        double creepLen = Math.sqrt(creepX*creepX + creepY*creepY);
+                        double posForceReq = (creepLen * nodes.mass[i]) * (invDt * invDt);
+
+                        if (posForceReq <= mu_s * (jn * invDt)) {
+                            nodes.posX[i] = oldLocalX; nodes.posY[i] = oldLocalY;
+                        } else {
+                            nodes.posX[i] = oldLocalX + creepX * velKeepRatio;
+                            nodes.posY[i] = oldLocalY + creepY * velKeepRatio;
+                        }
+                    }
                 }
             }
         }

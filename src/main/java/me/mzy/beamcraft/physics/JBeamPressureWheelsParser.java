@@ -96,7 +96,7 @@ public class JBeamPressureWheelsParser {
                 double slidingFrictionCoef = getVal("slidingFrictionCoeff", 1.0);
                 double stribeckVelMult = getVal("stribeckVelMult", 1.0);
                 double stribeckExponent = getVal("stribeckExponent", 1.75);
-                double treadCoef = getVal("treadCoeff", 0.7);
+                double treadCoef = getVal("treadCoeff", 1.0);
                 double noLoadCoef = getVal("noLoadCoeff", 1.28);
                 double loadSensitivitySlope = getVal("loadSensitivitySlope", 0.00019);
                 double fullLoadCoef = getVal("fullLoadCoeff", 0.4);
@@ -142,7 +142,7 @@ public class JBeamPressureWheelsParser {
                 double wheelPeripheryBeamStrength = getVal("wheelPeripheryBeamStrength", 40000);
                 double wheelPeripheryReinfBeamSpring = getVal("wheelPeripheryReinfBeamSpring", 95000);
                 double wheelPeripheryReinfBeamDamp = getVal("wheelPeripheryReinfBeamDamp", 23);
-                boolean enableTireReinfBeams = getBool("enableTireReinfBeams", true);
+                boolean enableTireReinfBeams = getBool("enableTireReinfBeams", false);
                 boolean enableTireLBeams = getBool("enableTireLBeams", true);
                 boolean enableTireSideReinfBeams = getBool("enableTireSideReinfBeams", true);
                 boolean enableTreadReinfBeams = getBool("enableTreadReinfBeams", true);
