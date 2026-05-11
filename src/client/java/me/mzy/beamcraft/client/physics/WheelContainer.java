@@ -76,7 +76,7 @@ public class WheelContainer {
             double hubReinfSpring, double hubReinfDamp,
             // --- 碰撞与材质 ---
             boolean hubTriCollision, boolean hubSide1TriCollision, boolean hubSide2TriCollision,
-            String hubNodeMaterial,
+            String hubNodeMaterial, String hubGroup,
             // --- 轮毂盖参数 (带 Hubcap 前缀) ---
             boolean enableHubcaps, String hubcapBreakGroup, String hubcapGroup,
             boolean hubcapCollision, boolean hubcapSelfCollision, boolean enableExtraHubcapBeams,
@@ -139,12 +139,12 @@ public class WheelContainer {
             // 生成物理节点
             vehicle.nodes.addNode(wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight,
                     frictionCoef, 0.0, partId,
-                    true, false, List.of(wheelName + "_hub_in"));
+                    true, false, List.of(hubGroup));
             hubInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
             vehicle.nodes.addNode(wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight,
                     frictionCoef, 0.0, partId,
-                    true, false, List.of(wheelName + "_hub_in"));
+                    true, false, List.of(hubGroup));
             hubOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
@@ -217,7 +217,7 @@ public class WheelContainer {
             double supportBeamSpring, double supportBeamDamp,
             // --- 碰撞与材质 ---
             boolean triCollision, boolean treadTriCollision, boolean side1TriCollision, boolean side2TriCollision,
-            String nodeMaterial,
+            String nodeMaterial, String group,
             // --- 刹车参数 (全部带 brake 前缀) ---
             double brakeTorque, double parkingTorque, double brakeSpring,
             boolean enableBrakeThermals, double brakeDiameter, double brakeMass,
@@ -285,12 +285,12 @@ public class WheelContainer {
 
             vehicle.nodes.addTireNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight,
                     frictionCoef, slidingFrictionCoef, partId,
-                    true, false, wIdx, List.of(wheelName + "_tire_in"));
+                    true, false, wIdx, List.of(group));
             tireInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
             vehicle.nodes.addTireNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight,
                     frictionCoef, slidingFrictionCoef, partId,
-                    true, false, wIdx, List.of(wheelName + "_tire_in"));
+                    true, false, wIdx, List.of(group));
             tireOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 

@@ -37,6 +37,8 @@ public class JBeamPressureWheelsParser {
                 if (row.size() < 5) continue;
 
                 String wheelName = row.get(0).getAsString();
+                String hubGroup = row.get(1).getAsString();
+                String group = row.get(2).getAsString();
                 Integer n1 = vehicle.nodes.nameToIndex.get(row.get(3).getAsString());
                 Integer n2 = vehicle.nodes.nameToIndex.get(row.get(4).getAsString());
                 if (n1 == null || n2 == null) continue;
@@ -220,7 +222,7 @@ public class JBeamPressureWheelsParser {
                         hubSideBeamSpring, hubSideBeamDamp,
                         hubReinfBeamSpring, hubReinfBeamDamp,
                         hubTriangleCollision, hubSide1TriangleCollision, hubSide2TriangleCollision,
-                        hubNodeMaterial,
+                        hubNodeMaterial, hubGroup,
                         enableHubcaps, hubcapBreakGroup, hubcapGroup,
                         hubcapCollision, hubcapSelfCollision, enableExtraHubcapBeams,
                         hubcapOffset, hubcapWidth, hubcapRadius,
@@ -253,7 +255,7 @@ public class JBeamPressureWheelsParser {
                             enableTreadReinfBeams, enableTirePeripheryReinfBeams, enableTireSupportBeams,
                             tireSupportBeamSpring, tireSupportBeamDamp,
                             triangleCollision, treadTriangleCollision, side1TriangleCollision, side2TriangleCollision,
-                            nodeMaterial,
+                            nodeMaterial, group,
                             brakeTorque, parkingTorque, brakeSpring,
                             enableBrakeThermals, brakeDiameter, brakeMass,
                             brakeType, rotorMaterial, brakeVentingCoef, padMaterial,
