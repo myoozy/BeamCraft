@@ -3,6 +3,7 @@ package me.mzy.beamcraft.physics;
 import me.mzy.beamcraft.utility.Utility;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class WheelContainer {
@@ -136,10 +137,14 @@ public class WheelContainer {
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
             // 生成物理节点
-            vehicle.nodes.addNode(wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight, frictionCoef, 0.0, partId, true, false);
+            vehicle.nodes.addNode(wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight,
+                    frictionCoef, 0.0, partId,
+                    true, false, List.of(wheelName + "_hub_in"));
             hubInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
-            vehicle.nodes.addNode(wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight, frictionCoef, 0.0, partId, true, false);
+            vehicle.nodes.addNode(wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight,
+                    frictionCoef, 0.0, partId,
+                    true, false, List.of(wheelName + "_hub_in"));
             hubOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
@@ -279,11 +284,13 @@ public class WheelContainer {
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
             vehicle.nodes.addTireNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight,
-                    frictionCoef, slidingFrictionCoef, partId, true, false, wIdx);
+                    frictionCoef, slidingFrictionCoef, partId,
+                    true, false, wIdx, List.of(wheelName + "_tire_in"));
             tireInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
             vehicle.nodes.addTireNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight,
-                    frictionCoef, slidingFrictionCoef, partId, true, false, wIdx);
+                    frictionCoef, slidingFrictionCoef, partId,
+                    true, false, wIdx, List.of(wheelName + "_tire_in"));
             tireOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
@@ -518,5 +525,10 @@ public class WheelContainer {
 
             System.out.println("⚠️ [WheelContainer] Resized to: " + newSize + " wheels, flat size: " + newFlatSize);
         }
+    }
+
+    public void clear() {
+        count = 0;
+        nameToIndex.clear();
     }
 }

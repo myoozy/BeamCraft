@@ -168,6 +168,7 @@ public class PhysicsWorld {
         vehicles.parallelStream().forEach(vehicle -> {
             vehicle.updateLocalCOMCache();
             vehicle.updateBeamPrecompression(dt);
+            vehicle.nodes.writeRenderBuffer();
         });
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;

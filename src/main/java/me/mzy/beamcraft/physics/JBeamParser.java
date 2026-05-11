@@ -56,6 +56,30 @@ public class JBeamParser {
         return el.getAsBoolean();
     }
 
+    /**
+     * 兼容 BeamNG 规范的通用 Group 提取器
+     * 支持读取纯字符串、字符串数组，并处理空字符串清空逻辑
+     */
+    public static java.util.List<String> parseGroups(JsonElement el) {
+        java.util.List<String> list = new java.util.ArrayList<>();
+        if (el == null || el.isJsonNull()) return list;
+
+        if (el.isJsonPrimitive()) {
+            String g = el.getAsString().trim();
+            if (!g.isEmpty()) {
+                list.add(g);
+            }
+            // 如果 g 刚好是 ""，直接返回空 list 实现清空逻辑
+        } else if (el.isJsonArray()) {
+            for (JsonElement item : el.getAsJsonArray()) {
+                if (item.isJsonPrimitive()) {
+                    String g = item.getAsString().trim();
+                    if (!g.isEmpty()) list.add(g);
+                }
+            }
+        }
+        return list;
+    }
 
     // --- 1. Node Parsing ---
     /**
@@ -71,6 +95,8 @@ public class JBeamParser {
         double currentSlidingFriction = -1;
         boolean currentCollision = true;
         boolean currentSelfCollision = false;
+
+        java.util.List<String> currentGroups = new java.util.ArrayList<>();
 
         // TODO: JBeam中关于coupler的部分貌似全部都是inline的，如果未来发现不inline的定义，再做修改
         // String currentTag = "";
@@ -89,6 +115,10 @@ public class JBeamParser {
                 currentCollision = getBooleanSafe(modifier, "collision", currentCollision);
                 currentSelfCollision = getBooleanSafe(modifier, "selfCollision", currentSelfCollision);
 
+                if (modifier.has("group")) {
+                    currentGroups = parseGroups(modifier.get("group"));
+                }
+
                 continue;
             }
 
@@ -103,6 +133,8 @@ public class JBeamParser {
                 double inlineSlidingFriction = currentSlidingFriction;
                 boolean inlineCollision = currentCollision;
                 boolean inlineSelfCollision = currentSelfCollision;
+
+                java.util.List<String> inlineGroups = currentGroups;
 
                 // coupler
                 String inlineTag = "";
@@ -120,6 +152,10 @@ public class JBeamParser {
                     inlineSlidingFriction = getDoubleSafe(inline, "slidingFrictionCoef", inlineSlidingFriction);
                     inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
                     inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
+
+                    if (inline.has("group")) {
+                        inlineGroups = parseGroups(inline.get("group"));
+                    }
 
                     inlineTag = getStringSafe(inline, "tag", inlineTag);
                     inlineCouplerTag = getStringSafe(inline, "couplerTag", inlineCouplerTag);
@@ -164,7 +200,7 @@ public class JBeamParser {
                     couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
                 }
 
-                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, partId, inlineCollision, inlineSelfCollision);
+                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, partId, inlineCollision, inlineSelfCollision, inlineGroups);
             }
         }
     }
@@ -477,7 +513,7 @@ public class JBeamParser {
                         targetGroups.add(groupElement.getAsString());
                     }
 
-                    // 提取位移、旋转、缩放属性 (通常在数组的第 4 个元素)
+                    // 提取位移、旋转、缩放属性
                     double px = 0, py = 0, pz = 0;
                     double rx = 0, ry = 0, rz = 0;
                     double sx = 1, sy = 1, sz = 1;
@@ -486,26 +522,19 @@ public class JBeamParser {
                         JsonObject transform = row.get(3).getAsJsonObject();
                         if (transform.has("pos")) {
                             JsonObject pos = transform.getAsJsonObject("pos");
-                            px = getDoubleSafe(pos, "x", 0);
-                            py = getDoubleSafe(pos, "y", 0);
-                            pz = getDoubleSafe(pos, "z", 0);
+                            px = getDoubleSafe(pos, "x", 0); py = getDoubleSafe(pos, "y", 0); pz = getDoubleSafe(pos, "z", 0);
                         }
                         if (transform.has("rot")) {
                             JsonObject rot = transform.getAsJsonObject("rot");
-                            rx = getDoubleSafe(rot, "x", 0);
-                            ry = getDoubleSafe(rot, "y", 0);
-                            rz = getDoubleSafe(rot, "z", 0);
+                            rx = getDoubleSafe(rot, "x", 0); ry = getDoubleSafe(rot, "y", 0); rz = getDoubleSafe(rot, "z", 0);
                         }
                         if (transform.has("scale")) {
                             JsonObject scale = transform.getAsJsonObject("scale");
-                            sx = getDoubleSafe(scale, "x", 1);
-                            sy = getDoubleSafe(scale, "y", 1);
-                            sz = getDoubleSafe(scale, "z", 1);
+                            sx = getDoubleSafe(scale, "x", 1); sy = getDoubleSafe(scale, "y", 1); sz = getDoubleSafe(scale, "z", 1);
                         }
                     }
 
-                    // TODO: 存入 vehicle.renderEngine.addFlexbody(...)
-                    // System.out.println("Registered Mesh: " + meshName + " bound to " + targetGroups);
+                    vehicle.flexbodies.registerFlexbody(meshName, targetGroups, px, py, pz, rx, ry, rz, sx, sy, sz, partId);
                 }
             }
         }

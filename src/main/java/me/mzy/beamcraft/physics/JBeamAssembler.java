@@ -46,141 +46,141 @@ public class JBeamAssembler {
             Map<String, JsonObject> registry,
             SoftBodyVehicle vehicle)
     {
-        List<PartEntry> activeParts = new ArrayList<>();
-        CouplerRegistry couplerRegistry = new CouplerRegistry();
+        try {
+            List<PartEntry> activeParts = new ArrayList<>();
+            CouplerRegistry couplerRegistry = new CouplerRegistry();
 
-        // Phase 0: Recursively collect all required parts before assembly
-        JsonObject rootPart = registry.get(rootPartName);
-        if (rootPart != null) {
-            collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, 0.0, 0.0, 0.0);//根节点（车架）的初始偏移量是 0, 0, 0
-        }
-
-        System.out.println("====== 🛠️ Starting multi-Pass Assembly ======");
-        System.out.println("Collected " + activeParts.size() + " valid part modules.");
-
-        // Pass 1: Create all nodes FIRST
-        // Critical: Nodes must exist before beams reference them to avoid broken connections
-        for (PartEntry entry : activeParts) {
-            if (entry.json.has("nodes")) {
-                JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId, couplerRegistry, entry.offX, entry.offY, entry.offZ);
-            }
-        }
-        System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
-
-        // Pass 2: Build all structural connections (beams, surfaces, joints)
-        for (PartEntry entry : activeParts) {
-            if (entry.json.has("beams")) {
-                JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry.partId);
+            // Phase 0: Recursively collect all required parts before assembly
+            JsonObject rootPart = registry.get(rootPartName);
+            if (rootPart != null) {
+                collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, 0.0, 0.0, 0.0);//根节点（车架）的初始偏移量是 0, 0, 0
             }
 
-            // Treat hydraulic actuators as fixed beams for initial assembly
-            if (entry.json.has("hydros")) {
-                JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry.partId);
+            System.out.println("====== 🛠️ Starting multi-Pass Assembly ======");
+            System.out.println("Collected " + activeParts.size() + " valid part modules.");
+
+            // Pass 1: Create all nodes FIRST
+            // Critical: Nodes must exist before beams reference them to avoid broken connections
+            for (PartEntry entry : activeParts) {
+                if (entry.json.has("nodes")) {
+                    JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId, couplerRegistry, entry.offX, entry.offY, entry.offZ);
+                }
             }
+            System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
 
-            if (entry.json.has("triangles")) {
-                JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry.partId);
+            // Pass 2: Build all structural connections (beams, surfaces, joints)
+            for (PartEntry entry : activeParts) {
+                if (entry.json.has("beams")) {
+                    JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry.partId);
+                }
+
+                // Treat hydraulic actuators as fixed beams for initial assembly
+                if (entry.json.has("hydros")) {
+                    JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry.partId);
+                }
+
+                if (entry.json.has("triangles")) {
+                    JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry.partId);
+                }
+
+                if (entry.json.has("torsionbars")) {
+                    JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle);
+                }
+
+                if (entry.json.has("rails")) {
+                    JBeamParser.parseRails(entry.json.getAsJsonObject("rails"));
+                }
+
+                if (entry.json.has("slidenodes")) {
+                    JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), vehicle);
+                }
+
+                if (entry.json.has("flexbodies")) {
+                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, entry.partId);
+                }
             }
+            int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;
+            System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + beamsCount);
 
-            if (entry.json.has("torsionbars")) {
-                JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle);
+            // ==========================================
+            // 🚀 Pass 3: 逆向解析车轮 (解决子零件属性覆盖问题)
+            // ==========================================
+            System.out.println("====== 🛞 Assembling Wheels ======");
+            // 1. 初始化黑板状态 (清除上一辆车的残留数据)
+            JBeamPressureWheelsParser.resetBlackboard();
+
+            for (PartEntry entry : activeParts) {
+                if (entry.json.has("pressureWheels")) {
+                    // 2. 调用我们新写的解析器
+                    JBeamPressureWheelsParser.parsePressureWheels(entry.json.getAsJsonArray("pressureWheels"), vehicle);
+                }
             }
+            System.out.println("✅ Pass 3 Complete: Wheels generated.");
 
-            if (entry.json.has("rails")) {
-                JBeamParser.parseRails(entry.json.getAsJsonObject("rails"));
-            }
+            // ==========================================
+            // 🚀 Pass 4: Resolve Couplers (执行虚拟电焊)
+            // ==========================================
+            System.out.println("====== 🔗 Resolving Couplers ======");
+            int weldedCount = 0;
+            for (CouplerRegistry.CouplerDef source : couplerRegistry.definitions) {
+                if (source.couplerTag != null && !source.couplerTag.isEmpty()) {
+                    CouplerRegistry.CouplerDef bestTarget = null;
+                    double minDistanceSq = Double.MAX_VALUE;
+                    double precompTime = 1.0;
+                    double precompRange = 0.0;
 
-            if (entry.json.has("slidenodes")) {
-                JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), vehicle);
-            }
+                    Integer sourceIdx = vehicle.nodes.nameToIndex.get(source.nodeName);
+                    if (sourceIdx == null) continue;
+                    double sx = vehicle.nodes.posX[sourceIdx], sy = vehicle.nodes.posY[sourceIdx], sz = vehicle.nodes.posZ[sourceIdx];
 
-            if (entry.json.has("flexbodies")) {
-                JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, entry.partId);
-            }
-        }
-        int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;
-        System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + beamsCount);
+                    for (CouplerRegistry.CouplerDef target : couplerRegistry.definitions) {
+                        if (source != target && source.couplerTag.equals(target.tag)) {
+                            Integer targetIdx = vehicle.nodes.nameToIndex.get(target.nodeName);
+                            if (targetIdx == null) continue;
 
-        // ==========================================
-        // 🚀 Pass 3: 逆向解析车轮 (解决子零件属性覆盖问题)
-        // ==========================================
-        System.out.println("====== 🛞 Assembling Wheels ======");
-        // 1. 初始化黑板状态 (清除上一辆车的残留数据)
-        JBeamPressureWheelsParser.resetBlackboard();
+                            double dx = sx - vehicle.nodes.posX[targetIdx], dy = sy - vehicle.nodes.posY[targetIdx], dz = sz - vehicle.nodes.posZ[targetIdx];
+                            double distSq = dx * dx + dy * dy + dz * dz;
 
-        for (PartEntry entry : activeParts) {
-            if (entry.json.has("pressureWheels")) {
-                // 2. 调用我们新写的解析器
-                JBeamPressureWheelsParser.parsePressureWheels(entry.json.getAsJsonArray("pressureWheels"), vehicle);
-            }
-        }
-        System.out.println("✅ Pass 3 Complete: Wheels generated.");
+                            // 半径检查 + 最近匹配
+                            if (distSq <= source.startRadius * source.startRadius && distSq < minDistanceSq) {
+                                minDistanceSq = distSq;
+                                bestTarget = target;
+                                double dist = Math.sqrt(distSq);
+                                double targetDist = source.lockRadius;
+                                double distanceToTravel = dist - source.lockRadius;
 
-        // ==========================================
-        // 🚀 Pass 4: Resolve Couplers (执行虚拟电焊)
-        // ==========================================
-        System.out.println("====== 🔗 Resolving Couplers ======");
-        int weldedCount = 0;
-        for (CouplerRegistry.CouplerDef source : couplerRegistry.definitions) {
-            if (source.couplerTag != null && !source.couplerTag.isEmpty()) {
-                CouplerRegistry.CouplerDef bestTarget = null;
-                double minDistanceSq = Double.MAX_VALUE;
-                double precompTime = 1.0;
-                double precompRange = 0.0;
-
-                Integer sourceIdx = vehicle.nodes.nameToIndex.get(source.nodeName);
-                if (sourceIdx == null) continue;
-                double sx = vehicle.nodes.posX[sourceIdx], sy = vehicle.nodes.posY[sourceIdx], sz = vehicle.nodes.posZ[sourceIdx];
-
-                for (CouplerRegistry.CouplerDef target : couplerRegistry.definitions) {
-                    if (source != target && source.couplerTag.equals(target.tag)) {
-                        Integer targetIdx = vehicle.nodes.nameToIndex.get(target.nodeName);
-                        if (targetIdx == null) continue;
-
-                        double dx = sx - vehicle.nodes.posX[targetIdx], dy = sy - vehicle.nodes.posY[targetIdx], dz = sz - vehicle.nodes.posZ[targetIdx];
-                        double distSq = dx*dx + dy*dy + dz*dz;
-
-                        // 半径检查 + 最近匹配
-                        if (distSq <= source.startRadius * source.startRadius && distSq < minDistanceSq) {
-                            minDistanceSq = distSq;
-                            bestTarget = target;
-                            double dist = Math.sqrt(distSq);
-                            double targetDist = source.lockRadius;
-                            double distanceToTravel = dist - source.lockRadius;
-
-                            if (distanceToTravel > 0) {
-                                precompTime = distanceToTravel / Math.max(source.latchSpeed, 1e-12);
-                                precompRange = targetDist;
+                                if (distanceToTravel > 0) {
+                                    precompTime = distanceToTravel / Math.max(source.latchSpeed, 1e-12);
+                                    precompRange = targetDist;
+                                }
                             }
                         }
                     }
-                }
 
-                if (bestTarget != null) {
-                    double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
+                    if (bestTarget != null) {
+                        double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
 
-                    vehicle.addBeam(BeamContainer.BEAM_NORMAL,
-                            source.nodeName, bestTarget.nodeName, null,
-                            1e9, 1e7, // 超大刚度/阻尼
-                            PhysicsWorld.KINDA_BIG_NUMBER, finalStrength,
-                            0.0, 0.0, precompTime,
-                            0.0, 0.0, -1.0, -1.0,
-                            0.0, 0.0,
-                            -1.0, -1.0, -1.0, -1.0,
-                            0.0, 0.0, 0.0
-                    );
-                    weldedCount++;
+                        vehicle.addBeam(BeamContainer.BEAM_NORMAL,
+                                source.nodeName, bestTarget.nodeName, null,
+                                1e9, 1e7, // 超大刚度/阻尼
+                                PhysicsWorld.KINDA_BIG_NUMBER, finalStrength,
+                                0.0, 0.0, precompTime,
+                                0.0, 0.0, -1.0, -1.0,
+                                0.0, 0.0,
+                                -1.0, -1.0, -1.0, -1.0,
+                                0.0, 0.0, 0.0
+                        );
+                        weldedCount++;
+                    }
                 }
             }
-        }
-        System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
+            System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
 
-        // 🚀 Pass 5: 最终物理安全审查
-        vehicle.finalizePhysicsSetup();
-        //System.out.println("====== 📦 Active Parts Assembly List ======");
-        //for (PartEntry entry : activeParts) {
-        //    System.out.println(" 🔧 " + entry.partName);
-        //}
+            // 🚀 Pass 5: 最终物理安全审查
+            vehicle.finalizePhysicsSetup();
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
     }
 
     /**

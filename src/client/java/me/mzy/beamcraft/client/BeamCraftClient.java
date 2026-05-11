@@ -1,6 +1,8 @@
 package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.model.DaeMeshLoader;
+import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.physics.PhysicsWorld;
 import me.mzy.beamcraft.physics.SoftBodyVehicle;
@@ -21,6 +23,8 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
+import java.io.File;
+
 public class BeamCraftClient implements ClientModInitializer {
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
@@ -33,18 +37,9 @@ public class BeamCraftClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 
-		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, new EntityRendererFactory<PhysicsVehicleEntity>() {
-			@Override
-			public EntityRenderer<PhysicsVehicleEntity> create(Context context) {
-				return new EntityRenderer<PhysicsVehicleEntity>(context) {
-					@Override
-					public Identifier getTexture(PhysicsVehicleEntity entity) {
-						// 返回一个虚拟的贴图路径即可（因为我们自己用事件画线框，不需要它的贴图）
-						return Identifier.of(BeamCraft.MOD_ID, "textures/entity/dummy.png");
-					}
-				};
-			}
-		});
+		DaeMeshLoader.scanAndLoadAllVehicles(BeamCraft.VEHICLES_DIR);
+
+		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
 
 		// 1. 物理计算与控制循环 (每帧运行)
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -139,7 +134,7 @@ public class BeamCraftClient implements ClientModInitializer {
 				double eY = vehicle.parentEntity.getY();
 				double eZ = vehicle.parentEntity.getZ();
 
-				boolean DEBUG_SHOW_BEAMS = true;
+				boolean DEBUG_SHOW_BEAMS = false;
 
 				// === 1. 渲染梁/骨架 ===
 				if (DEBUG_SHOW_BEAMS) {

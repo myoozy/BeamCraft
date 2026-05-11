@@ -30,6 +30,7 @@ public class SoftBodyVehicle {
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
+    public final FlexbodyContainer flexbodies = new FlexbodyContainer();
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -106,8 +107,10 @@ public class SoftBodyVehicle {
     /**
      * Register node into physics world and expand part bounding box cache
      */
-    public void addNode(String name, double x, double y, double z, double nodeMass, double friction, double slidingFriction, int partId, boolean collision, boolean selfCollision) {
-        nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision);
+    public void addNode(String name, double x, double y, double z, double nodeMass,
+                        double friction, double slidingFriction, int partId,
+                        boolean collision, boolean selfCollision, java.util.List<String> groups) {
+        nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision, groups);
 
         // Calculate current maximum part id and expand buffer
         int currentMaxPartId = -1;
@@ -278,6 +281,9 @@ public class SoftBodyVehicle {
     }
 
     public void finalizePhysicsSetup() {
+
+        flexbodies.compileGroupsCSR(nodes);
+
         double invDt = PhysicsWorld.invPhysicsDT;
         double safeFractionSpring = 0.95;
         double safeFractionDamp = 0.95;
@@ -437,6 +443,8 @@ public class SoftBodyVehicle {
         triangles.clear();
         torsionbars.clear();
         slidenodes.clear();
+        wheels.clear();
+        flexbodies.clear();
 
         System.out.println("🧹 Vehicle data cleared and reset");
     }

@@ -6,6 +6,7 @@ import me.mzy.beamcraft.physics.PhysicsWorld;
 import net.fabricmc.api.ModInitializer;
 import com.google.gson.JsonObject;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.entity.EntityDimensions;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
@@ -18,6 +19,7 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.text.Text;
 
+import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -33,6 +35,9 @@ public class BeamCraft implements ModInitializer {
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
+
+	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
+	public static final File VEHICLES_DIR = new File(GAME_DIR, "mods/beamcraft/vehicles");
 
 	// 1. 注册载具实体类型 (1.21 必须使用 Identifier.of)
 	public static final EntityType<PhysicsVehicleEntity> PHYSICS_VEHICLE_ENTITY = Registry.register(
@@ -51,6 +56,9 @@ public class BeamCraft implements ModInitializer {
 
 		LOGGER.info("Hello Fabric world!");
 
+		// 确保目录存在
+		if (!VEHICLES_DIR.exists()) VEHICLES_DIR.mkdirs();
+
 		// /spawnvehicle <车辆名> <pc配置文件名>
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			dispatcher.register(CommandManager.literal("spawnvehicle")
@@ -68,7 +76,7 @@ public class BeamCraft implements ModInitializer {
 											PhysicsVehicleEntity vehicle =
 													new PhysicsVehicleEntity(PHYSICS_VEHICLE_ENTITY, player.getWorld());
 
-											vehicle.initializeVehicle(rootName, pcFile);
+											vehicle.initializeVehicle(rootName, pcFile, VEHICLES_DIR);
 
 											// 设置坐标和视角
 											vehicle.refreshPositionAndAngles(player.getX(), player.getY() + 1, player.getZ(), player.getYaw(), player.getPitch());

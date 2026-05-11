@@ -4,6 +4,7 @@ import me.mzy.beamcraft.physics.PhysicsWorld;
 
 public class Utility {
     public static double[] expand(double[] arr, int newSize) { return java.util.Arrays.copyOf(arr, newSize); }
+    public static float[] expand(float[] arr, int newSize) { return java.util.Arrays.copyOf(arr, newSize); }
     public static int[] expand(int[] arr, int newSize) { return java.util.Arrays.copyOf(arr, newSize); }
     public static boolean[] expand(boolean[] arr, int newSize) { return java.util.Arrays.copyOf(arr, newSize); }
     public static String[] expand(String[] arr, int newSize) { return java.util.Arrays.copyOf(arr, newSize); }

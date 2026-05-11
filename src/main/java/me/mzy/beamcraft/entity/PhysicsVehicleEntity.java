@@ -6,15 +6,17 @@ import me.mzy.beamcraft.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.physics.JBeamAssembler;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
-import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.entity.data.DataTracker;
+import net.minecraft.entity.data.TrackedData;
+import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.world.World;
 
 import java.io.File;
 
 public class PhysicsVehicleEntity extends Entity {
-
-    public SoftBodyVehicle softBody;
+    private static final TrackedData<String> VEHICLE_TYPE = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.STRING);
+    public SoftBodyVehicle softBody = null;
     // 必须要保存这两个参数，否则退出重进游戏车就没了
     private String rootPartName = "";
     private String pcFileName = "";
@@ -26,17 +28,18 @@ public class PhysicsVehicleEntity extends Entity {
     }
 
     // 当在游戏里用代码/物品生成车时，手动调用这个
-    public void initializeVehicle(String rootPartName, String pcFileName) {
+    public void initializeVehicle(String rootPartName, String pcFileName, File vehiclesDir) {
         this.rootPartName = rootPartName;
         this.pcFileName = pcFileName;
 
         this.softBody = new SoftBodyVehicle(this);
+        this.softBody.flexbodies.vehicleNamespace = rootPartName; // make sure to save the name
+        this.setVehicleType(rootPartName);
 
-        assemble(rootPartName, pcFileName);
+        assemble(rootPartName, pcFileName, vehiclesDir);
     }
 
-    // 提供一个供外部调用的装配接口
-    private void assemble(String rootPartName, String pcFileName) {
+    private void assemble(String rootPartName, String pcFileName, File vehiclesDir) {
         if (!this.getWorld().isClient) {
             // 确保绝不重复添加SoftBody到PhysicsWorld
             BeamCraft.PHYSICS_WORLD.removeVehicle(this.softBody);
@@ -45,13 +48,6 @@ public class PhysicsVehicleEntity extends Entity {
             java.util.Map<String, com.google.gson.JsonObject> localRegistry = new java.util.HashMap<>();
             // Player configuration: “Key” is the slot name, and “Value” is the name of the selected part.
             java.util.Map<String, String> localConfig = new java.util.HashMap<>();
-
-            // 获取运行目录并定位到我们模组的专属车辆文件夹
-            File gameDir = FabricLoader.getInstance().getGameDir().toFile();
-            File vehiclesDir = new File(gameDir, "mods/beamcraft/vehicles");
-
-            // 确保目录存在
-            if (!vehiclesDir.exists()) vehiclesDir.mkdirs();
 
             // 执行加载：它会自动寻找 vehiclesDir 下的 common.zip 和 pickup.zip
             JBeamLoader.loadVehicle(vehiclesDir, rootPartName, pcFileName, localRegistry, localConfig);
@@ -62,7 +58,7 @@ public class PhysicsVehicleEntity extends Entity {
             // 登记到物理世界
             BeamCraft.PHYSICS_WORLD.addVehicle(this.softBody);
 
-            int beamsCount = softBody.normalBeams.count + softBody.supportBeams.count + softBody.boundedBeams.count;
+            int beamsCount = softBody.normalBeams.count + softBody.supportBeams.count + softBody.boundedBeams.count + softBody.lBeams.count + softBody.anisotropicBeams.count;
             BeamCraft.LOGGER.info("Physics Vehicle assembled: " +
                     "nodes = " + softBody.nodes.count +
                     " | beams = " + beamsCount +
@@ -75,6 +71,7 @@ public class PhysicsVehicleEntity extends Entity {
     // 写入数据到 NBT（存盘）
     @Override
     protected void writeCustomDataToNbt(NbtCompound nbt) {
+        nbt.putString("VehicleType", getVehicleType());
         nbt.putString("RootPartName", this.rootPartName);
         nbt.putString("PcFileName", this.pcFileName);
     }
@@ -82,12 +79,13 @@ public class PhysicsVehicleEntity extends Entity {
     // 从 NBT 读取数据（读盘）
     @Override
     protected void readCustomDataFromNbt(NbtCompound nbt) {
+        if (nbt.contains("VehicleType")) setVehicleType(nbt.getString("VehicleType"));
         this.rootPartName = nbt.getString("RootPartName");
         this.pcFileName = nbt.getString("PcFileName");
 
         // 这里的逻辑：如果名字不为空，说明是旧车读档，自动初始化物理模型
         if (!this.rootPartName.isEmpty() && !this.pcFileName.isEmpty()) {
-            this.initializeVehicle(this.rootPartName, this.pcFileName);
+            this.initializeVehicle(this.rootPartName, this.pcFileName, BeamCraft.VEHICLES_DIR);
         }
     }
 
@@ -132,5 +130,17 @@ public class PhysicsVehicleEntity extends Entity {
     }
 
     @Override
-    protected void initDataTracker(net.minecraft.entity.data.DataTracker.Builder builder) {}
+    protected void initDataTracker(DataTracker.Builder builder) {
+        // 默认初始化为空字符串
+        builder.add(VEHICLE_TYPE, "");
+    }
+
+    // 设置车辆类型（仅在服务端生成车辆时调用一次）
+    public void setVehicleType(String typeName) {
+        this.dataTracker.set(VEHICLE_TYPE, typeName);
+    }
+
+    public String getVehicleType() {
+        return this.dataTracker.get(VEHICLE_TYPE);
+    }
 }
