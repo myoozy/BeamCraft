@@ -1,8 +1,6 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
-import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.shape.VoxelShape;
@@ -47,6 +45,7 @@ public class SoftBodyVehicle {
 
     public SoftBodyVehicle(PhysicsVehicleEntity parentEntity) {
         this.parentEntity = parentEntity;
+        this.flexbodies.vehicleNamespace = parentEntity.getRootPartName();
         cacheEntityLocation();
     }
 

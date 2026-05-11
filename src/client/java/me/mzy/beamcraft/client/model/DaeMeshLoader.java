@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.model;
 
+import me.mzy.beamcraft.BeamCraft;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
@@ -80,6 +81,7 @@ public class DaeMeshLoader {
             }
         } catch (Exception e) {
             System.err.println("🚨 穿透读取 ZIP 失败: " + zipFile.getName());
+            System.err.println(e.getMessage());
         }
     }
 
@@ -130,11 +132,11 @@ public class DaeMeshLoader {
         return null;
     }
 
-    // ================= 核心 XML 提取器 (兼容 InputStream) =================
+    // ================= 核心 XML 提取器 (升级版：智能清洗 Key 别名) =================
     private static void parseDaeStream(InputStream is, String namespace, String sourceName) {
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-            // 防止 XML 实体注入攻击，并提升纯数据解析性能
+            // 防止 XML 实体注入，提升基础文本解析性能
             dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
             DocumentBuilder db = dbf.newDocumentBuilder();
             Document doc = db.parse(is);
@@ -144,7 +146,10 @@ public class DaeMeshLoader {
 
             for (int i = 0; i < geomList.getLength(); i++) {
                 Element geomNode = (Element) geomList.item(i);
+
+                // 提取原始 id 和可能存在的 name 属性
                 String rawMeshId = geomNode.getAttribute("id");
+                String rawMeshName = geomNode.getAttribute("name");
 
                 NodeList floatArrayList = geomNode.getElementsByTagName("float_array");
                 if (floatArrayList.getLength() == 0) continue;
@@ -154,7 +159,7 @@ public class DaeMeshLoader {
                 if (rawNumbers.isEmpty()) continue;
 
                 String[] strValues = rawNumbers.split("\\s+");
-                ArrayList<Float> safeFloats = new ArrayList<>(strValues.length);
+                java.util.ArrayList<Float> safeFloats = new java.util.ArrayList<>(strValues.length);
 
                 for (String s : strValues) {
                     if (!s.isEmpty()) {
@@ -173,10 +178,25 @@ public class DaeMeshLoader {
                 geom.positions = posArray;
                 geom.vertexCount = posArray.length / 3;
 
-                // 🚀 终极防护：强制组合命名空间，绝对杜绝跨车同名覆盖！
-                String scopedKey = namespace + ":" + rawMeshId;
-                MESH_CACHE.put(scopedKey, geom);
-                //System.out.println("   -> 成功提取网格: [" + scopedKey + "] | 顶点数: " + geom.vertexCount);
+                // 🚀 终极防护：建立多重别名映射，绝对确保 performBinding 100% 命中！
+
+                // 别名 1：存入原始带后缀的 Key (例如 "etki:etki_body-mesh")
+                String rawScopedKey = namespace + ":" + rawMeshId;
+                MESH_CACHE.put(rawScopedKey, geom);
+
+                // 别名 2：自动剥离 "-mesh" 后缀的纯净 Key (例如 "etki:etki_body")
+                if (rawMeshId.endsWith("-mesh")) {
+                    String cleanMeshId = rawMeshId.substring(0, rawMeshId.length() - 5);
+                    String cleanScopedKey = namespace + ":" + cleanMeshId;
+                    MESH_CACHE.put(cleanScopedKey, geom);
+                    System.out.println("   -> 成功注册纯净网格别名: [" + cleanScopedKey + "] | 顶点数: " + geom.vertexCount);
+                }
+
+                // 别名 3：兜底防御，如果 DAE 中包含独立的 name 属性，一并作为别名注册
+                if (rawMeshName != null && !rawMeshName.isEmpty()) {
+                    String nameScopedKey = namespace + ":" + rawMeshName;
+                    MESH_CACHE.put(nameScopedKey, geom);
+                }
             }
         } catch (Exception e) {
             System.err.println("⚠️ 解析 DAE 流异常 (" + sourceName + "): " + e.getMessage());

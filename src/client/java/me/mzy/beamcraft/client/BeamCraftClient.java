@@ -3,23 +3,20 @@ package me.mzy.beamcraft.client;
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
-import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
-import me.mzy.beamcraft.physics.PhysicsWorld;
-import me.mzy.beamcraft.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.PhysicsWorld;
+import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.entity.EntityRenderer;
-import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -30,6 +27,10 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static boolean gWasPressed = false;
 	public static final double DELTA_TIME = 0.05;
 
+	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
+	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
+	public static final File VEHICLES_DIR = new File(GAME_DIR, "mods/beamcraft/vehicles");
+
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
 	public static double[] lastPhysicsMsDetail = new double[9];
@@ -37,14 +38,22 @@ public class BeamCraftClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 
-		DaeMeshLoader.scanAndLoadAllVehicles(BeamCraft.VEHICLES_DIR);
+		// 确保目录存在
+		if (!VEHICLES_DIR.exists()) VEHICLES_DIR.mkdirs();
+
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			// 让管理器接管一切生命周期
+			ClientVehicleManager.update(client);
+		});
+
+		DaeMeshLoader.scanAndLoadAllVehicles(VEHICLES_DIR);
 
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
 
 		// 1. 物理计算与控制循环 (每帧运行)
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			if (client.player == null || client.world == null) return;
-			PhysicsWorld world = BeamCraft.PHYSICS_WORLD;
+			PhysicsWorld world = PHYSICS_WORLD;
 
 			// 检测 G 键 (调试功能：瞬间重置所有现存车辆，并传送到玩家头顶)
 			boolean isG = InputUtil.isKeyPressed(client.getWindow().getHandle(), GLFW.GLFW_KEY_G);
@@ -54,7 +63,7 @@ public class BeamCraftClient implements ClientModInitializer {
 					vehicle.reset();
 					// 把 MC 实体强行瞬移过来
 					vehicle.parentEntity.setPosition(client.player.getX(), client.player.getY() + HEIGHT_OFFSET, client.player.getZ());
-					vehicle.parentEntity.setAngles(client.player.getYaw(), client.player.getPitch());
+					vehicle.nodes.rotateNodes(client.player.getYaw(), 0, 0);
 				}
 			}
 			gWasPressed = isG;
@@ -113,7 +122,7 @@ public class BeamCraftClient implements ClientModInitializer {
 
 		// 3. 渲染循环 (遍历所有车，并将局部坐标叠加上实体坐标)
 		WorldRenderEvents.AFTER_ENTITIES.register(context -> {
-			PhysicsWorld world = BeamCraft.PHYSICS_WORLD;
+			PhysicsWorld world = PHYSICS_WORLD;
 			if (world == null || world.vehicles.isEmpty()) return;
 
 			Vec3d cameraPos = context.camera().getPos();

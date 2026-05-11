@@ -1,14 +1,7 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.utility.Utility;
-import net.minecraft.entity.MovementType;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.shape.VoxelShape;
-import java.util.List;
-import java.util.Arrays;
 
 /**
  * Core physical world controller for beam-based vehicle simulation

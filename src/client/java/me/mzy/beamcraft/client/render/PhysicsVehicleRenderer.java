@@ -1,11 +1,12 @@
 package me.mzy.beamcraft.client.render;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.ClientVehicleManager;
 import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
-import me.mzy.beamcraft.physics.SoftBodyVehicle;
-import me.mzy.beamcraft.physics.FlexbodyContainer;
-import me.mzy.beamcraft.physics.NodeContainer;
+import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import me.mzy.beamcraft.client.physics.NodeContainer;
 
 import net.minecraft.client.render.*;
 import net.minecraft.util.Identifier;
@@ -52,14 +53,14 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
     @Override
     public void render(PhysicsVehicleEntity entity, float entityYaw, float partialTicks, MatrixStack matrixStack, VertexConsumerProvider buffer, int packedLight) {
 
-        SoftBodyVehicle vehicle = entity.softBody;
+        SoftBodyVehicle vehicle = ClientVehicleManager.getVehicle(entity.getId());
         if (vehicle == null) return;
         BeamCraft.LOGGER.info(entity.toString());
 
         // 如果没有绑定就花几毫秒绑定
         if (!vehicle.flexbodies.isSkinningBound) {
             FlexbodyBindingUtil.performBinding(vehicle.flexbodies, vehicle.nodes);
-            System.out.println("🎨 懒加载触发完毕！当前实例绑定顶点总数: " + vehicle.flexbodies.totalVertexCount);
+            System.out.println("🎨 Total number of vertices bound to the current instance: " + vehicle.flexbodies.totalVertexCount);
         }
 
         NodeContainer nodes = vehicle.nodes;

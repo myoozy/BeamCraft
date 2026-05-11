@@ -1,9 +1,8 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import me.mzy.beamcraft.BeamCraft;
 
 import java.util.ArrayList;
 import java.util.List;

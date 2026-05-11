@@ -1,8 +1,8 @@
 package me.mzy.beamcraft.client.model;
 
 import me.mzy.beamcraft.BeamCraft;
-import me.mzy.beamcraft.physics.FlexbodyContainer;
-import me.mzy.beamcraft.physics.NodeContainer;
+import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import me.mzy.beamcraft.client.physics.NodeContainer;
 import java.util.ArrayList;
 import java.util.List;
 

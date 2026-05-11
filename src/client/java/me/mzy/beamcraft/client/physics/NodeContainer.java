@@ -1,12 +1,9 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
-import jdk.jshell.execution.Util;
 import me.mzy.beamcraft.utility.Utility;
-import net.minecraft.util.math.Vec3d;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * Manages node data and physics state using a Structure of Arrays (SoA) approach.

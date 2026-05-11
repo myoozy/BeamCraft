@@ -1,4 +1,4 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.utility.Utility;
 
@@ -126,16 +126,6 @@ public class FlexbodyContainer {
     public int registerFlexbody(String name, List<String> groups, double px, double py, double pz,
                                 double rx, double ry, double rz, double sx, double sy, double sz, int pId) {
         ensureCapacity();
-
-        if (meshCount >= meshName.length) {
-            int newSize = meshName.length * 2;
-            meshName = Utility.expand(meshName, newSize);
-            targetGroups = Arrays.copyOf(targetGroups, newSize);
-            posX = Utility.expand(posX, newSize); posY = Utility.expand(posY, newSize); posZ = Utility.expand(posZ, newSize);
-            rotX = Utility.expand(rotX, newSize); rotY = Utility.expand(rotY, newSize); rotZ = Utility.expand(rotZ, newSize);
-            scaleX = Utility.expand(scaleX, newSize); scaleY = Utility.expand(scaleY, newSize); scaleZ = Utility.expand(scaleZ, newSize);
-            partId = Utility.expand(partId, newSize);
-        }
 
         int idx = meshCount;
         meshName[idx] = name;

@@ -1,4 +1,4 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;

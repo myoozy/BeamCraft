@@ -1,4 +1,4 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
 // 引入 Minecraft 内置的 Fastutil 库
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
