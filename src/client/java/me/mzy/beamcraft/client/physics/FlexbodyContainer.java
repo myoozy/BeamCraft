@@ -25,6 +25,7 @@ public class FlexbodyContainer {
     public double[] rotX = new double[INIT_FLEX_CAP], rotY = new double[INIT_FLEX_CAP], rotZ = new double[INIT_FLEX_CAP];
     public double[] scaleX = new double[INIT_FLEX_CAP], scaleY = new double[INIT_FLEX_CAP], scaleZ = new double[INIT_FLEX_CAP];
     public int[] partId = new int[INIT_FLEX_CAP];
+    public JBeamAssembler.TransformContext[] slotContext = new JBeamAssembler.TransformContext[INIT_FLEX_CAP];
 
     // ==========================================
     // 2. O(1) 静态节点组查询表 (CSR 格式)
@@ -83,6 +84,7 @@ public class FlexbodyContainer {
             scaleZ = Utility.expand(scaleZ, newSize);
 
             partId = Utility.expand(partId, newSize);
+            slotContext = java.util.Arrays.copyOf(slotContext, newSize);
 
             // ==========================
             // 2. 运行时蒙皮数据层 SoA 数组
@@ -123,17 +125,36 @@ public class FlexbodyContainer {
         isSkinningBound = false;
     }
 
+    /**
+     * 传入BeamNG原始坐标系
+     * @param name
+     * @param groups
+     * @param px
+     * @param py
+     * @param pz
+     * @param rx
+     * @param ry
+     * @param rz
+     * @param sx
+     * @param sy
+     * @param sz
+     * @param pId
+     * @param ctx 插槽的变换上下文
+     * @return
+     */
     public int registerFlexbody(String name, List<String> groups, double px, double py, double pz,
-                                double rx, double ry, double rz, double sx, double sy, double sz, int pId) {
+                                double rx, double ry, double rz, double sx, double sy, double sz, int pId, JBeamAssembler.TransformContext ctx) {
         ensureCapacity();
 
         int idx = meshCount;
         meshName[idx] = name;
         targetGroups[idx] = groups;
+        // 保持存入原始未转换的 JSON 参数
         posX[idx] = px; posY[idx] = py; posZ[idx] = pz;
         rotX[idx] = rx; rotY[idx] = ry; rotZ[idx] = rz;
         scaleX[idx] = sx; scaleY[idx] = sy; scaleZ[idx] = sz;
         partId[idx] = pId;
+        slotContext[idx] = ctx;
 
         meshCount++;
         return idx;

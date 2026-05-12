@@ -415,7 +415,6 @@ public class JBeamParser {
                         targetGroups.add(groupElement.getAsString());
                     }
 
-                    // 提取 Flexbody 自身的位移旋转定义
                     double px = 0, py = 0, pz = 0;
                     double rx = 0, ry = 0, rz = 0;
                     double sx = 1, sy = 1, sz = 1;
@@ -436,15 +435,13 @@ public class JBeamParser {
                         }
                     }
 
-                    // 将插槽的累积变换应用到 Flexbody 的局部原点坐标上
-                    double[] transformedPos = transform.transformNode(px, py, pz);
-
-                    // 注入到渲染数据中 (合并旋转: 父级旋转累加自身局部旋转)
+                    // 🚀 原汁原味录入：彻底剥离欧拉角直加与提前坐标映射
                     vehicle.flexbodies.registerFlexbody(
                             meshName, targetGroups,
-                            transformedPos[0], transformedPos[1], transformedPos[2],
-                            rx + transform.rotX, ry + transform.rotY, rz + transform.rotZ,
-                            sx, sy, sz, partId
+                            px, py, pz,
+                            rx, ry, rz,
+                            sx, sy, sz,
+                            partId, transform
                     );
                 }
             }
