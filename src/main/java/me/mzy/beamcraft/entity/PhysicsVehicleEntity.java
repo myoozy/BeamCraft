@@ -51,5 +51,12 @@ public class PhysicsVehicleEntity extends Entity {
         // 仅维护基础包围盒，物理更新完全交由客户端处理
     }
 
-    // 不再在此处直接调用 PhysicsWorld.removeVehicle
+    @Override
+    public void updateTrackedPositionAndAngles(double x, double y, double z, float yaw, float pitch, int interpolationSteps) {
+        // 如果当前处于客户端世界，直接 return 舍弃服务端的插值同步要求
+        if (this.getWorld().isClient) {
+            return;
+        }
+        super.updateTrackedPositionAndAngles(x, y, z, yaw, pitch, interpolationSteps);
+    }
 }

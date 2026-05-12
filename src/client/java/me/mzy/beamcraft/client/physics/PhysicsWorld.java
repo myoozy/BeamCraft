@@ -2,6 +2,9 @@ package me.mzy.beamcraft.client.physics;
 
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
+import me.mzy.beamcraft.network.VehicleSyncPayload;
+
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
  * Core physical world controller for beam-based vehicle simulation
@@ -168,6 +171,15 @@ public class PhysicsWorld {
 
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.updateEntityLocation();
+            if (vehicle.parentEntity != null && ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
+                ClientPlayNetworking.send(new VehicleSyncPayload(
+                        vehicle.parentEntity.getId(),
+                        vehicle.parentEntity.getX(),
+                        vehicle.parentEntity.getY(),
+                        vehicle.parentEntity.getZ(),
+                        vehicle.parentEntity.getYaw()
+                ));
+            }
         }
         long t5 = System.nanoTime();
         double moveEntityMs = (t5 - t4) / 1_000_000.0;

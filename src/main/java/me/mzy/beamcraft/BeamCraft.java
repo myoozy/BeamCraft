@@ -1,6 +1,7 @@
 package me.mzy.beamcraft;
 
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
+import me.mzy.beamcraft.network.VehicleSyncPayload;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
@@ -16,6 +17,9 @@ import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.network.ServerPlayerEntity;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.text.Text;
+import net.minecraft.entity.Entity;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 
 import java.io.File;
 
@@ -46,6 +50,23 @@ public class BeamCraft implements ModInitializer {
 		// Proceed with mild caution.
 
 		LOGGER.info("Hello Fabric world!");
+
+		// 1. 注册 Payload 类型
+		PayloadTypeRegistry.playC2S().register(VehicleSyncPayload.ID, VehicleSyncPayload.CODEC);
+
+		// 2. 注册全局服务端接收器
+		ServerPlayNetworking.registerGlobalReceiver(VehicleSyncPayload.ID, (payload, context) -> {
+			// 必须在主线程中执行实体操作
+			context.server().execute(() -> {
+				Entity entity = context.player().getWorld().getEntityById(payload.entityId());
+				if (entity != null) {
+					// 同步服务端实体位置，防止服务端进行视距卸载或判定移动作弊
+					entity.setPosition(payload.x(), payload.y(), payload.z());
+					entity.setYaw(payload.yaw());
+					entity.velocityModified = true; // 挂起原版速度修正预测
+				}
+			});
+		});
 
 		// /spawnvehicle <车辆名> <pc配置文件名>
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {

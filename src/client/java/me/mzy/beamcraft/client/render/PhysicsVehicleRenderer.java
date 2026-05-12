@@ -33,6 +33,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
     public void render(PhysicsVehicleEntity entity, float entityYaw, float partialTicks, MatrixStack matrixStack, VertexConsumerProvider buffer, int packedLight) {
         SoftBodyVehicle vehicle = ClientVehicleManager.getVehicle(entity.getId());
         if (vehicle == null) return;
+        if (true)return;
 
         if (!vehicle.flexbodies.isSkinningBound) {
             FlexbodyBindingUtil.performBinding(vehicle.flexbodies, vehicle.nodes);
