@@ -142,8 +142,11 @@ public class FlexbodyContainer {
      * @param ctx 插槽的变换上下文
      * @return
      */
-    public int registerFlexbody(String name, List<String> groups, double px, double py, double pz,
-                                double rx, double ry, double rz, double sx, double sy, double sz, int pId, JBeamAssembler.TransformContext ctx) {
+    public int registerFlexbody(String name, String namespace, List<String> groups,
+                                double px, double py, double pz,
+                                double rx, double ry, double rz,
+                                double sx, double sy, double sz,
+                                int pId, JBeamAssembler.TransformContext ctx) {
         ensureCapacity();
 
         int idx = meshCount;
@@ -155,6 +158,7 @@ public class FlexbodyContainer {
         scaleX[idx] = sx; scaleY[idx] = sy; scaleZ[idx] = sz;
         partId[idx] = pId;
         slotContext[idx] = ctx;
+        vehicleNamespace = namespace;
 
         meshCount++;
         return idx;

@@ -144,7 +144,7 @@ public class JBeamAssembler {
                 }
                 if (entry.json.has("flexbodies")) {
                     // Flexbody 也需要接受空间变换矩阵以正确渲染位移
-                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, entry.partId, entry.transform);
+                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, rootPartName, entry.partId, entry.transform);
                 }
             }
             int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;

@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.render;
 
+import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.ClientVehicleManager;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
@@ -18,7 +19,7 @@ import org.joml.Matrix4f;
 public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity> {
 
     private static final Identifier DEFAULT_TEXTURE = Identifier.of("beamcraft", "textures/entity/vehicle_default.png");
-    private final boolean DEBUG_STATIC_RENDER = true;
+    private final boolean DEBUG_STATIC_RENDER = false; // 🚀 设为 false 全量开启纯粹的软体蒙皮随动展示
 
     float[] interpNodeX = new float[NodeContainer.INIT_NODE_CAP];
     float[] interpNodeY = new float[NodeContainer.INIT_NODE_CAP];
@@ -33,10 +34,9 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
     public void render(PhysicsVehicleEntity entity, float entityYaw, float partialTicks, MatrixStack matrixStack, VertexConsumerProvider buffer, int packedLight) {
         SoftBodyVehicle vehicle = ClientVehicleManager.getVehicle(entity.getId());
         if (vehicle == null) return;
-        if (true)return;
 
         if (!vehicle.flexbodies.isSkinningBound) {
-            FlexbodyBindingUtil.performBinding(vehicle.flexbodies, vehicle.nodes);
+            FlexbodyBindingUtil.performBinding(vehicle.flexbodies, vehicle);
         }
 
         NodeContainer nodes = vehicle.nodes;
@@ -48,7 +48,6 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         Matrix4f modelMat = entry.getPositionMatrix();
         VertexConsumer builder = buffer.getBuffer(RenderLayer.getEntityCutoutNoCull(getTexture(entity)));
 
-        // 维护内部图元索引指针用于读取原始法线缓冲
         int globalVertPtr = 0;
 
         if (DEBUG_STATIC_RENDER) {
@@ -98,38 +97,49 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             for (int v = 0; v < geom.vertexCount; v++) {
                 int i = globalVertPtr;
                 int nRef = flex.vCenterNode[i];
-                int nX   = flex.vVxNode[i];
-                int nY   = flex.vVyNode[i];
 
                 float cx = interpNodeX[nRef], cy = interpNodeY[nRef], cz = interpNodeZ[nRef];
-                float vxX = interpNodeX[nX] - cx, vxY = interpNodeY[nX] - cy, vxZ = interpNodeZ[nX] - cz;
+                float finalX, finalY, finalZ;
+                float nx, ny, nz;
 
-                // ✅ 彻底修复审查指出的第 83 行致命笔误：改为 interpNodeX
-                float vyX = interpNodeX[nY] - cx;
-                float vyY = interpNodeY[nY] - cy;
-                float vyZ = interpNodeZ[nY] - cz;
+                if (flex.vUseCrossZ[i]) {
+                    int nX = flex.vVxNode[i];
+                    int nY = flex.vVyNode[i];
 
-                // 还原当前形变拓扑面的单位法向
-                float nx = vxY * vyZ - vxZ * vyY;
-                float ny = vxZ * vyX - vxX * vyZ;
-                float nz = vxX * vyY - vxY * vyX;
-                float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                    float vxX = interpNodeX[nX] - cx, vxY = interpNodeY[nX] - cy, vxZ = interpNodeZ[nX] - cz;
+                    float vyX = interpNodeX[nY] - cx, vyY = interpNodeY[nY] - cy, vyZ = interpNodeZ[nY] - cz;
 
-                if (len > 1e-7f) {
-                    float invLen = 1.0f / len;
-                    nx *= invLen; ny *= invLen; nz *= invLen;
+                    // 动态重建随动单位长度法线 (与绑定解耦算法高度同步)
+                    nx = vxY * vyZ - vxZ * vyY;
+                    ny = vxZ * vyX - vxX * vyZ;
+                    nz = vxX * vyY - vxY * vyX;
+                    float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+
+                    if (len > 1e-7f) {
+                        float invLen = 1.0f / len;
+                        nx *= invLen; ny *= invLen; nz *= invLen;
+                    } else {
+                        nx = geom.normals != null && v * 3 + 2 < geom.normals.length ? geom.normals[v * 3] : 0;
+                        ny = geom.normals != null && v * 3 + 2 < geom.normals.length ? geom.normals[v * 3 + 1] : 1;
+                        nz = geom.normals != null && v * 3 + 2 < geom.normals.length ? geom.normals[v * 3 + 2] : 0;
+                    }
+
+                    float wX = flex.vWeightX[i], wY = flex.vWeightY[i], wZ = flex.vWeightZ[i];
+
+                    // 极简纯粹的乘加组合，随动形变完美释放
+                    finalX = cx + wX * vxX + wY * vyX + wZ * nx;
+                    finalY = cy + wX * vxY + wY * vyY + wZ * ny;
+                    finalZ = cz + wX * vxZ + wY * vyZ + wZ * nz;
                 } else {
-                    // 退化时读取模型原生平坦法线进行平滑接管
+                    // 刚体吸附后备通道：保持出厂相对位移绝对跟随
+                    finalX = cx + flex.skinnedPosX[i];
+                    finalY = cy + flex.skinnedPosY[i];
+                    finalZ = cz + flex.skinnedPosZ[i];
+
                     nx = geom.normals != null && v * 3 + 2 < geom.normals.length ? geom.normals[v * 3] : 0;
                     ny = geom.normals != null && v * 3 + 2 < geom.normals.length ? geom.normals[v * 3 + 1] : 1;
                     nz = geom.normals != null && v * 3 + 2 < geom.normals.length ? geom.normals[v * 3 + 2] : 0;
                 }
-
-                float wX = flex.vWeightX[i], wY = flex.vWeightY[i], wZ = flex.vWeightZ[i];
-
-                float finalX = cx + wX * vxX + wY * vyX + wZ * nx;
-                float finalY = cy + wX * vxY + wY * vyY + wZ * ny;
-                float finalZ = cz + wX * vxZ + wY * vyZ + wZ * nz;
 
                 builder.vertex(modelMat, finalX, finalY, finalZ)
                         .color(255, 255, 255, 255)

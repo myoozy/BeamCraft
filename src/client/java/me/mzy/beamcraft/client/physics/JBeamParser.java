@@ -396,7 +396,7 @@ public class JBeamParser {
     }
 
     // --- 7. Flexbody Parsing ---
-    public static void parseFlexbodies(JsonArray flexbodies, SoftBodyVehicle vehicle, int partId, JBeamAssembler.TransformContext transform) {
+    public static void parseFlexbodies(JsonArray flexbodies, SoftBodyVehicle vehicle, String rootPartName, int partId, JBeamAssembler.TransformContext transform) {
         boolean isHeader = true;
         for (JsonElement element : flexbodies) {
             if (element.isJsonObject()) continue;
@@ -437,7 +437,7 @@ public class JBeamParser {
 
                     // 🚀 原汁原味录入：彻底剥离欧拉角直加与提前坐标映射
                     vehicle.flexbodies.registerFlexbody(
-                            meshName, targetGroups,
+                            meshName, rootPartName, targetGroups,
                             px, py, pz,
                             rx, ry, rz,
                             sx, sy, sz,
