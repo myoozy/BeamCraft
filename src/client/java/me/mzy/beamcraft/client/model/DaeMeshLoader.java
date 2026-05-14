@@ -1,5 +1,8 @@
 package me.mzy.beamcraft.client.model;
 
+import me.mzy.beamcraft.BeamCraft;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.lwjgl.assimp.*;
 import org.lwjgl.PointerBuffer;
 
@@ -26,14 +29,32 @@ public class DaeMeshLoader {
     }
 
     public static class RawGeometry {
-        public float[] positions;       // 紧凑且对齐 MC QUADS 规范的纯正 BeamNG Z-up 顶点流
-        public float[] normals;         // 原生法线流
-        public float[] uvs;             // 修正倒置后的 UV 流
+        public float[] positions;       // 烘焙绝对变换后的 BeamNG Z-up 原生坐标流
+        public float[] normals;         // 修正姿态后的原生平滑着色法线流
+        public float[] uvs;             // 修正 V 轴后的贴图 UV 流
         public int vertexCount;         // 填充后的渲染顶点总数 (严格为 4 的倍数)
         public List<SubMesh> subMeshes;
     }
 
     public static final Map<String, RawGeometry> MESH_CACHE = new HashMap<>();
+
+    /**
+     * 🚀 强健的标识符清洗器：全方位剥离 DCC 软件导出的各类几何体尾缀
+     */
+    public static String cleanIdentifier(String name) {
+        if (name == null || name.isEmpty()) return "";
+        int dotIdx = name.lastIndexOf('.');
+        if (dotIdx > 0 && name.length() - dotIdx <= 5) {
+            boolean isNumeric = true;
+            for (int i = dotIdx + 1; i < name.length(); i++) {
+                if (!Character.isDigit(name.charAt(i))) { isNumeric = false; break; }
+            }
+            if (isNumeric) name = name.substring(0, dotIdx);
+        }
+        if (name.endsWith("-mesh")) name = name.substring(0, name.length() - 5);
+        if (name.endsWith("_mesh")) name = name.substring(0, name.length() - 5);
+        return name;
+    }
 
     public static void scanAndLoadAllVehicles(File vehiclesRootDir) {
         if (!vehiclesRootDir.exists()) {
@@ -41,7 +62,7 @@ public class DaeMeshLoader {
             return;
         }
 
-        System.out.println("====== 🚀 启动 Assimp 高保真资产载入 (双轨字典映射与 QUADS 对齐) ======");
+        System.out.println("====== 🚀 启动 Assimp 手动矩阵级联提取与拓扑深度清洗 ======");
         MESH_CACHE.clear();
 
         File[] files = vehiclesRootDir.listFiles();
@@ -54,7 +75,7 @@ public class DaeMeshLoader {
                 scanZipForDae(file);
             }
         }
-        System.out.println("📦 底模网格全数重组完毕！安全聚合模型总数: " + MESH_CACHE.size());
+        System.out.println("📦 载具底模全域挂载完毕！高保真聚合网格数: " + MESH_CACHE.size());
     }
 
     private static void scanZipForDae(File zipFile) {
@@ -67,7 +88,7 @@ public class DaeMeshLoader {
                     String namespace = extractTrueVehicleName(entryName);
                     if (namespace == null) continue;
 
-                    File tempFile = File.createTempFile("assimp_geom_", ".dae");
+                    File tempFile = File.createTempFile("assimp_assets_", ".dae");
                     try {
                         try (InputStream is = zf.getInputStream(entry)) {
                             Files.copy(is, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
@@ -79,7 +100,7 @@ public class DaeMeshLoader {
                 }
             }
         } catch (Exception e) {
-            System.err.println("🚨 穿透读取 ZIP 载具包失败: " + zipFile.getName());
+            System.err.println("🚨 穿透读取 ZIP 资产失败: " + zipFile.getName());
         }
     }
 
@@ -114,37 +135,58 @@ public class DaeMeshLoader {
 
     private static void loadMeshUsingAssimp(String filePath, String namespace) {
         int postProcessingFlags =
-                Assimp.aiProcess_Triangulate |              // 基础切分为实心三角形
-                        Assimp.aiProcess_GenSmoothNormals |         // 自动补充平滑着色表面法线
-                        Assimp.aiProcess_JoinIdenticalVertices |    // 合并重复顶点优化存储
+                Assimp.aiProcess_Triangulate |              // 切分为三角形
+                        Assimp.aiProcess_GenSmoothNormals |         // 生成平滑着色法线
+                        Assimp.aiProcess_JoinIdenticalVertices |    // 优化合并
                         Assimp.aiProcess_ImproveCacheLocality;
 
-        AIScene scene = Assimp.aiImportFile(filePath, postProcessingFlags);
+        // 🌟 核心杀招：创建属性存储器，强制禁止 Assimp 自动将 Z-up 转换为 Y-up！
+        // 这样读取进来的顶点就是纯正的 BeamNG 原始数据，完美对接 JBeam 插槽旋转。
+        AIPropertyStore store = Assimp.aiCreatePropertyStore();
+        if (store != null) {
+            Assimp.aiSetImportPropertyInteger(store, Assimp.AI_CONFIG_IMPORT_COLLADA_IGNORE_UP_DIRECTION, 1);
+        }
+
+        AIScene scene;
+        if (store != null) {
+            // 携带属性强制加载
+            scene = Assimp.aiImportFileExWithProperties(filePath, postProcessingFlags, null, store);
+            Assimp.aiReleasePropertyStore(store);
+        } else {
+            // Fallback (通常不会走到这里)
+            scene = Assimp.aiImportFile(filePath, postProcessingFlags);
+        }
+
         if (scene == null || scene.mRootNode() == null) return;
 
-        float[] identityMatrix = new float[] { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
-        processSceneNodesRecursively(scene.mRootNode(), scene, namespace, identityMatrix);
+        // 继续使用上一版的矩阵级联传递，此时的根矩阵是纯净的 Identity
+        processSceneNodesRecursively(scene.mRootNode(), scene, namespace, new Matrix4f().identity());
         Assimp.aiReleaseImport(scene);
     }
 
-    private static void processSceneNodesRecursively(AINode node, AIScene scene, String namespace, float[] parentMatrix) {
+    private static void processSceneNodesRecursively(AINode node, AIScene scene, String namespace, Matrix4f parentTransform) {
         if (node == null) return;
 
-        AIMatrix4x4 localMat = node.mTransformation();
-        float[] nodeMatrix = new float[] {
-                localMat.a1(), localMat.a2(), localMat.a3(), localMat.a4(),
-                localMat.b1(), localMat.b2(), localMat.b3(), localMat.b4(),
-                localMat.c1(), localMat.c2(), localMat.c3(), localMat.c4(),
-                localMat.d1(), localMat.d2(), localMat.d3(), localMat.d4()
-        };
-        float[] currentGlobalMatrix = multiplyMatrix4x4(parentMatrix, nodeMatrix);
+        // 1. 提取当前 Collada 节点的局部变换矩阵 (Assimp 矩阵为行主序)
+        AIMatrix4x4 m = node.mTransformation();
+        // 映射到 JOML Matrix4f 的列主序构造函数中 (Col 0, Col 1, Col 2, Col 3)
+        Matrix4f localTransform = new Matrix4f(
+                m.a1(), m.b1(), m.c1(), m.d1(),
+                m.a2(), m.b2(), m.c2(), m.d2(),
+                m.a3(), m.b3(), m.c3(), m.d3(),
+                m.a4(), m.b4(), m.c4(), m.d4()
+        );
+
+        // 2. 累乘计算出当前节点的全局绝对变换矩阵：Global = Parent * Local
+        Matrix4f globalTransform = new Matrix4f(parentTransform).mul(localTransform);
 
         String rawNodeName = node.mName().dataString();
-        String cleanNodeName = rawNodeName.endsWith("-mesh") ? rawNodeName.substring(0, rawNodeName.length() - 5) : rawNodeName;
+        String cleanNodeName = cleanIdentifier(rawNodeName);
 
         int numMeshes = node.mNumMeshes();
         IntBuffer meshIndices = node.mMeshes();
 
+        // 3. 如果当前节点挂载了实体网格，则对其进行烘焙提取
         if (numMeshes > 0 && meshIndices != null && !cleanNodeName.isEmpty()) {
             PointerBuffer sceneMeshesBuffer = scene.mMeshes();
             List<AIMesh> attachedMeshSlices = new ArrayList<>(numMeshes);
@@ -165,7 +207,6 @@ public class DaeMeshLoader {
             }
 
             if (totalTriangleFaces > 0) {
-                // 🚀 QUADS 对齐填充：每个实心三角形填充展开为 4 个顶点
                 int totalRenderVertices = totalTriangleFaces * 4;
                 float[] mergedPositions = new float[totalRenderVertices * 3];
                 float[] mergedNormals   = new float[totalRenderVertices * 3];
@@ -173,6 +214,9 @@ public class DaeMeshLoader {
                 List<SubMesh> subMeshes = new ArrayList<>();
 
                 int currentMergedVertPtr = 0;
+                // 复用临时向量对象，避免高频创建销毁产生内存垃圾
+                Vector3f tempPos = new Vector3f();
+                Vector3f tempNorm = new Vector3f();
 
                 for (AIMesh aiMesh : attachedMeshSlices) {
                     int subMeshStartVertex = currentMergedVertPtr;
@@ -200,35 +244,28 @@ public class DaeMeshLoader {
                         if (face.mNumIndices() != 3) continue;
 
                         IntBuffer indices = face.mIndices();
-                        int idxA = indices.get(0);
-                        int idxB = indices.get(1);
-                        int idxC = indices.get(2);
-
-                        // 补齐构建退化四边形 (A, B, C, C) 完美迎合 MC 渲染器
-                        int[] targetIndices = new int[] { idxA, idxB, idxC, idxC };
+                        int[] targetIndices = new int[] { indices.get(0), indices.get(1), indices.get(2), indices.get(2) };
 
                         for (int vIdx : targetIndices) {
-                            // 保持缓存在原汁原味的 BeamNG Z-up 参考系中
+                            // 🌟 核心绝杀：读取原生顶点并注入绝对变换矩阵，完美修复局部部件缩放断层与错位
                             AIVector3D pos = posBuffer.get(vIdx);
-                            float rawX = pos.x(), rawY = pos.y(), rawZ = pos.z();
-                            float tx = rawX * currentGlobalMatrix[0] + rawY * currentGlobalMatrix[1] + rawZ * currentGlobalMatrix[2] + currentGlobalMatrix[3];
-                            float ty = rawX * currentGlobalMatrix[4] + rawY * currentGlobalMatrix[5] + rawZ * currentGlobalMatrix[6] + currentGlobalMatrix[7];
-                            float tz = rawX * currentGlobalMatrix[8] + rawY * currentGlobalMatrix[9] + rawZ * currentGlobalMatrix[10] + currentGlobalMatrix[11];
+                            tempPos.set(pos.x(), pos.y(), pos.z());
+                            globalTransform.transformPosition(tempPos);
 
-                            mergedPositions[currentMergedVertPtr * 3]     = tx;
-                            mergedPositions[currentMergedVertPtr * 3 + 1] = ty;
-                            mergedPositions[currentMergedVertPtr * 3 + 2] = tz;
+                            mergedPositions[currentMergedVertPtr * 3]     = tempPos.x;
+                            mergedPositions[currentMergedVertPtr * 3 + 1] = tempPos.y;
+                            mergedPositions[currentMergedVertPtr * 3 + 2] = tempPos.z;
 
+                            // 同步变换法线向量方向 (仅受旋转影响)
                             if (normBuffer != null) {
                                 AIVector3D norm = normBuffer.get(vIdx);
-                                float nx = norm.x(), ny = norm.y(), nz = norm.z();
-                                float ntx = nx * currentGlobalMatrix[0] + ny * currentGlobalMatrix[1] + nz * currentGlobalMatrix[2];
-                                float nty = nx * currentGlobalMatrix[4] + ny * currentGlobalMatrix[5] + nz * currentGlobalMatrix[6];
-                                float ntz = nx * currentGlobalMatrix[8] + ny * currentGlobalMatrix[9] + nz * currentGlobalMatrix[10];
+                                tempNorm.set(norm.x(), norm.y(), norm.z());
+                                globalTransform.transformDirection(tempNorm);
+                                tempNorm.normalize(); // 确保法线单位化
 
-                                mergedNormals[currentMergedVertPtr * 3]     = ntx;
-                                mergedNormals[currentMergedVertPtr * 3 + 1] = nty;
-                                mergedNormals[currentMergedVertPtr * 3 + 2] = ntz;
+                                mergedNormals[currentMergedVertPtr * 3]     = tempNorm.x;
+                                mergedNormals[currentMergedVertPtr * 3 + 1] = tempNorm.y;
+                                mergedNormals[currentMergedVertPtr * 3 + 2] = tempNorm.z;
                             } else {
                                 mergedNormals[currentMergedVertPtr * 3]     = 0f;
                                 mergedNormals[currentMergedVertPtr * 3 + 1] = 0f;
@@ -238,7 +275,7 @@ public class DaeMeshLoader {
                             if (uvBuffer != null) {
                                 AIVector3D uv = uvBuffer.get(vIdx);
                                 mergedUvs[currentMergedVertPtr * 2]     = uv.x();
-                                mergedUvs[currentMergedVertPtr * 2 + 1] = 1.0f - uv.y();
+                                mergedUvs[currentMergedVertPtr * 2 + 1] = 1.0f - uv.y(); // 对齐 MC 纹理坐标
                             } else {
                                 mergedUvs[currentMergedVertPtr * 2]     = 0f;
                                 mergedUvs[currentMergedVertPtr * 2 + 1] = 0f;
@@ -261,39 +298,23 @@ public class DaeMeshLoader {
                 unifiedGeometry.vertexCount = totalRenderVertices;
                 unifiedGeometry.subMeshes   = subMeshes;
 
-                // 🌟 双轨字典快照注册：确保无论是层级呼叫还是切片直接呼叫都能精准命中！
+                // 完美映射：基于原生节点名与切片名进行双重全域覆盖
                 MESH_CACHE.put(namespace + ":" + cleanNodeName, unifiedGeometry);
+                // BeamCraft.LOGGER.info("cleanNodeName: " + namespace + ":" + cleanNodeName);
                 if (!cleanNodeName.equals(rawNodeName)) {
                     MESH_CACHE.put(namespace + ":" + rawNodeName, unifiedGeometry);
-                }
-                for (AIMesh slice : attachedMeshSlices) {
-                    String baseSliceName = slice.mName().dataString();
-                    if (!baseSliceName.isEmpty()) {
-                        String cleanSlice = baseSliceName.endsWith("-mesh") ? baseSliceName.substring(0, baseSliceName.length() - 5) : baseSliceName;
-                        MESH_CACHE.putIfAbsent(namespace + ":" + cleanSlice, unifiedGeometry);
-                    }
+                    // BeamCraft.LOGGER.info("rawNodeName: " + namespace + ":" + rawNodeName);
                 }
             }
         }
 
+        // 4. 携带当前计算完毕的绝对矩阵，继续向下层级递归传递
         int numChildren = node.mNumChildren();
         PointerBuffer childrenBuffer = node.mChildren();
         if (numChildren > 0 && childrenBuffer != null) {
             for (int i = 0; i < numChildren; i++) {
-                processSceneNodesRecursively(AINode.create(childrenBuffer.get(i)), scene, namespace, currentGlobalMatrix);
+                processSceneNodesRecursively(AINode.create(childrenBuffer.get(i)), scene, namespace, globalTransform);
             }
         }
-    }
-
-    private static float[] multiplyMatrix4x4(float[] a, float[] b) {
-        float[] result = new float[16];
-        for (int r=0; r<4; r++) {
-            for (int c=0; c<4; c++) {
-                float sum=0;
-                for (int k=0; k<4; k++) sum += a[r*4+k] * b[k*4+c];
-                result[r*4+c] = sum;
-            }
-        }
-        return result;
     }
 }

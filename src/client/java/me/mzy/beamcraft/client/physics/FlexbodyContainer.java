@@ -48,6 +48,9 @@ public class FlexbodyContainer {
     public float[] vWeightX = new float[INIT_FLEX_CAP];
     public float[] vWeightY = new float[INIT_FLEX_CAP];
     public float[] vWeightZ = new float[INIT_FLEX_CAP];
+    public float[] vNormWeightX = new float[INIT_FLEX_CAP];
+    public float[] vNormWeightY = new float[INIT_FLEX_CAP];
+    public float[] vNormWeightZ = new float[INIT_FLEX_CAP];
     public boolean[] vUseCrossZ; // 当找不到正交 Vz 时设为 true，靠叉乘推导
 
     // CPU 蒙皮实时计算输出缓冲 (供 VBO 极速拉取)
@@ -225,6 +228,10 @@ public class FlexbodyContainer {
         this.vWeightX    = new float[totalVerts];
         this.vWeightY    = new float[totalVerts];
         this.vWeightZ    = new float[totalVerts];
+
+        this.vNormWeightX = new float[totalVerts];
+        this.vNormWeightY = new float[totalVerts];
+        this.vNormWeightZ = new float[totalVerts];
 
         this.vUseCrossZ  = new boolean[totalVerts];
 
