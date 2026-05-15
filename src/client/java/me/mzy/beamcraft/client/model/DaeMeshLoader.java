@@ -1,6 +1,5 @@
 package me.mzy.beamcraft.client.model;
 
-import me.mzy.beamcraft.BeamCraft;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.assimp.*;
@@ -140,7 +139,7 @@ public class DaeMeshLoader {
                         Assimp.aiProcess_JoinIdenticalVertices |    // 优化合并
                         Assimp.aiProcess_ImproveCacheLocality;
 
-        // 🌟 核心杀招：创建属性存储器，强制禁止 Assimp 自动将 Z-up 转换为 Y-up！
+        // 创建属性存储器，强制禁止 Assimp 自动将 Z-up 转换为 Y-up！
         // 这样读取进来的顶点就是纯正的 BeamNG 原始数据，完美对接 JBeam 插槽旋转。
         AIPropertyStore store = Assimp.aiCreatePropertyStore();
         if (store != null) {
@@ -247,7 +246,7 @@ public class DaeMeshLoader {
                         int[] targetIndices = new int[] { indices.get(0), indices.get(1), indices.get(2), indices.get(2) };
 
                         for (int vIdx : targetIndices) {
-                            // 🌟 核心绝杀：读取原生顶点并注入绝对变换矩阵，完美修复局部部件缩放断层与错位
+                            // 读取原生顶点并注入绝对变换矩阵
                             AIVector3D pos = posBuffer.get(vIdx);
                             tempPos.set(pos.x(), pos.y(), pos.z());
                             globalTransform.transformPosition(tempPos);

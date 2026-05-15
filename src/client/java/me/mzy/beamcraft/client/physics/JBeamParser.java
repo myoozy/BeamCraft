@@ -398,44 +398,58 @@ public class JBeamParser {
     // --- 7. Flexbody Parsing ---
     public static void parseFlexbodies(JsonArray flexbodies, SoftBodyVehicle vehicle, String rootPartName, int partId, JBeamAssembler.TransformContext transform) {
         boolean isHeader = true;
+        java.util.List<String> currentGroups = new java.util.ArrayList<>();
+
         for (JsonElement element : flexbodies) {
-            if (element.isJsonObject()) continue;
+            // 拦截并更新全局状态修改器
+            if (element.isJsonObject()) {
+                JsonObject modifier = element.getAsJsonObject();
+                if (modifier.has("group")) {
+                    currentGroups = parseGroups(modifier.get("group"));
+                }
+                continue;
+            }
 
             if (element.isJsonArray()) {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
 
-                if (row.size() >= 2) {
+                if (row.size() >= 1) {
                     String meshName = row.get(0).getAsString();
-                    java.util.List<String> targetGroups = new java.util.ArrayList<>();
-                    JsonElement groupElement = row.get(1);
-                    if (groupElement.isJsonArray()) {
-                        for (JsonElement g : groupElement.getAsJsonArray()) targetGroups.add(g.getAsString());
-                    } else {
-                        targetGroups.add(groupElement.getAsString());
+                    if (meshName.isEmpty()) continue;
+
+                    // 默认使用当前上下文的 Group
+                    java.util.List<String> targetGroups = new java.util.ArrayList<>(currentGroups);
+
+                    if (row.size() >= 2 && !row.get(1).isJsonObject()) {
+                        JsonElement groupElement = row.get(1);
+                        // 无条件覆写！即使 JBeam 传入的是 ""，它也能正确解析为空列表，从而实现 BeamNG 的“清除 Group”指令。
+                        targetGroups = parseGroups(groupElement);
                     }
 
                     double px = 0, py = 0, pz = 0;
                     double rx = 0, ry = 0, rz = 0;
                     double sx = 1, sy = 1, sz = 1;
 
-                    if (row.size() >= 4 && row.get(3).isJsonObject()) {
-                        JsonObject trans = row.get(3).getAsJsonObject();
-                        if (trans.has("pos")) {
-                            JsonObject pos = trans.getAsJsonObject("pos");
-                            px = getDoubleSafe(pos, "x", 0); py = getDoubleSafe(pos, "y", 0); pz = getDoubleSafe(pos, "z", 0);
-                        }
-                        if (trans.has("rot")) {
-                            JsonObject rot = trans.getAsJsonObject("rot");
-                            rx = getDoubleSafe(rot, "x", 0); ry = getDoubleSafe(rot, "y", 0); rz = getDoubleSafe(rot, "z", 0);
-                        }
-                        if (trans.has("scale")) {
-                            JsonObject scale = trans.getAsJsonObject("scale");
-                            sx = getDoubleSafe(scale, "x", 1); sy = getDoubleSafe(scale, "y", 1); sz = getDoubleSafe(scale, "z", 1);
+                    // 提取行内末尾的位移/旋转/缩放字典
+                    for (int i = 1; i < row.size(); i++) {
+                        if (row.get(i).isJsonObject()) {
+                            JsonObject trans = row.get(i).getAsJsonObject();
+                            if (trans.has("pos")) {
+                                JsonObject pos = trans.getAsJsonObject("pos");
+                                px = getDoubleSafe(pos, "x", 0); py = getDoubleSafe(pos, "y", 0); pz = getDoubleSafe(pos, "z", 0);
+                            }
+                            if (trans.has("rot")) {
+                                JsonObject rot = trans.getAsJsonObject("rot");
+                                rx = getDoubleSafe(rot, "x", 0); ry = getDoubleSafe(rot, "y", 0); rz = getDoubleSafe(rot, "z", 0);
+                            }
+                            if (trans.has("scale")) {
+                                JsonObject scale = trans.getAsJsonObject("scale");
+                                sx = getDoubleSafe(scale, "x", 1); sy = getDoubleSafe(scale, "y", 1); sz = getDoubleSafe(scale, "z", 1);
+                            }
                         }
                     }
 
-                    // 🚀 原汁原味录入：彻底剥离欧拉角直加与提前坐标映射
                     vehicle.flexbodies.registerFlexbody(
                             meshName, rootPartName, targetGroups,
                             px, py, pz,

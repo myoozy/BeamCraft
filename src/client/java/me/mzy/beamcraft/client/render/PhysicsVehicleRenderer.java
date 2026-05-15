@@ -20,9 +20,8 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
     private static final Identifier DEFAULT_TEXTURE = Identifier.of("beamcraft", "textures/entity/vehicle_default.png");
 
-    // 🌟 终极排查总闸：设为 true 将彻底屏蔽软体节点形变，强行展示绝对工整的静态底模快照！
-    // 建议你先保持 true 进入游戏验证法线与隐身件，确认惊艳后再设为 false 开启震撼软体随动。
-    private final boolean DEBUG_STATIC_RENDER = true;
+    // 🌟 排查总闸：设为 true 将彻底屏蔽软体节点形变
+    private final boolean DEBUG_STATIC_RENDER = false;
 
     float[] interpNodeX = new float[NodeContainer.INIT_NODE_CAP];
     float[] interpNodeY = new float[NodeContainer.INIT_NODE_CAP];
@@ -186,20 +185,22 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
                         finalY = cy + wX * vxY + wY * vyY + wZ * baseNy;
                         finalZ = cz + wX * vxZ + wY * vyZ + wZ * baseNz;
 
-                        // 🌟 光影着色大革命：通过随动正交基进行纯旋转映射，杜绝形变拉伸导致的法线歪斜撕裂！
+                        // 🌟 1:1 复刻 RoR 源码的动态法线重构逻辑！
+                        // 摒弃强制正交基，直接拥抱软体的倾斜伴随矩阵，物理拉伸时光影会自然跟随撕扯。
                         if (flex.vNormWeightX != null) {
-                            float lenVxSq = vxX * vxX + vxY * vxY + vxZ * vxZ;
-                            float invLenVx = fastInvSqrt(lenVxSq);
-                            float e1x = vxX * invLenVx, e1y = vxY * invLenVx, e1z = vxZ * invLenVx;
-                            float e3x = baseNx, e3y = baseNy, e3z = baseNz;
-                            float e2x = e3y * e1z - e3z * e1y;
-                            float e2y = e3z * e1x - e3x * e1z;
-                            float e2z = e3x * e1y - e3y * e1x;
-
                             float nwX = flex.vNormWeightX[i], nwY = flex.vNormWeightY[i], nwZ = flex.vNormWeightZ[i];
-                            nx = nwX * e1x + nwY * e2x + nwZ * e3x;
-                            ny = nwX * e1y + nwY * e2y + nwZ * e3y;
-                            nz = nwX * e1z + nwY * e2z + nwZ * e3z;
+
+                            // 完美的基底线性组合 (Linear Combination of Basis Vectors)
+                            float rawNx = vxX * nwX + vyX * nwY + baseNx * nwZ;
+                            float rawNy = vxY * nwX + vyY * nwY + baseNy * nwZ;
+                            float rawNz = vxZ * nwX + vyZ * nwY + baseNz * nwZ;
+
+                            // 软体动态归一化
+                            float nLenSq = rawNx * rawNx + rawNy * rawNy + rawNz * rawNz;
+                            if (nLenSq > 1e-10f) {
+                                float nInv = fastInvSqrt(nLenSq);
+                                nx = rawNx * nInv; ny = rawNy * nInv; nz = rawNz * nInv;
+                            } else { nx = baseNx; ny = baseNy; nz = baseNz; }
                         } else { nx = baseNx; ny = baseNy; nz = baseNz; }
 
                     } else {

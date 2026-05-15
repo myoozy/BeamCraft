@@ -11,10 +11,6 @@ import java.util.Map;
 public class NodeContainer {
     public static final int INIT_NODE_CAP = 128;
 
-    private double pendingDx = 0, pendingDy = 0, pendingDz = 0;
-    private float pendingYaw = 0, pendingPitch = 0, pendingRoll = 0;
-    private boolean hasPending = false;
-
     // Mapping from JBeam node ID (e.g., "f1r") to internal array index
     public final Map<String, Integer> nameToIndex = new HashMap<>();
 
@@ -104,6 +100,23 @@ public class NodeContainer {
             // if exists, add weight to it, then return
             int existingIdx = nameToIndex.get(name);
             mass[existingIdx] += nodeMass;
+
+            // 合并 groups
+            if (groups != null && !groups.isEmpty()) {
+                java.util.List<String> existingGroups = assignedGroups[existingIdx];
+                if (existingGroups == null) {
+                    // 原有组列表为空，直接新建
+                    assignedGroups[existingIdx] = new java.util.ArrayList<>(groups);
+                } else {
+                    // 去重合并（可根据需要改用 addAll 允许重复）
+                    for (String g : groups) {
+                        if (!existingGroups.contains(g)) {
+                            existingGroups.add(g);
+                        }
+                    }
+                }
+            }
+
             return;
         }
 

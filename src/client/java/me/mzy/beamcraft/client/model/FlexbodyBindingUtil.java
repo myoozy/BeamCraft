@@ -15,11 +15,29 @@ public class FlexbodyBindingUtil {
         if (flex.isSkinningBound || flex.meshCount == 0) return;
 
         int totalVerts = 0;
+
         for (int m = 0; m < flex.meshCount; m++) {
-            String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[m];
-            DaeMeshLoader.RawGeometry geom = DaeMeshLoader.MESH_CACHE.get(scopedKey);
-            if (geom == null) geom = DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[m]);
-            if (geom != null) totalVerts += geom.vertexCount;
+            boolean valid = true;
+            if (flex.targetGroups[m] != null && !flex.targetGroups[m].isEmpty()) {
+                boolean foundAny = false;
+                for (String gName : flex.targetGroups[m]) {
+                    if (flex.groupNameToId.containsKey(gName)) {
+                        foundAny = true; break;
+                    }
+                }
+                if (!foundAny) valid = false;
+            }
+
+            // 如果判定为幽灵网格，直接把它的名字清空。
+            // 这样不仅这里不会统计它的顶点，后期的 Renderer 也会因为名字为空找不到模型而自动跳过！
+            if (!valid) {
+                flex.meshName[m] = "";
+            } else {
+                String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[m];
+                DaeMeshLoader.RawGeometry geom = DaeMeshLoader.MESH_CACHE.get(scopedKey);
+                if (geom == null) geom = DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[m]);
+                if (geom != null) totalVerts += geom.vertexCount;
+            }
         }
 
         flex.allocateSkinningBuffers(totalVerts);
@@ -31,26 +49,27 @@ public class FlexbodyBindingUtil {
         int ptr = 0;
 
         for (int m = 0; m < flex.meshCount; m++) {
+            // 直接判断名字是否为空，跳过被我们“处决”的幽灵网格
+            if (flex.meshName[m].isEmpty()) continue;
+
             String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[m];
             DaeMeshLoader.RawGeometry geom = DaeMeshLoader.MESH_CACHE.get(scopedKey);
             if (geom == null) geom = DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[m]);
             if (geom == null) continue;
 
-            List<Integer> targetPool = new ArrayList<>();
-            if (flex.targetGroups[m] != null) {
+            List<Integer> primaryPool = new ArrayList<>();
+            if (flex.targetGroups[m] != null && !flex.targetGroups[m].isEmpty()) {
                 for (String gName : flex.targetGroups[m]) {
                     Integer gId = flex.groupNameToId.get(gName);
                     if (gId != null) {
                         int start = flex.groupNodeOffsets[gId];
                         int count = flex.groupNodeCounts[gId];
-                        for (int i = 0; i < count; i++) targetPool.add(flex.flatGroupNodes[start + i]);
+                        for (int i = 0; i < count; i++) primaryPool.add(flex.flatGroupNodes[start + i]);
                     }
                 }
+            } else {
+                for (int i = 0; i < nodes.count; i++) primaryPool.add(i);
             }
-
-            List<Integer> globalPool = new ArrayList<>(nodes.count);
-            for (int i = 0; i < nodes.count; i++) globalPool.add(i);
-            List<Integer> primaryPool = targetPool.isEmpty() ? globalPool : targetPool;
 
             float[] pos = geom.positions;
             float[] norms = geom.normals;
@@ -70,7 +89,6 @@ public class FlexbodyBindingUtil {
             JBeamAssembler.TransformContext slotCtx = flex.slotContext[m];
 
             for (int v = 0; v < geom.vertexCount; v++) {
-                // 🚀 性能优化：退化四边形的第 4 个点直接拷贝复用第 3 个点的解算结果
                 if ((v & 3) == 3) {
                     flex.skinnedPosX[ptr]  = flex.skinnedPosX[ptr - 1];
                     flex.skinnedPosY[ptr]  = flex.skinnedPosY[ptr - 1];
@@ -83,7 +101,6 @@ public class FlexbodyBindingUtil {
                     flex.vWeightZ[ptr]     = flex.vWeightZ[ptr - 1];
                     flex.vUseCrossZ[ptr]   = flex.vUseCrossZ[ptr - 1];
 
-                    // 同步拷贝法线权重
                     if (flex.vNormWeightX != null) {
                         flex.vNormWeightX[ptr] = flex.vNormWeightX[ptr - 1];
                         flex.vNormWeightY[ptr] = flex.vNormWeightY[ptr - 1];
@@ -97,9 +114,6 @@ public class FlexbodyBindingUtil {
                     continue;
                 }
 
-                // =====================================================================
-                // 空间仿射组装 (原生 Z-up)
-                // =====================================================================
                 double origX = pos[v * 3], origY = pos[v * 3 + 1], origZ = pos[v * 3 + 2];
                 origX *= sX; origY *= sY; origZ *= sZ;
 
@@ -110,7 +124,6 @@ public class FlexbodyBindingUtil {
                 double lX = x3 + pX, lY = y3 + pY, lZ = z3 + pZ;
                 double[] globalP = slotCtx != null ? slotCtx.transformNode(lX, lY, lZ) : new double[]{lX, lY, lZ};
 
-                // 转换至 Minecraft 实体参考系 (Y-up)
                 double staticMcX = +globalP[0];
                 double staticMcY = +globalP[2];
                 double staticMcZ = -globalP[1];
@@ -119,13 +132,9 @@ public class FlexbodyBindingUtil {
                 flex.skinnedPosY[ptr] = (float) staticMcY;
                 flex.skinnedPosZ[ptr] = (float) staticMcZ;
 
-                // =====================================================================
-                // 同步解算原生态平滑着色法线向量方向
-                // =====================================================================
                 double nOrigX = 0, nOrigY = 0, nOrigZ = 1;
                 if (norms != null && v * 3 + 2 < norms.length) {
                     double rawNx = norms[v * 3], rawNy = norms[v * 3 + 1], rawNz = norms[v * 3 + 2];
-                    // 仅受方向旋转分量影响
                     double nx1 = rawNx * cosZ - rawNy * sinZ, ny1 = rawNx * sinZ + rawNy * cosZ, nz1 = rawNz;
                     double nx2 = nx1, ny2 = ny1 * cosX - nz1 * sinX, nz2 = ny1 * sinX + nz1 * cosX;
                     double nx3 = nx2 * cosY + nz2 * sinY, ny3 = ny2, nz3 = -nx2 * sinY + nz2 * cosY;
@@ -138,11 +147,9 @@ public class FlexbodyBindingUtil {
                     nOrigZ = -(gNorm[1] - gOrigin[1]);
                 }
 
-                // 🚀 核心绝杀：彻底改用出厂绝对静止坐标 nodes.baseX/baseY/baseZ 投影寻址！
+                // 🌟 核心修复 2：彻底砍掉 globalPool 备用池逻辑！
+                // 如果在自己的专属 Group 里找不到合适的投射面，乖乖原位退化成货斗门上的刚体，绝不越界去抓车身！
                 boolean success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, primaryPool);
-                if (!success && primaryPool != globalPool) {
-                    success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, globalPool);
-                }
                 if (!success) {
                     applyFallbackRigidBinding(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, primaryPool);
                 }
@@ -165,12 +172,10 @@ public class FlexbodyBindingUtil {
         int poolSize = pool.size();
         if (poolSize < 3) return false;
 
-        // 1. 全域基于出厂恒定坐标 baseX/baseY/baseZ 寻找伴随锚点
         int bestRef = pool.get(0);
         double minDistSq = Double.MAX_VALUE;
         for (int i = 0; i < poolSize; i++) {
             int n = pool.get(i);
-            // 🚨 修正关键点：剥离实时 posX 干扰，绝对对齐静态图纸！
             double dx = vx - nodes.baseX[n], dy = vy - nodes.baseY[n], dz = vz - nodes.baseZ[n];
             double dSq = dx * dx + dy * dy + dz * dz;
             if (dSq < minDistSq) { minDistSq = dSq; bestRef = n; }
@@ -205,25 +210,12 @@ public class FlexbodyBindingUtil {
             if (lenWSq < 1e-6) continue;
 
             double dot = (wX * uX + wY * uY + wZ * uZ) * invLenU / Math.sqrt(lenWSq);
-            if (Math.abs(dot) > 0.85) continue;
+            // 放宽共线判定，只要不是绝对平行即可，依靠后续的降维投影自适应
+            if (Math.abs(dot) > 0.95) continue;
 
             double dx = vx - nodes.baseX[n], dy = vy - nodes.baseY[n], dz = vz - nodes.baseZ[n];
             double dSq = dx * dx + dy * dy + dz * dz;
             if (dSq < minDistNySq) { minDistNySq = dSq; bestNy = n; }
-        }
-
-        if (bestNy == bestRef) {
-            double maxPerpSq = -1.0;
-            double nUx = uX * invLenU, nUy = uY * invLenU, nUz = uZ * invLenU;
-            for (int i = 0; i < poolSize; i++) {
-                int n = pool.get(i);
-                if (n == bestRef || n == bestNx) continue;
-                double dx = nodes.baseX[n] - cx, dy = nodes.baseY[n] - cy, dz = nodes.baseZ[n] - cz;
-                double proj = dx * nUx + dy * nUy + dz * nUz;
-                double pX = dx - proj * nUx, pY = dy - proj * nUy, pZ = dz - proj * nUz;
-                double perpSq = pX * pX + pY * pY + pZ * pZ;
-                if (perpSq > maxPerpSq && perpSq > 1e-5) { maxPerpSq = perpSq; bestNy = n; }
-            }
         }
 
         if (bestNy == bestRef) return false;
@@ -239,12 +231,8 @@ public class FlexbodyBindingUtil {
             nX *= invN; nY *= invN; nZ *= invN;
         } else return false;
 
-        // ---------------------------------------------------------------------
-        // 解算位置仿射权重
-        // ---------------------------------------------------------------------
         double dX = vx - cx, dY = vy - cy, dZ = vz - cz;
         double wZ = dX * nX + dY * nY + dZ * nZ;
-
         double pX = dX - wZ * nX, pY = dY - wZ * nY, pZ = dZ - wZ * nZ;
 
         double u_u = uX * uX + uY * uY + uZ * uZ;
@@ -260,31 +248,28 @@ public class FlexbodyBindingUtil {
         float wX = (float) ((d_u * v_v - d_v * u_v) * invDet2D);
         float wY = (float) ((d_v * u_u - d_u * u_v) * invDet2D);
 
-        // 强力防御阀门：若遇到极端共面导致位置放缩偏离实体范围，强制退化保护
+        // 如果超出合理外延直接视为病态退化，触发 Rigid Follow，绝不让它乱长尖刺！
         if (Float.isNaN(wX) || Float.isNaN(wY) || Float.isNaN((float)wZ) ||
-                Math.abs(wX) > 8.0f || Math.abs(wY) > 8.0f || Math.abs(wZ) > 8.0f) {
+                Math.abs(wX) > 15.0f || Math.abs(wY) > 15.0f || Math.abs(wZ) > 15.0f) {
             return false;
         }
 
+        float nwX = 0, nwY = 0, nwZ = 1;
         if (flex.vNormWeightX != null) {
-            // 构造出厂态的局部标准正交基 (E1, E2, E3)
-            double lenU = Math.sqrt(u_u);
-            double e1x = uX / lenU, e1y = uY / lenU, e1z = uZ / lenU;
-            double e3x = nX, e3y = nY, e3z = nZ; // nX,nY,nZ 已经是经过归一化的面法线
-            double e2x = e3y * e1z - e3z * e1y;
-            double e2y = e3z * e1x - e3x * e1z;
-            double e2z = e3x * e1y - e3y * e1x;
-
             double normLen = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
             if (normLen > 1e-5) {
                 double inX = normX / normLen, inY = normY / normLen, inZ = normZ / normLen;
-                // 记录原生平滑法线在绝对正交基底下的纯旋转投影分量
-                flex.vNormWeightX[ptr] = (float) (inX * e1x + inY * e1y + inZ * e1z);
-                flex.vNormWeightY[ptr] = (float) (inX * e2x + inY * e2y + inZ * e2z);
-                flex.vNormWeightZ[ptr] = (float) (inX * e3x + inY * e3y + inZ * e3z);
-            } else {
-                flex.vNormWeightX[ptr] = 0; flex.vNormWeightY[ptr] = 0; flex.vNormWeightZ[ptr] = 1;
+                double normWZ = inX * nX + inY * nY + inZ * nZ;
+                double npX = inX - normWZ * nX, npY = inY - normWZ * nY, npZ = inZ - normWZ * nZ;
+                double nd_u = npX * uX + npY * uY + npZ * uZ;
+                double nd_v = npX * vX + npY * vY + npZ * vZ;
+                nwX = (float) ((nd_u * v_v - nd_v * u_v) * invDet2D);
+                nwY = (float) ((nd_v * u_u - nd_u * u_v) * invDet2D);
+                nwZ = (float) normWZ;
             }
+            flex.vNormWeightX[ptr] = nwX;
+            flex.vNormWeightY[ptr] = nwY;
+            flex.vNormWeightZ[ptr] = nwZ;
         }
 
         flex.vCenterNode[ptr] = bestRef;
@@ -318,7 +303,6 @@ public class FlexbodyBindingUtil {
         flex.skinnedPosY[ptr] = (float) (vy - nodes.baseY[bestC]);
         flex.skinnedPosZ[ptr] = (float) (vz - nodes.baseZ[bestC]);
 
-        // 刚体态记录原生绝对法线分量
         if (flex.vNormWeightX != null) {
             double nLen = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
             flex.vNormWeightX[ptr] = (float)(nLen > 1e-5 ? normX / nLen : 0);

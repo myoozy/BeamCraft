@@ -135,7 +135,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			VertexConsumer triBuffer = context.consumers().getBuffer(RenderLayer.getLines());
 			VertexConsumer torsionBuffer = context.consumers().getBuffer(RenderLayer.getLines());
 
-			// 核心改变：遍历管理器里的每一辆车！
+			// 遍历管理器里的每一辆车
 			for (SoftBodyVehicle vehicle : world.vehicles) {
 
 				// 获取这辆车绑定的 MC 实体当前的世界坐标
@@ -143,7 +143,7 @@ public class BeamCraftClient implements ClientModInitializer {
 				double eY = vehicle.parentEntity.getY();
 				double eZ = vehicle.parentEntity.getZ();
 
-				boolean DEBUG_SHOW_BEAMS = false;
+				boolean DEBUG_SHOW_BEAMS = true;
 
 				// === 1. 渲染梁/骨架 ===
 				if (DEBUG_SHOW_BEAMS) {
