@@ -1,6 +1,5 @@
 package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.client.render.VehicleRenderBuffer;
 import me.mzy.beamcraft.utility.Utility;
 
 import java.util.*;
@@ -13,8 +12,6 @@ public class FlexbodyContainer {
     public static final int INIT_FLEX_CAP = 16;
     public String vehicleNamespace = "";
     public boolean isSkinningBound = false;
-
-    public VehicleRenderBuffer vboBuffer = new VehicleRenderBuffer();
 
     // ==========================================
     // 1. 原始 JBeam 定义层 (Mesh 级别 SoA)
@@ -129,10 +126,6 @@ public class FlexbodyContainer {
         totalVertexCount = 0;
         groupNameToId.clear();
         isSkinningBound = false;
-        // 🌟 清理数据时，顺便释放显存，防止内存泄漏！
-        if (vboBuffer != null) {
-            vboBuffer.free();
-        }
     }
 
     /**

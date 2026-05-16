@@ -90,25 +90,26 @@ void main() {
         finalNorm = nw;
     }
 
-    // =========================================================
-    // 写入 36 字节的 VBO 内存！
-    // =========================================================
+    // 写入 36 字节的 VBO 内存
     uint offset = id * 9;
-
     vboArray[offset + 0] = finalPos.x;
     vboArray[offset + 1] = finalPos.y;
     vboArray[offset + 2] = finalPos.z;
 
-    vboArray[offset + 3] = intBitsToFloat(0xFFFFFFFF); // 纯白
+    // 颜色 (RGBA: 白色)
+    vboArray[offset + 3] = intBitsToFloat(0xFFFFFFFF);
 
     vboArray[offset + 4] = uv.x;
     vboArray[offset + 5] = uv.y;
 
-    vboArray[offset + 6] = intBitsToFloat(0); // Overlay
+    // 修改前：vboArray[offset + 6] = intBitsToFloat(0);
+    // 修改后：填入 Minecraft 默认的无覆盖 UV 值
+    vboArray[offset + 6] = intBitsToFloat(655360);
 
-    // 我们先给它强制满级亮度 15728880，以后可以在 Java 端写个 uniform 传进来
+    // Light: 强制满级亮度 (Block 15, Sky 15)
     vboArray[offset + 7] = intBitsToFloat(15728880);
 
+    // Normal: 转换为有符号字节并打包
     int nx = int(finalNorm.x * 127.0) & 0xFF;
     int ny = int(finalNorm.y * 127.0) & 0xFF;
     int nz = int(finalNorm.z * 127.0) & 0xFF;
