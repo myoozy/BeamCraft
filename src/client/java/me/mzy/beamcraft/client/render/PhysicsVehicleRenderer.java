@@ -21,7 +21,6 @@ import net.minecraft.util.math.RotationAxis;
 public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity> {
 
     private static final Identifier DEFAULT_TEXTURE = Identifier.of("beamcraft", "textures/entity/vehicle_default.png");
-    private ComputeSkinningPipeline pipeline = null;
 
     float[] interpNodeX = new float[NodeContainer.INIT_NODE_CAP];
     float[] interpNodeY = new float[NodeContainer.INIT_NODE_CAP];
@@ -50,9 +49,8 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         int vCount = flex.totalVertexCount;
         if (vCount == 0) return;
 
-        if (this.pipeline == null) {
-            this.pipeline = new ComputeSkinningPipeline();
-            this.pipeline.init(flex, 2000);
+        if (flex.skinningPipeline.rawVboId == -1) {
+            flex.skinningPipeline.init(flex, vehicle.nodes.count);
         }
 
         int nodeCount = nodes.count;
@@ -70,7 +68,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         }
 
         // 调度 GPU 蒙皮计算
-        this.pipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount);
+        flex.skinningPipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount);
 
         // ==========================================================
         // 核心修正：纯手动接管底层 OpenGL 状态，兼容 Fabric/Yarn
@@ -90,13 +88,17 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // 4. 开启 Minecraft 原生光照系统，防止模型变黑
         MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().enable();
 
-        // 5. 彻底移除额外的 Yaw 旋转！
-        // 当前的 matrixStack 已经完美包含了正确的摄像机旋转和实体平移位置。
+        // 5. 执行绘制 (VertexBuffer 会自动将 matrix 传给 Shader)
+        flex.skinningPipeline.mcVbo.bind();
+        // 1. 获取包含相机视角的全局视图矩阵
+        org.joml.Matrix4f mvp = new org.joml.Matrix4f(RenderSystem.getModelViewMatrix());
 
-        // 6. 执行绘制 (VertexBuffer 会自动将 matrix 传给 Shader)
-        this.pipeline.mcVbo.bind();
-        this.pipeline.mcVbo.draw(matrixStack.peek().getPositionMatrix(), RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
-        VertexBuffer.unbind();
+        // 2. 将全局视图矩阵 乘以 实体的平移矩阵
+        // 矩阵乘法顺序至关重要：这意味着顶点先进行平移(对齐到实体位置)，然后再跟随相机旋转
+                mvp.mul(matrixStack.peek().getPositionMatrix());
+
+        // 3. 将合并后的完整矩阵传给 GPU 画图
+        flex.skinningPipeline.mcVbo.draw(mvp, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
 
         // 7. 恢复环境状态，避免影响后续其他实体的渲染
         MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().disable();
