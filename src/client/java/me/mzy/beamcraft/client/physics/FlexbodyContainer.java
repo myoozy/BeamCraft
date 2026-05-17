@@ -1,5 +1,8 @@
 package me.mzy.beamcraft.client.physics;
 
+import me.mzy.beamcraft.client.render.DynamicNodeTBO;
+import me.mzy.beamcraft.client.render.RiggingTBO;
+import me.mzy.beamcraft.client.render.SkinningMeshManager;
 import me.mzy.beamcraft.utility.Utility;
 
 import java.util.*;
@@ -12,6 +15,10 @@ public class FlexbodyContainer {
     public static final int INIT_FLEX_CAP = 16;
     public String vehicleNamespace = "";
     public boolean isSkinningBound = false;
+
+    public SkinningMeshManager skinningMeshManager = new SkinningMeshManager();
+    public DynamicNodeTBO nodeTbo = new DynamicNodeTBO();
+    public RiggingTBO rigTbo = new RiggingTBO();
 
     // ==========================================
     // 1. 原始 JBeam 定义层 (Mesh 级别 SoA)
@@ -126,6 +133,12 @@ public class FlexbodyContainer {
         totalVertexCount = 0;
         groupNameToId.clear();
         isSkinningBound = false;
+        if (skinningMeshManager != null) {
+            skinningMeshManager.free();
+        }
+        if (nodeTbo != null) {
+            nodeTbo.free();
+        }
     }
 
     /**

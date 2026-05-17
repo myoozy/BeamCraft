@@ -8,15 +8,19 @@ import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.CoreShaderRegistrationCallback;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
+import net.minecraft.client.render.VertexFormats;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -26,6 +30,8 @@ public class BeamCraftClient implements ClientModInitializer {
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
 	public static final double DELTA_TIME = 0.05;
+
+	public static ShaderProgram skinningShader;
 
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
 	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
@@ -49,6 +55,19 @@ public class BeamCraftClient implements ClientModInitializer {
 		DaeMeshLoader.scanAndLoadAllVehicles(VEHICLES_DIR);
 
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
+
+		// 注册自定义核心着色器
+		CoreShaderRegistrationCallback.EVENT.register(context -> {
+			try {
+				context.register(
+						Identifier.of("beamcraft", "beamcraft_skinning"),
+						VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL,
+						program -> skinningShader = program // 将编译好的着色器保存下来
+				);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		});
 
 		// 1. 物理计算与控制循环 (每帧运行)
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
