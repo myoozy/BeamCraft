@@ -96,6 +96,8 @@ public class NodeContainer {
                         int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, java.util.List<String> groups) {
         ensureNodeCapacity();
 
+        int idx;
+
         if (nameToIndex.containsKey(name)) {
             // if exists, add weight to it, then return
             int existingIdx = nameToIndex.get(name);
@@ -117,38 +119,42 @@ public class NodeContainer {
                 }
             }
 
-            return;
+            idx = existingIdx;
+        }
+        else {
+            mass[count] = nodeMass;
+            names[count] = name;
+            nameToIndex.put(name, count);
+
+            // 存入组列表快照
+            if (groups != null && !groups.isEmpty()) {
+                assignedGroups[count] = new java.util.ArrayList<>(groups);
+            } else {
+                assignedGroups[count] = null;
+            }
+
+            partId[count] = nodePartId;
+            wheelId[count] = -1;
+            collisionRate[count] = 0;
+            sleepRate[count] = 0;
+            degree[count] = 0;
+
+            // clear velocity and force
+            velX[count] = 0;  velY[count] = 0;  velZ[count] = 0;
+            forceX[count] = 0; forceY[count] = 0; forceZ[count] = 0;
+
+            idx = count;
+            count++;
         }
 
-        // 存入组列表快照
-        if (groups != null && !groups.isEmpty()) {
-            assignedGroups[count] = new java.util.ArrayList<>(groups);
-        } else {
-            assignedGroups[count] = null;
-        }
+        baseX[idx] = x; baseY[idx] = y; baseZ[idx] = z;
+        posX[idx] = x;  posY[idx] = y;  posZ[idx] = z;
 
-        names[count] = name;
-        baseX[count] = x; baseY[count] = y; baseZ[count] = z;
-        posX[count] = x;  posY[count] = y;  posZ[count] = z;
+        friction[idx] = nodeFriction;
+        slidingFriction[idx] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
 
-        // clear velocity and force
-        velX[count] = 0;  velY[count] = 0;  velZ[count] = 0;
-        forceX[count] = 0; forceY[count] = 0; forceZ[count] = 0;
-
-        mass[count] = nodeMass;
-        friction[count] = nodeFriction;
-        slidingFriction[count] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
-        nameToIndex.put(name, count);
-        partId[count] = nodePartId;
-        wheelId[count] = -1;
-        collision[count] = nodeCollision;
-        selfCollision[count] = nodeSelfCollision;
-
-        collisionRate[count] = 0;
-        sleepRate[count] = 0;
-        degree[count] = 0;
-
-        count++;
+        collision[idx] = nodeCollision;
+        selfCollision[idx] = nodeSelfCollision;
     }
 
     public void addTireNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
