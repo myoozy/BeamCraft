@@ -206,7 +206,7 @@ public class DaeMeshLoader {
             }
 
             if (totalTriangleFaces > 0) {
-                int totalRenderVertices = totalTriangleFaces * 4;
+                int totalRenderVertices = totalTriangleFaces * 3;
                 float[] mergedPositions = new float[totalRenderVertices * 3];
                 float[] mergedNormals   = new float[totalRenderVertices * 3];
                 float[] mergedUvs       = new float[totalRenderVertices * 2];
@@ -243,7 +243,7 @@ public class DaeMeshLoader {
                         if (face.mNumIndices() != 3) continue;
 
                         IntBuffer indices = face.mIndices();
-                        int[] targetIndices = new int[] { indices.get(0), indices.get(1), indices.get(2), indices.get(2) };
+                        int[] targetIndices = new int[] { indices.get(0), indices.get(1), indices.get(2) };
 
                         for (int vIdx : targetIndices) {
                             // 读取原生顶点并注入绝对变换矩阵

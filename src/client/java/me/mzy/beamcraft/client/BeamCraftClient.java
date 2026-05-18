@@ -123,6 +123,8 @@ public class BeamCraftClient implements ClientModInitializer {
 		// 3. 渲染循环 (遍历所有车，并将局部坐标叠加上实体坐标)
 		WorldRenderEvents.AFTER_ENTITIES.register(context -> {
 			PhysicsWorld world = PHYSICS_WORLD;
+			boolean DEBUG_DRAW = true;
+			if (!DEBUG_DRAW) return;
 			if (world == null || world.vehicles.isEmpty()) return;
 
 			Vec3d cameraPos = context.camera().getPos();

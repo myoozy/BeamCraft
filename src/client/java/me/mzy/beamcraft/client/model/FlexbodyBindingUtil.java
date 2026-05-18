@@ -89,30 +89,6 @@ public class FlexbodyBindingUtil {
             JBeamAssembler.TransformContext slotCtx = flex.slotContext[m];
 
             for (int v = 0; v < geom.vertexCount; v++) {
-                if ((v & 3) == 3) {
-                    flex.skinnedPosX[ptr]  = flex.skinnedPosX[ptr - 1];
-                    flex.skinnedPosY[ptr]  = flex.skinnedPosY[ptr - 1];
-                    flex.skinnedPosZ[ptr]  = flex.skinnedPosZ[ptr - 1];
-                    flex.vCenterNode[ptr]  = flex.vCenterNode[ptr - 1];
-                    flex.vVxNode[ptr]      = flex.vVxNode[ptr - 1];
-                    flex.vVyNode[ptr]      = flex.vVyNode[ptr - 1];
-                    flex.vWeightX[ptr]     = flex.vWeightX[ptr - 1];
-                    flex.vWeightY[ptr]     = flex.vWeightY[ptr - 1];
-                    flex.vWeightZ[ptr]     = flex.vWeightZ[ptr - 1];
-                    flex.vUseCrossZ[ptr]   = flex.vUseCrossZ[ptr - 1];
-
-                    if (flex.vNormWeightX != null) {
-                        flex.vNormWeightX[ptr] = flex.vNormWeightX[ptr - 1];
-                        flex.vNormWeightY[ptr] = flex.vNormWeightY[ptr - 1];
-                        flex.vNormWeightZ[ptr] = flex.vNormWeightZ[ptr - 1];
-                    }
-
-                    if (uvs != null && v * 2 + 1 < uvs.length) {
-                        flex.uvU[ptr] = uvs[v * 2]; flex.uvV[ptr] = uvs[v * 2 + 1];
-                    }
-                    ptr++;
-                    continue;
-                }
 
                 double origX = pos[v * 3], origY = pos[v * 3 + 1], origZ = pos[v * 3 + 2];
                 origX *= sX; origY *= sY; origZ *= sZ;
@@ -147,7 +123,7 @@ public class FlexbodyBindingUtil {
                     nOrigZ = -(gNorm[1] - gOrigin[1]);
                 }
 
-                // 🌟 核心修复 2：彻底砍掉 globalPool 备用池逻辑！
+                // 彻底砍掉 globalPool 备用池逻辑！
                 // 如果在自己的专属 Group 里找不到合适的投射面，乖乖原位退化成货斗门上的刚体，绝不越界去抓车身！
                 boolean success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, primaryPool);
                 if (!success) {

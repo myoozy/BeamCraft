@@ -1,0 +1,82 @@
+#version 430 core
+
+layout(local_size_x = 256) in;
+
+// 1. Rigging 数据保持不变
+struct VertexRig {
+    vec4 w_and_cNode;
+    vec4 nw_and_vxNode;
+    vec4 skPos_and_vyNode;
+    vec4 uv_and_flags;
+};
+layout(std430, binding = 10) readonly buffer RiggingData {
+    VertexRig rigs[];
+};
+
+// 2. 🔥 纯净 VBO 仓库：只有坐标和法线！步长永远是完美的 24 字节 (6 个 Float)
+layout(std430, binding = 11) writeonly buffer CustomVBO {
+    float posNormArray[];
+};
+
+// 3. 动态物理节点保持不变
+layout(std430, binding = 12) readonly buffer PhysicsNodes {
+    vec4 dynamic_nodes[];
+};
+
+uniform int u_vertexCount;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= u_vertexCount) return;
+
+    VertexRig rig = rigs[id];
+
+    vec3 w = rig.w_and_cNode.xyz;
+    int cNode = floatBitsToInt(rig.w_and_cNode.w);
+    vec3 nw = rig.nw_and_vxNode.xyz;
+    int vxNode = floatBitsToInt(rig.nw_and_vxNode.w);
+    vec3 skPos = rig.skPos_and_vyNode.xyz;
+    int vyNode = floatBitsToInt(rig.skPos_and_vyNode.w);
+    int useCross = floatBitsToInt(rig.uv_and_flags.z);
+
+    vec3 finalPos;
+    vec3 finalNorm;
+    vec3 cPos = dynamic_nodes[cNode].xyz;
+
+    if (useCross == 1) {
+        vec3 vxPos = dynamic_nodes[vxNode].xyz;
+        vec3 vyPos = dynamic_nodes[vyNode].xyz;
+        vec3 vx = vxPos - cPos;
+        vec3 vy = vyPos - cPos;
+
+        vec3 baseN = cross(vx, vy);
+        float lenSq = dot(baseN, baseN);
+        if (lenSq > 1e-10) {
+            baseN = normalize(baseN);
+        }
+
+        finalPos = cPos + (vx * w.x) + (vy * w.y) + (baseN * w.z);
+        vec3 rawNx = vx * nw.x + vy * nw.y + baseN * nw.z;
+        if (dot(rawNx, rawNx) > 1e-10) {
+            finalNorm = normalize(rawNx);
+        } else {
+            finalNorm = baseN;
+        }
+    } else {
+        finalPos = cPos + skPos;
+        finalNorm = nw;
+    }
+
+    // 🔥 写入 24 字节的纯净显存
+    uint offset = id * 6;
+
+    // 写入坐标 (Position)
+    posNormArray[offset + 0] = finalPos.x;
+    posNormArray[offset + 1] = finalPos.y;
+    posNormArray[offset + 2] = finalPos.z;
+
+    // 写入法线 (Normal)
+    posNormArray[offset + 3] = finalNorm.x;
+    posNormArray[offset + 4] = finalNorm.y;
+    posNormArray[offset + 5] = finalNorm.z;
+}
