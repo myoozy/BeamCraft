@@ -32,10 +32,14 @@ public class ComputeSkinningPipeline {
     public int totalVertices = 0;
     public int maxNodeCount = 0;
 
+    private ByteBuffer persistentNodeBuffer;
+
     public void init(FlexbodyContainer flex, int maxNodes) {
         this.totalVertices = flex.totalVertexCount;
         this.maxNodeCount = maxNodes;
         if (totalVertices == 0) return;
+
+        this.persistentNodeBuffer = MemoryUtil.memAlloc(maxNodes * 16);
 
         // 1. 读取并编译 Shader
         try {
@@ -142,18 +146,23 @@ public class ComputeSkinningPipeline {
     public void dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes) {
         if (this.computeProgramId == -1 || this.totalVertices == 0) return;
 
-        ByteBuffer nodeBuffer = MemoryUtil.memAlloc(activeNodes * 16);
+        this.persistentNodeBuffer.clear();
         for (int i = 0; i < activeNodes; i++) {
-            nodeBuffer.putFloat(interpX[i]);
-            nodeBuffer.putFloat(interpY[i]);
-            nodeBuffer.putFloat(interpZ[i]);
-            nodeBuffer.putFloat(0f);
+            this.persistentNodeBuffer.putFloat(interpX[i]);
+            this.persistentNodeBuffer.putFloat(interpY[i]);
+            this.persistentNodeBuffer.putFloat(interpZ[i]);
+            this.persistentNodeBuffer.putFloat(0f);
         }
-        nodeBuffer.flip();
+        this.persistentNodeBuffer.flip();
 
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.ssboNodes);
-        GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0, nodeBuffer);
-        MemoryUtil.memFree(nodeBuffer);
+
+        // Buffer Orphaning (孤立旧缓冲)
+        // 先传一个 null，告诉显卡：“旧数据我不要了，你自己慢慢用，给我开辟一块新的同等大小的区域”
+        // 这样 CPU 就不需要干等 GPU 算完上一帧才能写入了
+        GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long) this.maxNodeCount * 16, GL15.GL_DYNAMIC_DRAW);
+        // 然后再把我们的新数据传进去
+        GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0, this.persistentNodeBuffer);
 
         GL20.glUseProgram(this.computeProgramId);
 
@@ -165,11 +174,8 @@ public class ComputeSkinningPipeline {
         int loc = GL20.glGetUniformLocation(this.computeProgramId, "u_vertexCount");
         if (loc != -1) GL20.glUniform1i(loc, this.totalVertices);
 
-        // (删除了 u_packedLight 和 u_strideFloats，不需要了)
-
         int numGroups = (int) Math.ceil((double) this.totalVertices / VERTEX_GROUP_SIZE);
         GL43.glDispatchCompute(numGroups, 1, 1);
-        GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
 
         GL20.glUseProgram(0);
         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 10, 0);
@@ -183,5 +189,6 @@ public class ComputeSkinningPipeline {
         if (this.customPosNormVbo != -1) { GL15.glDeleteBuffers(this.customPosNormVbo); this.customPosNormVbo = -1; } // 释放内存
         if (this.ssboNodes != -1) { GL15.glDeleteBuffers(this.ssboNodes); this.ssboNodes = -1; }
         if (this.mcVbo != null) { this.mcVbo.close(); this.mcVbo = null; }
+        if (this.persistentNodeBuffer != null) { MemoryUtil.memFree(this.persistentNodeBuffer); this.persistentNodeBuffer = null; }
     }
 }
