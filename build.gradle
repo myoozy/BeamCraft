@@ -40,7 +40,15 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	
+
+	// 引入 LWJGL 3 的 Assimp 绑定与当前平台的本地库
+	implementation "org.lwjgl:lwjgl-assimp:3.3.3"
+	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-windows"
+	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-linux"
+	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-macos"
+
+	// TODO: 如果想把核心类库直接打包进 Mod 中，可以使用 include (根据打包策略)
+	// include "org.lwjgl:lwjgl-assimp:3.3.3"
 }
 
 processResources {

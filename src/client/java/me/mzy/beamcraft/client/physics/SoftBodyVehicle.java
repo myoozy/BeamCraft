@@ -1,8 +1,6 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
-import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.shape.VoxelShape;
@@ -30,6 +28,7 @@ public class SoftBodyVehicle {
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
+    public final FlexbodyContainer flexbodies = new FlexbodyContainer();
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -46,6 +45,7 @@ public class SoftBodyVehicle {
 
     public SoftBodyVehicle(PhysicsVehicleEntity parentEntity) {
         this.parentEntity = parentEntity;
+        this.flexbodies.vehicleNamespace = parentEntity.getRootPartName();
         cacheEntityLocation();
     }
 
@@ -106,8 +106,10 @@ public class SoftBodyVehicle {
     /**
      * Register node into physics world and expand part bounding box cache
      */
-    public void addNode(String name, double x, double y, double z, double nodeMass, double friction, double slidingFriction, int partId, boolean collision, boolean selfCollision) {
-        nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision);
+    public void addNode(String name, double x, double y, double z, double nodeMass,
+                        double friction, double slidingFriction, int partId,
+                        boolean collision, boolean selfCollision, java.util.List<String> groups) {
+        nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision, groups);
 
         // Calculate current maximum part id and expand buffer
         int currentMaxPartId = -1;
@@ -278,6 +280,9 @@ public class SoftBodyVehicle {
     }
 
     public void finalizePhysicsSetup() {
+
+        flexbodies.compileGroupsCSR(nodes);
+
         double invDt = PhysicsWorld.invPhysicsDT;
         double safeFractionSpring = 0.95;
         double safeFractionDamp = 0.95;
@@ -437,6 +442,8 @@ public class SoftBodyVehicle {
         triangles.clear();
         torsionbars.clear();
         slidenodes.clear();
+        wheels.clear();
+        flexbodies.clear();
 
         System.out.println("🧹 Vehicle data cleared and reset");
     }
@@ -543,16 +550,16 @@ public class SoftBodyVehicle {
         }
     }
 
-    // ==========================================================
-    // 💨 散度定理极限单循环气压解算 (访存带宽开销减半)
-    // ==========================================================
-    public void solveTirePressure() {
+    /**
+     * 使用散度定理
+     */
+    private void solveTirePressure() {
         for (int w = 0; w < wheels.count; w++) {
             int start = wheels.tireTriangleIdxStart[w];
             int end = wheels.tireTriangleIdxEnd[w];
             if (start >= end || start == 0) continue;
 
-            // 1. 🚀 直接读取【上一子步】缓存的静止体积与自适应符号，当场算出压强！
+            // 1. 直接读取【上一子步】缓存的静止体积与自适应符号，当场算出压强
             // 0.0005秒的反馈延迟对流体体积而言完全可以忽略不计，绝对稳定
             double currentVolume = wheels.prevVolume[w];
             if (currentVolume < KINDA_SMALL_NUMBER) continue;
@@ -567,13 +574,12 @@ public class SoftBodyVehicle {
 
             double nextVolumeSum = 0.0;
 
-            // 2. 🚀 终极单循环：读取一次节点坐标，同时完成【推力施加】与【下步体积积分】！
+            // 2. 读取一次节点坐标，同时完成【推力施加】与【下步体积积分】！
             for (int i = start; i <= end; i++) {
                 int nA = triangles.node1[i];
                 int nB = triangles.node2[i];
                 int nC = triangles.node3[i];
 
-                // CPU L1 缓存命中：仅拉取一次 A, B, C 的内存
                 double ax = nodes.posX[nA], ay = nodes.posY[nA], az = nodes.posZ[nA];
                 double bx = nodes.posX[nB], by = nodes.posY[nB], bz = nodes.posZ[nB];
                 double cx = nodes.posX[nC], cy = nodes.posY[nC], cz = nodes.posZ[nC];
@@ -606,27 +612,7 @@ public class SoftBodyVehicle {
         }
     }
 
-    public void solveInternalForces(double dt){
-        double invDt = 1.0 / dt;
-
-        // 初始化物理状态
-        for (int i = 0; i < nodes.count; i++) {
-            nodes.forceX[i] = 0;
-            nodes.forceY[i] = 0;
-            nodes.forceZ[i] = 0;
-
-            nodes.prevPosX[i] = nodes.posX[i];
-            nodes.prevPosY[i] = nodes.posY[i];
-            nodes.prevPosZ[i] = nodes.posZ[i];
-        }
-
-        solveTirePressure();
-
-        // ==========================================
-        // 🛡️ 梁计算 (Beams)
-        // ==========================================
-
-        // ========== 1. 处理普通梁（NORMAL） ==========
+    private void solveNormalBeams(double dt, double invDt) {
         for (int i = 0; i < normalBeams.count; i++) {
             if (normalBeams.broken[i]) continue;
 
@@ -675,8 +661,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
+    }
 
-        // ========== 2. 处理支撑梁（SUPPORT，仅压缩） ==========
+    private void solveSupportBeams(double dt, double invDt) {
         for (int i = 0; i < supportBeams.count; i++) {
             if (supportBeams.broken[i]) continue;
 
@@ -729,8 +716,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
+    }
 
-        // ========== 3. 处理限界梁（BOUNDED，含复杂阻尼和限位） ==========
+    private void solveBoundedBeams(double dt, double invDt) {
         for (int i = 0; i < boundedBeams.count; i++) {
             if (boundedBeams.broken[i]) continue;
 
@@ -815,8 +803,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
+    }
 
-        // ========== 4. LBeams ==========
+    private void solveLBeams(double dt, double invDt) {
         for (int i = 0; i < lBeams.count; i++) {
             if (lBeams.broken[i]) continue;
 
@@ -935,8 +924,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n2] += f2x; nodes.forceY[n2] += f2y; nodes.forceZ[n2] += f2z;
             nodes.forceX[n3] += f3x; nodes.forceY[n3] += f3y; nodes.forceZ[n3] += f3z;
         }
+    }
 
-        // ========== 5. 各向异性梁计算 (Anisotropic Beams) ==========
+    private void solveAnisotropicBeams(double dt, double invDt)  {
         for (int i = 0; i < anisotropicBeams.count; i++) {
             if (anisotropicBeams.broken[i]) continue;
 
@@ -1022,19 +1012,18 @@ public class SoftBodyVehicle {
             nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
             nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
         }
+    }
 
-        // ==========================================
-        // 🛡️ 扭杆计算 (Torsionbars)
-        // ==========================================
+    private void solveTorsionBars(double dt, double invDt) {
         for (int i = 0; i < torsionbars.count; i++) {
             if (torsionbars.broken[i]) continue;
 
             int n1 = torsionbars.node1[i], n2 = torsionbars.node2[i], n3 = torsionbars.node3[i], n4 = torsionbars.node4[i];
 
             if (nodes.mass[n1] < KINDA_SMALL_NUMBER ||
-                nodes.mass[n2] < KINDA_SMALL_NUMBER ||
-                nodes.mass[n3] < KINDA_SMALL_NUMBER ||
-                nodes.mass[n4] < KINDA_SMALL_NUMBER) {
+                    nodes.mass[n2] < KINDA_SMALL_NUMBER ||
+                    nodes.mass[n3] < KINDA_SMALL_NUMBER ||
+                    nodes.mass[n4] < KINDA_SMALL_NUMBER) {
                 torsionbars.broken[i] = true;
                 continue;
             }
@@ -1145,10 +1134,9 @@ public class SoftBodyVehicle {
             nodes.forceX[n3] += torque * g3x; nodes.forceY[n3] += torque * g3y; nodes.forceZ[n3] += torque * g3z;
             nodes.forceX[n4] += torque * g4x; nodes.forceY[n4] += torque * g4y; nodes.forceZ[n4] += torque * g4z;
         }
+    }
 
-        // ==========================================
-        // 🛡️ 计算滑块 (slidenodes)
-        // ==========================================
+    private void solveSlideNodes(double dt, double invDt) {
         for (int i = 0; i < slidenodes.count; i++) {
             int nId = slidenodes.nodeId[i];
             int aId = slidenodes.railA[i];
@@ -1213,6 +1201,55 @@ public class SoftBodyVehicle {
             nodes.forceX[aId] += fx * (1 - t); nodes.forceY[aId] += fy * (1 - t); nodes.forceZ[aId] += fz * (1 - t);
             nodes.forceX[bId] += fx * t;       nodes.forceY[bId] += fy * t;       nodes.forceZ[bId] += fz * t;
         }
+    }
+
+    public void solveInternalForces(double dt){
+        double invDt = 1.0 / dt;
+
+        // 初始化物理状态
+        for (int i = 0; i < nodes.count; i++) {
+            nodes.forceX[i] = 0;
+            nodes.forceY[i] = 0;
+            nodes.forceZ[i] = 0;
+
+            nodes.prevPosX[i] = nodes.posX[i];
+            nodes.prevPosY[i] = nodes.posY[i];
+            nodes.prevPosZ[i] = nodes.posZ[i];
+        }
+
+        // ==========================================
+        // 🛡️ 轮胎气压计算 (Pressure Wheels)
+        // ==========================================
+        solveTirePressure();
+
+        // ==========================================
+        // 🛡️ 梁计算 (Beams)
+        // ==========================================
+
+        // ========== 1. 处理普通梁（NORMAL） ==========
+        solveNormalBeams(dt, invDt);
+
+        // ========== 2. 处理支撑梁（SUPPORT，仅压缩） ==========
+        solveSupportBeams(dt, invDt);
+
+        // ========== 3. 处理限界梁（BOUNDED，含复杂阻尼和限位） ==========
+        solveBoundedBeams(dt, invDt);
+
+        // ========== 4. LBeams ==========
+        solveLBeams(dt, invDt);
+
+        // ========== 5. 各向异性梁计算 (Anisotropic Beams) ==========
+        solveAnisotropicBeams(dt, invDt);
+
+        // ==========================================
+        // 🛡️ 扭杆计算 (Torsionbars)
+        // ==========================================
+        solveTorsionBars(dt, invDt);
+
+        // ==========================================
+        // 🛡️ 计算滑块 (slidenodes)
+        // ==========================================
+        solveSlideNodes(dt, invDt);
 
         // ==========================================
         // 🛡️ 积分速度和位置（预测）。整个tick只有这一次积分

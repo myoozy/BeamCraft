@@ -1,22 +1,15 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
-import jdk.jshell.execution.Util;
 import me.mzy.beamcraft.utility.Utility;
-import net.minecraft.util.math.Vec3d;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * Manages node data and physics state using a Structure of Arrays (SoA) approach.
  */
 public class NodeContainer {
     public static final int INIT_NODE_CAP = 128;
-
-    private double pendingDx = 0, pendingDy = 0, pendingDz = 0;
-    private float pendingYaw = 0, pendingPitch = 0, pendingRoll = 0;
-    private boolean hasPending = false;
 
     // Mapping from JBeam node ID (e.g., "f1r") to internal array index
     public final Map<String, Integer> nameToIndex = new HashMap<>();
@@ -25,6 +18,7 @@ public class NodeContainer {
     public String[] names = new String[INIT_NODE_CAP];
     public int[] partId = new int[INIT_NODE_CAP];
     public int[] wheelId = new int[INIT_NODE_CAP];
+    public java.util.List<String>[] assignedGroups = new java.util.List[INIT_NODE_CAP];
 
     // Initial local coordinates from JBeam
     public double[] baseX = new double[INIT_NODE_CAP];
@@ -39,6 +33,14 @@ public class NodeContainer {
     public double[] prevPosX = new double[INIT_NODE_CAP];
     public double[] prevPosY = new double[INIT_NODE_CAP];
     public double[] prevPosZ = new double[INIT_NODE_CAP];
+
+    // 渲染只读缓冲：在每次物理世界 tick 结束时，把 posX/Y/Z 拷贝进来
+    public double[] renderSnapPrevX = new double[INIT_NODE_CAP];
+    public double[] renderSnapPrevY = new double[INIT_NODE_CAP];
+    public double[] renderSnapPrevZ = new double[INIT_NODE_CAP];
+    public double[] renderSnapCurrX = new double[INIT_NODE_CAP];
+    public double[] renderSnapCurrY = new double[INIT_NODE_CAP];
+    public double[] renderSnapCurrZ = new double[INIT_NODE_CAP];
 
     public double[] velX = new double[INIT_NODE_CAP];
     public double[] velY = new double[INIT_NODE_CAP];
@@ -74,6 +76,15 @@ public class NodeContainer {
             collisionRate = Utility.expand(collisionRate, newSize); sleepRate = Utility.expand(sleepRate, newSize);
             degree = Utility.expand(degree, newSize);
 
+            renderSnapPrevX = Utility.expand(renderSnapPrevX, newSize);
+            renderSnapPrevY = Utility.expand(renderSnapPrevY, newSize);
+            renderSnapPrevZ = Utility.expand(renderSnapPrevZ, newSize);
+            renderSnapCurrX = Utility.expand(renderSnapCurrX, newSize);
+            renderSnapCurrY = Utility.expand(renderSnapCurrY, newSize);
+            renderSnapCurrZ = Utility.expand(renderSnapCurrZ, newSize);
+
+            assignedGroups = java.util.Arrays.copyOf(assignedGroups, newSize);
+
             System.out.println("⚠️ [NodeContainer] Resized to: " + newSize);
         }
     }
@@ -82,53 +93,80 @@ public class NodeContainer {
      * Adds a node to the container or accumulates mass if the node already exists.
      */
     public void addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
-                        int nodePartId, boolean nodeCollision, boolean nodeSelfCollision) {
+                        int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, java.util.List<String> groups) {
         ensureNodeCapacity();
+
+        int idx;
 
         if (nameToIndex.containsKey(name)) {
             // if exists, add weight to it, then return
             int existingIdx = nameToIndex.get(name);
             mass[existingIdx] += nodeMass;
-            return;
+
+            // 合并 groups
+            if (groups != null && !groups.isEmpty()) {
+                java.util.List<String> existingGroups = assignedGroups[existingIdx];
+                if (existingGroups == null) {
+                    // 原有组列表为空，直接新建
+                    assignedGroups[existingIdx] = new java.util.ArrayList<>(groups);
+                } else {
+                    // 去重合并（可根据需要改用 addAll 允许重复）
+                    for (String g : groups) {
+                        if (!existingGroups.contains(g)) {
+                            existingGroups.add(g);
+                        }
+                    }
+                }
+            }
+
+            idx = existingIdx;
+        }
+        else {
+            mass[count] = nodeMass;
+            names[count] = name;
+            nameToIndex.put(name, count);
+
+            // 存入组列表快照
+            if (groups != null && !groups.isEmpty()) {
+                assignedGroups[count] = new java.util.ArrayList<>(groups);
+            } else {
+                assignedGroups[count] = null;
+            }
+
+            partId[count] = nodePartId;
+            wheelId[count] = -1;
+            collisionRate[count] = 0;
+            sleepRate[count] = 0;
+            degree[count] = 0;
+
+            // clear velocity and force
+            velX[count] = 0;  velY[count] = 0;  velZ[count] = 0;
+            forceX[count] = 0; forceY[count] = 0; forceZ[count] = 0;
+
+            idx = count;
+            count++;
         }
 
-        names[count] = name;
-        baseX[count] = x; baseY[count] = y; baseZ[count] = z;
-        posX[count] = x;  posY[count] = y;  posZ[count] = z;
+        baseX[idx] = x; baseY[idx] = y; baseZ[idx] = z;
+        posX[idx] = x;  posY[idx] = y;  posZ[idx] = z;
 
-        // clear velocity and force
-        velX[count] = 0;  velY[count] = 0;  velZ[count] = 0;
-        forceX[count] = 0; forceY[count] = 0; forceZ[count] = 0;
+        friction[idx] = nodeFriction;
+        slidingFriction[idx] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
 
-        mass[count] = nodeMass;
-        friction[count] = nodeFriction;
-        slidingFriction[count] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
-        nameToIndex.put(name, count);
-        partId[count] = nodePartId;
-        wheelId[count] = -1;
-        collision[count] = nodeCollision;
-        selfCollision[count] = nodeSelfCollision;
-
-        collisionRate[count] = 0;
-        sleepRate[count] = 0;
-        degree[count] = 0;
-
-        count++;
+        collision[idx] = nodeCollision;
+        selfCollision[idx] = nodeSelfCollision;
     }
 
     public void addTireNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
-                            int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, int nodeWheelId){
-        addNode(name, x, y, z, nodeMass, nodeFriction, nodeSlidingFriction, nodePartId, nodeCollision, nodeSelfCollision);
+                            int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, int nodeWheelId, java.util.List<String> groups){
+        addNode(name, x, y, z, nodeMass, nodeFriction, nodeSlidingFriction, nodePartId, nodeCollision, nodeSelfCollision, groups);
         int idx = nameToIndex.get(name);
         wheelId[idx] = nodeWheelId;
     }
 
     public void clear() {
-        count = 0;
-        nameToIndex.clear();
-
         // 清空速度、受力
-        for (int i = 0; i < velX.length; i++) {
+        for (int i = 0; i < count; i++) {
             velX[i] = 0.0;
             velY[i] = 0.0;
             velZ[i] = 0.0;
@@ -136,6 +174,19 @@ public class NodeContainer {
             forceY[i] = 0.0;
             forceZ[i] = 0.0;
             sleepRate[i] = 0;
+        }
+        count = 0;
+        nameToIndex.clear();
+    }
+
+    public void writeRenderBuffer() {
+        for (int i = 0; i < count; i++) {
+            renderSnapCurrX[i] = posX[i];
+            renderSnapCurrY[i] = posY[i];
+            renderSnapCurrZ[i] = posZ[i];
+            renderSnapPrevX[i] = prevPosX[i];
+            renderSnapPrevY[i] = prevPosY[i];
+            renderSnapPrevZ[i] = prevPosZ[i];
         }
     }
 

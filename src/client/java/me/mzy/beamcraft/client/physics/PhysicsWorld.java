@@ -1,14 +1,10 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.utility.Utility;
-import net.minecraft.entity.MovementType;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.shape.VoxelShape;
-import java.util.List;
-import java.util.Arrays;
+import me.mzy.beamcraft.network.VehicleSyncPayload;
+
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
  * Core physical world controller for beam-based vehicle simulation
@@ -168,12 +164,22 @@ public class PhysicsWorld {
         vehicles.parallelStream().forEach(vehicle -> {
             vehicle.updateLocalCOMCache();
             vehicle.updateBeamPrecompression(dt);
+            vehicle.nodes.writeRenderBuffer();
         });
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.updateEntityLocation();
+            if (vehicle.parentEntity != null && ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
+                ClientPlayNetworking.send(new VehicleSyncPayload(
+                        vehicle.parentEntity.getId(),
+                        vehicle.parentEntity.getX(),
+                        vehicle.parentEntity.getY(),
+                        vehicle.parentEntity.getZ(),
+                        vehicle.parentEntity.getYaw()
+                ));
+            }
         }
         long t5 = System.nanoTime();
         double moveEntityMs = (t5 - t4) / 1_000_000.0;

@@ -1,4 +1,4 @@
-package me.mzy.beamcraft.physics;
+package me.mzy.beamcraft.client.physics;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -237,6 +237,7 @@ public class JBeamLoader {
                 System.out.println("📄 PC配置解析成功，载入 " + userConfig.size() + " 个插槽设定。");
             } catch (Exception e) {
                 System.err.println("🚨 无法解析 .pc 配置文件结构");
+                System.err.println(e.getMessage());
             }
         } else {
             System.err.println("⚠️ 未找到指定的 .pc 配置文件或其内容为空: " + pcFileName);
@@ -261,6 +262,7 @@ public class JBeamLoader {
             });
         } catch (Exception e) {
             System.err.println("🚨 Failed to walk directory: " + folder.getName());
+            System.err.println(e.getMessage());
         }
     }
 
@@ -289,6 +291,7 @@ public class JBeamLoader {
             }
         } catch (Exception e) {
             System.err.println("🚨 Failed to read ZIP: " + zipFile.getName());
+            System.err.println(e.getMessage());
         }
     }
 
@@ -312,7 +315,7 @@ public class JBeamLoader {
             }
             loadedCount[0]++;
         } catch (Exception e) {
-            // 忽略格式损坏的文件
+            System.err.println(e.getMessage());
         }
     }
 }
