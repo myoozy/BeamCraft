@@ -25,10 +25,6 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
     private static final Identifier DEFAULT_TEXTURE = Identifier.of("beamcraft", "textures/entity/vehicle_default.png");
 
-    float[] interpNodeX = new float[NodeContainer.INIT_NODE_CAP];
-    float[] interpNodeY = new float[NodeContainer.INIT_NODE_CAP];
-    float[] interpNodeZ = new float[NodeContainer.INIT_NODE_CAP];
-
     public PhysicsVehicleRenderer(EntityRendererFactory.Context ctx) {
         super(ctx);
     }
@@ -55,23 +51,6 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         if (flex.skinningPipeline.customPosNormVbo == -1) {
             flex.skinningPipeline.init(flex, vehicle.nodes.count);
         }
-
-        int nodeCount = nodes.count;
-        if (nodeCount > interpNodeX.length) {
-            interpNodeX = Utility.expand(interpNodeX, nodeCount);
-            interpNodeY = Utility.expand(interpNodeY, nodeCount);
-            interpNodeZ = Utility.expand(interpNodeZ, nodeCount);
-        }
-
-        // 线性插值物理节点
-        for (int n = 0; n < nodeCount; n++) {
-            interpNodeX[n] = (float) (nodes.renderSnapPrevX[n] + (nodes.renderSnapCurrX[n] - nodes.renderSnapPrevX[n]) * partialTicks);
-            interpNodeY[n] = (float) (nodes.renderSnapPrevY[n] + (nodes.renderSnapCurrY[n] - nodes.renderSnapPrevY[n]) * partialTicks);
-            interpNodeZ[n] = (float) (nodes.renderSnapPrevZ[n] + (nodes.renderSnapCurrZ[n] - nodes.renderSnapPrevZ[n]) * partialTicks);
-        }
-
-        // 调度 GPU 计算 (不再需要传 packedLight 进去，因为都在 mcVbo 里)
-        flex.skinningPipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount);
 
         // ==========================================================
         // 原版状态设置

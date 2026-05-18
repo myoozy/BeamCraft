@@ -176,7 +176,6 @@ public class ComputeSkinningPipeline {
 
         int numGroups = (int) Math.ceil((double) this.totalVertices / VERTEX_GROUP_SIZE);
         GL43.glDispatchCompute(numGroups, 1, 1);
-        GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
 
         GL20.glUseProgram(0);
         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 10, 0);
