@@ -17,6 +17,7 @@ import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.RotationAxis;
+import org.lwjgl.opengl.GL20;
 
 public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity> {
 
@@ -68,7 +69,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         }
 
         // 调度 GPU 蒙皮计算
-        flex.skinningPipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount);
+        flex.skinningPipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount, packedLight);
 
         // ==========================================================
         // 核心修正：纯手动接管底层 OpenGL 状态，兼容 Fabric/Yarn
@@ -95,7 +96,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
         // 2. 将全局视图矩阵 乘以 实体的平移矩阵
         // 矩阵乘法顺序至关重要：这意味着顶点先进行平移(对齐到实体位置)，然后再跟随相机旋转
-                mvp.mul(matrixStack.peek().getPositionMatrix());
+        mvp.mul(matrixStack.peek().getPositionMatrix());
 
         // 3. 将合并后的完整矩阵传给 GPU 画图
         flex.skinningPipeline.mcVbo.draw(mvp, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());

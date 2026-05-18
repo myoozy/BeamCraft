@@ -17,6 +17,8 @@ import java.nio.charset.StandardCharsets;
 
 public class ComputeSkinningPipeline {
 
+    public static final double VERTEX_GROUP_SIZE = 256.0;
+
     public VertexBuffer mcVbo;
     public int rawVboId = -1;
 
@@ -115,7 +117,7 @@ public class ComputeSkinningPipeline {
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
     }
 
-    public void dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes) {
+    public void dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes, int packedLight) {
         if (this.computeProgramId == -1 || this.totalVertices == 0) return;
 
         ByteBuffer nodeBuffer = MemoryUtil.memAlloc(activeNodes * 16);
@@ -140,7 +142,10 @@ public class ComputeSkinningPipeline {
         int loc = GL20.glGetUniformLocation(this.computeProgramId, "u_vertexCount");
         if (loc != -1) GL20.glUniform1i(loc, this.totalVertices);
 
-        int numGroups = (int) Math.ceil((double) this.totalVertices / 256.0);
+        int lightLoc = GL20.glGetUniformLocation(this.computeProgramId, "u_packedLight");
+        if (lightLoc != -1) GL20.glUniform1i(lightLoc, packedLight);
+
+        int numGroups = (int) Math.ceil((double) this.totalVertices / VERTEX_GROUP_SIZE);
         GL43.glDispatchCompute(numGroups, 1, 1);
         GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
 

@@ -40,6 +40,8 @@ layout(std430, binding = 2) readonly buffer PhysicsNodes {
 
 uniform int u_vertexCount;
 
+uniform int u_packedLight;
+
 void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= u_vertexCount) return;
@@ -106,8 +108,8 @@ void main() {
     // 修改后：填入 Minecraft 默认的无覆盖 UV 值
     vboArray[offset + 6] = intBitsToFloat(655360);
 
-    // Light: 强制满级亮度 (Block 15, Sky 15)
-    vboArray[offset + 7] = intBitsToFloat(15728880);
+    // 光照亮度
+    vboArray[offset + 7] = intBitsToFloat(u_packedLight);
 
     // Normal: 转换为有符号字节并打包
     int nx = int(finalNorm.x * 127.0) & 0xFF;
