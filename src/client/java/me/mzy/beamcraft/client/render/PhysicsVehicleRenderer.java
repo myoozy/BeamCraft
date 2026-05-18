@@ -123,6 +123,9 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // 绘制完后，记得把 4 号属性重新启用，避免污染原版其他渲染
         GL20.glEnableVertexAttribArray(4);
 
+        // 解绑我们强行挂载的自定义 VBO，把全局状态物归原主
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+
         // 恢复环境
         MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().disable();
         RenderSystem.disableCull();
