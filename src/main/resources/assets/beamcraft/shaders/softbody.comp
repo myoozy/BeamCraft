@@ -2,74 +2,50 @@
 
 layout(local_size_x = 256) in;
 
-// =========================================================
-// 1. 极致对齐的数据结构：每一个基因节点恰好 64 Bytes！
-// 显卡对 vec4 的读取效率是最高的，绝不会发生错位。
-// =========================================================
+// 1. Rigging 数据保持不变
 struct VertexRig {
-    // x, y, z = 权重 (wX, wY, wZ),  w = cNode (使用 floatBitsToInt 还原)
     vec4 w_and_cNode;
-
-    // x, y, z = 法线权重 (nwX, nwY, nwZ), w = vxNode
     vec4 nw_and_vxNode;
-
-    // x, y, z = 刚体偏移 (skPos), w = vyNode
     vec4 skPos_and_vyNode;
-
-    // x = uv.u, y = uv.v, z = useCross (1或0), w = 占位符(填0)
     vec4 uv_and_flags;
 };
-
-layout(std430, binding = 0) readonly buffer RiggingData {
+layout(std430, binding = 10) readonly buffer RiggingData {
     VertexRig rigs[];
 };
 
-// VBO 输出仓库，交给 Minecraft 画图（36 字节步长 = 9 个 float）
-layout(std430, binding = 1) writeonly buffer VBOData {
-    float vboArray[];
+// 2. 🔥 纯净 VBO 仓库：只有坐标和法线！步长永远是完美的 24 字节 (6 个 Float)
+layout(std430, binding = 11) writeonly buffer CustomVBO {
+    float posNormArray[];
 };
 
-// Java 每帧传进来的最新物理节点
-// =========================================================
-// 新增的 SSBO Binding 2：动态物理节点仓库（每帧由 Java 更新）
-// 绝对完美的 vec4 对齐，容量无限，打破 Uniform 硬件枷锁！
-// =========================================================
-layout(std430, binding = 2) readonly buffer PhysicsNodes {
+// 3. 动态物理节点保持不变
+layout(std430, binding = 12) readonly buffer PhysicsNodes {
     vec4 dynamic_nodes[];
 };
 
 uniform int u_vertexCount;
 
-uniform int u_packedLight;
-
 void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= u_vertexCount) return;
 
-    // 🌟 解析完美打包的数据
     VertexRig rig = rigs[id];
 
     vec3 w = rig.w_and_cNode.xyz;
     int cNode = floatBitsToInt(rig.w_and_cNode.w);
-
     vec3 nw = rig.nw_and_vxNode.xyz;
     int vxNode = floatBitsToInt(rig.nw_and_vxNode.w);
-
     vec3 skPos = rig.skPos_and_vyNode.xyz;
     int vyNode = floatBitsToInt(rig.skPos_and_vyNode.w);
-
-    vec2 uv = rig.uv_and_flags.xy;
     int useCross = floatBitsToInt(rig.uv_and_flags.z);
 
     vec3 finalPos;
     vec3 finalNorm;
-
     vec3 cPos = dynamic_nodes[cNode].xyz;
 
     if (useCross == 1) {
         vec3 vxPos = dynamic_nodes[vxNode].xyz;
         vec3 vyPos = dynamic_nodes[vyNode].xyz;
-
         vec3 vx = vxPos - cPos;
         vec3 vy = vyPos - cPos;
 
@@ -80,7 +56,6 @@ void main() {
         }
 
         finalPos = cPos + (vx * w.x) + (vy * w.y) + (baseN * w.z);
-
         vec3 rawNx = vx * nw.x + vy * nw.y + baseN * nw.z;
         if (dot(rawNx, rawNx) > 1e-10) {
             finalNorm = normalize(rawNx);
@@ -92,29 +67,16 @@ void main() {
         finalNorm = nw;
     }
 
-    // 写入 36 字节的 VBO 内存
-    uint offset = id * 9;
-    vboArray[offset + 0] = finalPos.x;
-    vboArray[offset + 1] = finalPos.y;
-    vboArray[offset + 2] = finalPos.z;
+    // 🔥 写入 24 字节的纯净显存
+    uint offset = id * 6;
 
-    // 颜色 (RGBA: 白色)
-    vboArray[offset + 3] = intBitsToFloat(0xFFFFFFFF);
+    // 写入坐标 (Position)
+    posNormArray[offset + 0] = finalPos.x;
+    posNormArray[offset + 1] = finalPos.y;
+    posNormArray[offset + 2] = finalPos.z;
 
-    vboArray[offset + 4] = uv.x;
-    vboArray[offset + 5] = uv.y;
-
-    // 修改前：vboArray[offset + 6] = intBitsToFloat(0);
-    // 修改后：填入 Minecraft 默认的无覆盖 UV 值
-    vboArray[offset + 6] = intBitsToFloat(655360);
-
-    // 光照亮度
-    vboArray[offset + 7] = intBitsToFloat(u_packedLight);
-
-    // Normal: 转换为有符号字节并打包
-    int nx = int(finalNorm.x * 127.0) & 0xFF;
-    int ny = int(finalNorm.y * 127.0) & 0xFF;
-    int nz = int(finalNorm.z * 127.0) & 0xFF;
-    int packedNormal = nx | (ny << 8) | (nz << 16);
-    vboArray[offset + 8] = intBitsToFloat(packedNormal);
+    // 写入法线 (Normal)
+    posNormArray[offset + 3] = finalNorm.x;
+    posNormArray[offset + 4] = finalNorm.y;
+    posNormArray[offset + 5] = finalNorm.z;
 }

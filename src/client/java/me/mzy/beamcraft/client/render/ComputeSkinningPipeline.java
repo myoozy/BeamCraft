@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.render;
 
+import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import net.minecraft.client.gl.VertexBuffer;
@@ -20,7 +21,8 @@ public class ComputeSkinningPipeline {
     public static final double VERTEX_GROUP_SIZE = 256.0;
 
     public VertexBuffer mcVbo;
-    public int rawVboId = -1;
+
+    public int customPosNormVbo = -1;
 
     public int computeProgramId = -1;
     public int ssboRigging = -1;
@@ -93,31 +95,51 @@ public class ComputeSkinningPipeline {
         GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, rigBuffer, GL15.GL_STATIC_DRAW);
         MemoryUtil.memFree(rigBuffer);
 
-        // 3. 生成官方 VBO 并获取底层 OpenGL ID
+        // ==========================================
+        // 3. 生成官方 VBO (只做欺骗，不写入)
+        // ==========================================
         this.mcVbo = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
         Tessellator tessellator = Tessellator.getInstance();
         BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.TRIANGLES, VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL);
         for (int i = 0; i < totalVertices; i++) {
-            builder.vertex(0, 0, 0).color(255, 255, 255, 255).texture(0, 0).overlay(OverlayTexture.DEFAULT_UV).light(15728880).normal(0, 1, 0);
+            // 🔥 1. 从 Flexbody 数据中拿出真实的静态 UV
+            float u = flex.uvU[i];
+            float v = flex.uvV[i];
+
+            // 🔥 2. 把真实的 (u, v) 塞进去，替换掉之前的 (0, 0)
+            builder.vertex(0, 0, 0)
+                    .color(255, 255, 255, 255)
+                    .texture(u, v)  // <--- 核心修复！
+                    .overlay(OverlayTexture.DEFAULT_UV)
+                    .light(15728880) // 默认满亮度
+                    .normal(0, 1, 0);
         }
         var meshData = builder.end();
-
         if (meshData != null) {
             this.mcVbo.bind();
             this.mcVbo.upload(meshData);
-            // 捕获 VBO ID 供 Shader 写入
-            this.rawVboId = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
             VertexBuffer.unbind();
         }
 
-        // 4. 分配物理节点 SSBO 2
+        // ==========================================
+        // 4. 🔥 生成我们的纯净避难所 VBO
+        // ==========================================
+        this.customPosNormVbo = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.customPosNormVbo);
+        // 大小：顶点数 * 6个Float * 4字节
+        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, totalVertices * 6L * 4L, GL15.GL_DYNAMIC_DRAW);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+
+        // ==========================================
+        // 5. 分配物理节点 SSBO 12
+        // ==========================================
         this.ssboNodes = GL15.glGenBuffers();
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.ssboNodes);
         GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long) maxNodes * 16, GL15.GL_DYNAMIC_DRAW);
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
     }
 
-    public void dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes, int packedLight) {
+    public void dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes) {
         if (this.computeProgramId == -1 || this.totalVertices == 0) return;
 
         ByteBuffer nodeBuffer = MemoryUtil.memAlloc(activeNodes * 16);
@@ -135,30 +157,30 @@ public class ComputeSkinningPipeline {
 
         GL20.glUseProgram(this.computeProgramId);
 
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, this.ssboRigging);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, this.rawVboId);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, this.ssboNodes);
+        // 🔥 将端口指向我们的纯净 VBO
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 10, this.ssboRigging);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 11, this.customPosNormVbo);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 12, this.ssboNodes);
 
         int loc = GL20.glGetUniformLocation(this.computeProgramId, "u_vertexCount");
         if (loc != -1) GL20.glUniform1i(loc, this.totalVertices);
 
-        int lightLoc = GL20.glGetUniformLocation(this.computeProgramId, "u_packedLight");
-        if (lightLoc != -1) GL20.glUniform1i(lightLoc, packedLight);
+        // (删除了 u_packedLight 和 u_strideFloats，不需要了)
 
         int numGroups = (int) Math.ceil((double) this.totalVertices / VERTEX_GROUP_SIZE);
         GL43.glDispatchCompute(numGroups, 1, 1);
         GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
 
         GL20.glUseProgram(0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 10, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 11, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 12, 0);
     }
 
     public void free() {
         if (this.computeProgramId != -1) { GL20.glDeleteProgram(this.computeProgramId); this.computeProgramId = -1; }
         if (this.ssboRigging != -1) { GL15.glDeleteBuffers(this.ssboRigging); this.ssboRigging = -1; }
-        if (this.vboOutput != -1) { GL15.glDeleteBuffers(this.vboOutput); this.vboOutput = -1; }
+        if (this.customPosNormVbo != -1) { GL15.glDeleteBuffers(this.customPosNormVbo); this.customPosNormVbo = -1; } // 释放内存
         if (this.ssboNodes != -1) { GL15.glDeleteBuffers(this.ssboNodes); this.ssboNodes = -1; }
         if (this.mcVbo != null) { this.mcVbo.close(); this.mcVbo = null; }
     }

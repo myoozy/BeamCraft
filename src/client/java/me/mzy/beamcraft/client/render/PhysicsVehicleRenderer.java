@@ -17,6 +17,8 @@ import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.RotationAxis;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 
 public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity> {
@@ -50,7 +52,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         int vCount = flex.totalVertexCount;
         if (vCount == 0) return;
 
-        if (flex.skinningPipeline.rawVboId == -1) {
+        if (flex.skinningPipeline.customPosNormVbo == -1) {
             flex.skinningPipeline.init(flex, vehicle.nodes.count);
         }
 
@@ -68,40 +70,60 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             interpNodeZ[n] = (float) (nodes.renderSnapPrevZ[n] + (nodes.renderSnapCurrZ[n] - nodes.renderSnapPrevZ[n]) * partialTicks);
         }
 
-        // 调度 GPU 蒙皮计算
-        flex.skinningPipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount, packedLight);
+        // 调度 GPU 计算 (不再需要传 packedLight 进去，因为都在 mcVbo 里)
+        flex.skinningPipeline.dispatchCompute(interpNodeX, interpNodeY, interpNodeZ, nodeCount);
 
         // ==========================================================
-        // 核心修正：纯手动接管底层 OpenGL 状态，兼容 Fabric/Yarn
+        // 原版状态设置
         // ==========================================================
-
-        // 1. 设置 Shader 与纹理
         RenderSystem.setShader(GameRenderer::getRenderTypeEntityCutoutProgram);
         RenderSystem.setShaderTexture(0, getTexture(entity));
-
-        // 2. 修复 Z-Buffer 遮挡关系 (深度测试)
         RenderSystem.enableDepthTest();
-        RenderSystem.depthFunc(515); // 等同于 GL11.GL_LEQUAL
-
-        // 3. 修复背面剔除 (如果是双面渲染需求，可改为 disableCull)
+        RenderSystem.depthFunc(515);
         RenderSystem.enableCull();
-
-        // 4. 开启 Minecraft 原生光照系统，防止模型变黑
         MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().enable();
 
-        // 5. 执行绘制 (VertexBuffer 会自动将 matrix 传给 Shader)
+        // ==========================================================
+        // 🔥 核心劫持：指针掉包
+        // ==========================================================
+        // 1. 让原版绑定它的 VAO (此时记录本上写的是去 mcVbo 读所有数据)
         flex.skinningPipeline.mcVbo.bind();
-        // 1. 获取包含相机视角的全局视图矩阵
-        org.joml.Matrix4f mvp = new org.joml.Matrix4f(RenderSystem.getModelViewMatrix());
 
-        // 2. 将全局视图矩阵 乘以 实体的平移矩阵
-        // 矩阵乘法顺序至关重要：这意味着顶点先进行平移(对齐到实体位置)，然后再跟随相机旋转
+        // 2. 绑定我们自己的纯净 VBO
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, flex.skinningPipeline.customPosNormVbo);
+
+        // 3. 强行篡改 0 号属性 (Position) 指南
+        GL20.glEnableVertexAttribArray(0);
+        // 告诉显卡：读 3 个 Float，步长 24 字节，从 0 字节开始读
+        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 24, 0);
+
+        // 4. 强行篡改 5 号属性 (Normal) 指南
+        GL20.glEnableVertexAttribArray(5);
+        // 告诉显卡：读 3 个 Float，步长 24 字节，跳过前 12 字节 (即跳过位置) 开始读
+        GL20.glVertexAttribPointer(5, 3, GL11.GL_FLOAT, false, 24, 12);
+
+        // 5. 🔥 核心黑客改动：关闭 4 号光照属性的数组读取，改用全局常量注入
+        GL20.glDisableVertexAttribArray(4); // 告诉显卡：别去 VBO 里翻光照数据了！
+
+        // 拆解 Minecraft 的 packedLight (高16位是天空光，低16位是方块光)
+        int blockLight = packedLight & 0xFFFF;
+        int skyLight = (packedLight >> 16) & 0xFFFF;
+        // 注入全局静态属性，当前 DrawCall 的所有顶点都将自动使用这个动态光照
+        org.lwjgl.opengl.GL30.glVertexAttribI2i(4, blockLight, skyLight);
+
+        // ==========================================================
+        // 发送绘制指令
+        // ==========================================================
+        org.joml.Matrix4f mvp = new org.joml.Matrix4f(RenderSystem.getModelViewMatrix());
         mvp.mul(matrixStack.peek().getPositionMatrix());
 
-        // 3. 将合并后的完整矩阵传给 GPU 画图
+        // 此时画图，显卡会从我们的池子读位置和法线，从 mcVbo 读 UV 等数据
         flex.skinningPipeline.mcVbo.draw(mvp, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
 
-        // 7. 恢复环境状态，避免影响后续其他实体的渲染
+        // 绘制完后，记得把 4 号属性重新启用，避免污染原版其他渲染
+        GL20.glEnableVertexAttribArray(4);
+
+        // 恢复环境
         MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().disable();
         RenderSystem.disableCull();
 
