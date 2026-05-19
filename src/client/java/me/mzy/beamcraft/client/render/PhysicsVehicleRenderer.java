@@ -71,6 +71,8 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // 2. 绑定我们自己的纯净 VBO
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, flex.skinningPipeline.customPosNormVbo);
 
+        // TODO: 找个万无一失的方法，替换掉硬编码
+
         // 3. 强行篡改 0 号属性 (Position) 指南
         GL20.glEnableVertexAttribArray(0);
         // 告诉显卡：读 3 个 Float，步长 24 字节，从 0 字节开始读
