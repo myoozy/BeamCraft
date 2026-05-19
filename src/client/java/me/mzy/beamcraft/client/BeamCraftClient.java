@@ -47,7 +47,7 @@ public class BeamCraftClient implements ClientModInitializer {
 		});
 
 		DaeMeshLoader.scanAndLoadAllVehicles(VEHICLES_DIR);
-
+		ClientVehicleManager.initRenderHooks(); // 初始化渲染
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
 
 		// 1. 物理计算与控制循环 (每帧运行)

@@ -36,6 +36,10 @@ public class SoftBodyVehicle {
     private double[] partMaxX = new double[0], partMaxY = new double[0], partMaxZ = new double[0];
     private boolean[] partActive = new boolean[0];
 
+    // 存储扁平化的 2D 矩阵: nodeInPart[nodeId * (maxPartId + 1) + partId]
+    public boolean[] nodeInPartMatrix;
+    public int matrixPartStride; // 矩阵的列数 (maxTrackedPartId + 1)
+
     private final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
     // 获取实体当前的世界坐标作为锚点
@@ -110,16 +114,6 @@ public class SoftBodyVehicle {
                         double friction, double slidingFriction, int partId,
                         boolean collision, boolean selfCollision, java.util.List<String> groups) {
         nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision, groups);
-
-        // Calculate current maximum part id and expand buffer
-        int currentMaxPartId = -1;
-        for (int i = 0; i < nodes.count; i++) {
-            if (nodes.partId[i] > currentMaxPartId) {
-                currentMaxPartId = nodes.partId[i];
-            }
-        }
-        maxTrackedPartId = currentMaxPartId;
-        ensurePartCapacity(maxTrackedPartId);
     }
 
     /**
@@ -281,7 +275,54 @@ public class SoftBodyVehicle {
 
     public void finalizePhysicsSetup() {
 
+
+        // ==========================================
+        // ⭐处理FlexBody的所有group
+        // ==========================================
         flexbodies.compileGroupsCSR(nodes);
+
+        // ==========================================
+        // ⭐追踪所有的part
+        // 用来优化碰撞 (和minecraft世界 & 和softbody)
+        // ==========================================
+        int currentMaxPartId = -1;
+        for (int i = 0; i < nodes.count; i++) {
+            if (nodes.partId[i] > currentMaxPartId) {
+                currentMaxPartId = nodes.partId[i];
+            }
+        }
+        maxTrackedPartId = currentMaxPartId;
+        ensurePartCapacity(maxTrackedPartId);
+
+        // ==========================================
+        // ⭐相同零件碰撞剔除
+        // ==========================================
+
+        // 1. 初始化矩阵大小
+        matrixPartStride = maxTrackedPartId + 1;
+        nodeInPartMatrix = new boolean[nodes.count * matrixPartStride];
+
+        // 2. 基础传染：节点自己的原籍 Part
+        for (int i = 0; i < nodes.count; i++) {
+            int originalPart = nodes.partId[i];
+            if (originalPart >= 0 && originalPart < matrixPartStride) {
+                nodeInPartMatrix[i * matrixPartStride + originalPart] = true;
+            }
+        }
+
+        // 3. 三角形传染：三角形所在的 Part，其三个顶点也默认从属于该 Part
+        for (int i = 0; i < triangles.count; i++) {
+            int tPart = triangles.partId[i]; // 你原来代码里有 triPartId，这里假设存为了 partId[i]
+            if (tPart >= 0 && tPart < matrixPartStride) {
+                nodeInPartMatrix[triangles.node1[i] * matrixPartStride + tPart] = true;
+                nodeInPartMatrix[triangles.node2[i] * matrixPartStride + tPart] = true;
+                nodeInPartMatrix[triangles.node3[i] * matrixPartStride + tPart] = true;
+            }
+        }
+
+        // ==========================================
+        // ⭐梁刚度钳制
+        // ==========================================
 
         double invDt = PhysicsWorld.invPhysicsDT;
         double safeFractionSpring = 0.95;
@@ -1344,6 +1385,16 @@ public class SoftBodyVehicle {
                 // 排除不需要计算自碰撞的点，以及三角形自己的顶点
                 if (hitVeh == this && !nodes.selfCollision[hitNodeId]) continue;
                 if (hitVeh == this && (hitNodeId == nA || hitNodeId == nB || hitNodeId == nC)) continue;
+
+                if (hitVeh == this) {
+                    int triPartId = triangles.partId[i];
+                    if (triPartId >= 0 && triPartId < matrixPartStride) {
+                        // 只要这个被撞的节点，从属于这个三角形所在的 Part，直接无视！
+                        if (nodeInPartMatrix[hitNodeId * matrixPartStride + triPartId]) {
+                            continue;
+                        }
+                    }
+                }
 
                 // 找到嫌疑人了！不用算物理，直接交给调度中心！
                 manager.addContact(hitVeh, hitNodeId, this, nA, nB, nC);
