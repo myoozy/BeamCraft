@@ -8,10 +8,12 @@ import org.lwjgl.PointerBuffer;
 import java.io.*;
 import java.nio.IntBuffer;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.stream.Stream;
 
 public class DaeMeshLoader {
 
@@ -28,18 +30,23 @@ public class DaeMeshLoader {
     }
 
     public static class RawGeometry {
-        public float[] positions;       // 烘焙绝对变换后的 BeamNG Z-up 原生坐标流
-        public float[] normals;         // 修正姿态后的原生平滑着色法线流
-        public float[] uvs;             // 修正 V 轴后的贴图 UV 流
-        public int vertexCount;         // 填充后的渲染顶点总数 (严格为 4 的倍数)
+        public float[] positions;
+        public float[] normals;
+        public float[] uvs;
+        public int vertexCount;
         public List<SubMesh> subMeshes;
+
+        // 引用计数器
+        public int refCount = 0;
     }
 
     public static final Map<String, RawGeometry> MESH_CACHE = new HashMap<>();
 
-    /**
-     * 🚀 强健的标识符清洗器：全方位剥离 DCC 软件导出的各类几何体尾缀
-     */
+    // 车型存活实例计数器 (例如: "pickup" -> 2 辆)
+    private static final Map<String, Integer> VEHICLE_REF_COUNT = new HashMap<>();
+    // 标记 common 库是否已挂载
+    private static boolean isCommonLoaded = false;
+
     public static String cleanIdentifier(String name) {
         if (name == null || name.isEmpty()) return "";
         int dotIdx = name.lastIndexOf('.');
@@ -55,81 +62,116 @@ public class DaeMeshLoader {
         return name;
     }
 
-    public static void scanAndLoadAllVehicles(File vehiclesRootDir) {
-        if (!vehiclesRootDir.exists()) {
-            vehiclesRootDir.mkdirs();
+    /**
+     * 当一辆车准备生成时调用（按需加载该车系及 Common 的所有模型）
+     */
+    public static void requireVehicleModels(File vehiclesRootDir, String targetVehicleName) {
+        int count = VEHICLE_REF_COUNT.getOrDefault(targetVehicleName, 0);
+        VEHICLE_REF_COUNT.put(targetVehicleName, count + 1);
+
+        if (count == 0) {
+            System.out.println("====== 🚀 按需加载 DAE 资产: " + targetVehicleName + " ======");
+
+            // 1. 确保基础 common 资产已加载
+            if (!isCommonLoaded) {
+                loadSpecificVehicleDae(vehiclesRootDir, "common");
+                isCommonLoaded = true;
+            }
+
+            // 2. 加载目标车系的所有 DAE 资产
+            if (!targetVehicleName.equals("common")) {
+                loadSpecificVehicleDae(vehiclesRootDir, targetVehicleName);
+            }
+        }
+    }
+
+    /**
+     * 当一辆车被从世界移除时调用（触发垃圾回收）
+     */
+    public static void releaseVehicleModels(String targetVehicleName) {
+        int count = VEHICLE_REF_COUNT.getOrDefault(targetVehicleName, 0) - 1;
+        if (count <= 0) {
+            VEHICLE_REF_COUNT.remove(targetVehicleName);
+            System.out.println("====== 🗑️ 回收 DAE 资产: " + targetVehicleName + " ======");
+
+            // 从缓存中安全移除属于该车系的所有网格数据，释放堆内存
+            String prefix = targetVehicleName + ":";
+            MESH_CACHE.entrySet().removeIf(entry -> entry.getKey().startsWith(prefix));
+
+        } else {
+            VEHICLE_REF_COUNT.put(targetVehicleName, count);
+        }
+    }
+
+    private static void loadSpecificVehicleDae(File vehiclesRootDir, String targetVehicleName) {
+        boolean isCommon = targetVehicleName.equals("common");
+
+        File commonZip = new File(vehiclesRootDir, "common.zip");
+        File commonDir = new File(vehiclesRootDir, "common");
+
+        if (isCommon) {
+            if (commonZip.exists()) scanZipForSpecificDae(commonZip, targetVehicleName, true);
+            if (commonDir.exists()) scanFolderForSpecificDae(commonDir, targetVehicleName, true);
             return;
         }
 
-        System.out.println("====== 🚀 启动 Assimp 手动矩阵级联提取与拓扑深度清洗 ======");
-        MESH_CACHE.clear();
-
         File[] files = vehiclesRootDir.listFiles();
-        if (files == null) return;
+        if (files != null) {
+            for (File file : files) {
+                String name = file.getName();
+                if (name.equals("common.zip") || name.equals("common")) continue;
 
-        for (File file : files) {
-            if (file.isDirectory()) {
-                scanFolderForDae(file, vehiclesRootDir);
-            } else if (file.getName().toLowerCase().endsWith(".zip")) {
-                scanZipForDae(file);
+                if (name.toLowerCase().contains(targetVehicleName.toLowerCase())) {
+                    if (file.isDirectory()) {
+                        scanFolderForSpecificDae(file, targetVehicleName, false);
+                    } else if (name.endsWith(".zip")) {
+                        scanZipForSpecificDae(file, targetVehicleName, false);
+                    }
+                }
             }
         }
-        System.out.println("📦 载具底模全域挂载完毕！高保真聚合网格数: " + MESH_CACHE.size());
     }
 
-    private static void scanZipForDae(File zipFile) {
+    private static void scanZipForSpecificDae(File zipFile, String targetVehicleName, boolean isCommon) {
         try (ZipFile zf = new ZipFile(zipFile)) {
             Enumeration<? extends ZipEntry> entries = zf.entries();
             while (entries.hasMoreElements()) {
                 ZipEntry entry = entries.nextElement();
-                String entryName = entry.getName();
-                if (!entry.isDirectory() && !entryName.contains("__MACOSX") && entryName.toLowerCase().endsWith(".dae")) {
-                    String namespace = extractTrueVehicleName(entryName);
-                    if (namespace == null) continue;
+                String name = entry.getName();
 
-                    File tempFile = File.createTempFile("assimp_assets_", ".dae");
+                // 定向过滤核心逻辑
+                boolean isTarget = isCommon || name.contains("vehicles/" + targetVehicleName + "/");
+
+                if (isTarget && !entry.isDirectory() && !name.contains("__MACOSX") && name.toLowerCase().endsWith(".dae")) {
+                    File tempFile = File.createTempFile("beamcraft_dae_", ".dae");
                     try {
                         try (InputStream is = zf.getInputStream(entry)) {
                             Files.copy(is, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
                         }
-                        loadMeshUsingAssimp(tempFile.getAbsolutePath(), namespace);
+                        loadMeshUsingAssimp(tempFile.getAbsolutePath(), targetVehicleName);
                     } finally {
                         tempFile.delete();
                     }
                 }
             }
         } catch (Exception e) {
-            System.err.println("🚨 穿透读取 ZIP 资产失败: " + zipFile.getName());
+            System.err.println("🚨 读取 ZIP 资产失败: " + zipFile.getName());
         }
     }
 
-    private static void scanFolderForDae(File folder, File rootDir) {
-        List<File> daeFiles = new ArrayList<>();
-        collectFilesEndingWith(folder, ".dae", daeFiles);
-        for (File daeFile : daeFiles) {
-            String relativePath = rootDir.toURI().relativize(daeFile.toURI()).getPath();
-            String namespace = extractTrueVehicleName(relativePath);
-            if (namespace == null) namespace = folder.getName();
-            loadMeshUsingAssimp(daeFile.getAbsolutePath(), namespace);
-        }
-    }
+    private static void scanFolderForSpecificDae(File folder, String targetVehicleName, boolean isCommon) {
+        try (Stream<Path> paths = Files.walk(folder.toPath())) {
+            paths.filter(Files::isRegularFile).forEach(path -> {
+                String filePath = path.toString().replace("\\", "/");
+                boolean isTarget = isCommon || filePath.contains("/vehicles/" + targetVehicleName + "/");
 
-    private static void collectFilesEndingWith(File dir, String suffix, List<File> list) {
-        File[] files = dir.listFiles();
-        if (files == null) return;
-        for (File f : files) {
-            if (f.isDirectory()) collectFilesEndingWith(f, suffix, list);
-            else if (f.getName().toLowerCase().endsWith(suffix)) list.add(f);
+                if (isTarget && filePath.toLowerCase().endsWith(".dae")) {
+                    loadMeshUsingAssimp(path.toAbsolutePath().toString(), targetVehicleName);
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("🚨 遍历目录失败: " + folder.getName());
         }
-    }
-
-    private static String extractTrueVehicleName(String internalPath) {
-        String normalizedPath = internalPath.replace("\\", "/");
-        String[] parts = normalizedPath.split("/");
-        for (int i = 0; i < parts.length - 1; i++) {
-            if (parts[i].equalsIgnoreCase("vehicles")) return parts[i + 1];
-        }
-        return null;
     }
 
     private static void loadMeshUsingAssimp(String filePath, String namespace) {

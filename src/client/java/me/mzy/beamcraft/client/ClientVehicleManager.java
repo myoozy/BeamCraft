@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.*;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.utility.Utility;
@@ -51,6 +52,8 @@ public class ClientVehicleManager {
                         Map<String, String> localConfig = new HashMap<>();
                         JBeamLoader.loadVehicle(BeamCraftClient.VEHICLES_DIR, rootPart, pcFile, localRegistry, localConfig);
 
+                        DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
+
                         JBeamAssembler assembler = new JBeamAssembler();
                         assembler.assembleVehicle(rootPart, localConfig, localRegistry, softBody);
 
@@ -68,6 +71,7 @@ public class ClientVehicleManager {
         VEHICLE_MAP.entrySet().removeIf(entry -> {
             SoftBodyVehicle vehicle = entry.getValue();
             if (vehicle.parentEntity == null || vehicle.parentEntity.isRemoved()) {
+                DaeMeshLoader.releaseVehicleModels(vehicle.flexbodies.vehicleNamespace);
                 // 直接调用现有的 PhysicsWorld 接口安全移除
                 BeamCraftClient.PHYSICS_WORLD.removeVehicle(vehicle);
                 return true;
