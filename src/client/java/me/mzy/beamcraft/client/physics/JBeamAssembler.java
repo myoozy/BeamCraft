@@ -81,17 +81,20 @@ public class JBeamAssembler {
     /**
      * Lightweight data structure to temporarily store valid parts during assembly
      */
-    private static class PartEntry {
+    public static class PartEntry {
         JsonObject json;
         int partId;
         String partName;
         TransformContext transform;
 
-        PartEntry(JsonObject j, int id, String name, TransformContext transform) {
+        public Map<String, Double> variables;
+
+        PartEntry(JsonObject j, int id, String name, TransformContext transform, Map<String, Double> variables) {
             this.json = j;
             this.partId = id;
             this.partName = name;
             this.transform = transform;
+            this.variables = variables;
         }
     }
 
@@ -104,6 +107,7 @@ public class JBeamAssembler {
         try {
             List<PartEntry> activeParts = new ArrayList<>();
             CouplerRegistry couplerRegistry = new CouplerRegistry();
+            Map<String, String[]> vehicleRailMap = new HashMap<>();
 
             // Phase 0: Recursively collect all required parts before assembly
             JsonObject rootPart = registry.get(rootPartName);
@@ -117,7 +121,7 @@ public class JBeamAssembler {
             // Pass 1: Create all nodes FIRST
             for (PartEntry entry : activeParts) {
                 if (entry.json.has("nodes")) {
-                    JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry.partId, couplerRegistry, entry.transform);
+                    JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry, couplerRegistry);
                 }
             }
             System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
@@ -125,26 +129,26 @@ public class JBeamAssembler {
             // Pass 2: Build all structural connections (beams, surfaces, joints)
             for (PartEntry entry : activeParts) {
                 if (entry.json.has("beams")) {
-                    JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry.partId);
+                    JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry);
                 }
                 if (entry.json.has("hydros")) {
-                    JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry.partId);
+                    JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry);
                 }
                 if (entry.json.has("triangles")) {
-                    JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry.partId);
+                    JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry);
                 }
                 if (entry.json.has("torsionbars")) {
-                    JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle);
+                    JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle, entry);
                 }
                 if (entry.json.has("rails")) {
-                    JBeamParser.parseRails(entry.json.getAsJsonObject("rails"));
+                    JBeamParser.parseRails(entry.json.getAsJsonObject("rails"), vehicleRailMap);
                 }
                 if (entry.json.has("slidenodes")) {
-                    JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), vehicle);
+                    JBeamParser.parseSlidenodes(entry.json.getAsJsonArray("slidenodes"), vehicleRailMap, vehicle, entry);
                 }
                 if (entry.json.has("flexbodies")) {
                     // Flexbody 也需要接受空间变换矩阵以正确渲染位移
-                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, rootPartName, entry.partId, entry.transform);
+                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, rootPartName, entry);
                 }
             }
             int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;
@@ -222,7 +226,32 @@ public class JBeamAssembler {
 
     private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext currentTransform) {
         currentPartId++;
-        activeParts.add(new PartEntry(part, currentPartId, partName, currentTransform));
+
+        Map<String, Double> currentVariables = new HashMap<>();
+
+        // 提取变量并存入上下文
+        if (part.has("variables")) {
+            JsonArray varsArray = part.getAsJsonArray("variables");
+            boolean isHeader = true;
+            for (JsonElement element : varsArray) {
+                if (element.isJsonArray()) {
+                    JsonArray row = element.getAsJsonArray();
+                    if (isHeader) { isHeader = false; continue; } // 跳过表头
+                    // JBeam 变量行标准格式: ["name", "type", "unit", "category", "default", ...]
+                    if (row.size() >= 5) {
+                        String varName = row.get(0).getAsString();
+                        // 去掉前面的 "$" 符号，方便统一管理
+                        if (varName.startsWith("$")) varName = varName.substring(1);
+                        try {
+                            double defVal = row.get(4).getAsDouble();
+                            currentVariables.put(varName, defVal);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        }
+
+        activeParts.add(new PartEntry(part, currentPartId, partName, currentTransform, currentVariables));
 
         if (part.has("slots2")) {
             parseSlotsArray(part.getAsJsonArray("slots2"), partName, userConfig, registry, activeParts, currentTransform);
@@ -270,9 +299,9 @@ public class JBeamAssembler {
                             // 1. 提取 nodeRotate (按照标准顺序首先生效旋转)
                             if (mod.has("nodeRotate")) {
                                 JsonObject nr = mod.getAsJsonObject("nodeRotate");
-                                Double rx = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "x", "0"), vars);
-                                Double ry = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "y", "0"), vars);
-                                Double rz = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "z", "0"), vars);
+                                Double rx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "x", "0"), vars);
+                                Double ry = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "y", "0"), vars);
+                                Double rz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "z", "0"), vars);
                                 if (rx != null) childTransform.rotX += rx;
                                 if (ry != null) childTransform.rotY += ry;
                                 if (rz != null) childTransform.rotZ += rz;
@@ -281,9 +310,9 @@ public class JBeamAssembler {
                             // 2. 提取 nodeOffset (累加至对称镜像平移层)
                             if (mod.has("nodeOffset")) {
                                 JsonObject no = mod.getAsJsonObject("nodeOffset");
-                                Double ox = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), vars);
-                                Double oy = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), vars);
-                                Double oz = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), vars);
+                                Double ox = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), vars);
+                                Double oy = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), vars);
+                                Double oz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), vars);
                                 if (ox != null) childTransform.offsetX += ox;
                                 if (oy != null) childTransform.offsetY += oy;
                                 if (oz != null) childTransform.offsetZ += oz;
@@ -292,9 +321,9 @@ public class JBeamAssembler {
                             // 3. 提取 nodeMove (累加至绝对方向平移层)
                             if (mod.has("nodeMove")) {
                                 JsonObject nm = mod.getAsJsonObject("nodeMove");
-                                Double mx = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "x", "0"), vars);
-                                Double my = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "y", "0"), vars);
-                                Double mz = JBeamPressureWheelsParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "z", "0"), vars);
+                                Double mx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "x", "0"), vars);
+                                Double my = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "y", "0"), vars);
+                                Double mz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "z", "0"), vars);
                                 if (mx != null) childTransform.posX += mx;
                                 if (my != null) childTransform.posY += my;
                                 if (mz != null) childTransform.posZ += mz;
