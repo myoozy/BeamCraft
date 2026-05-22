@@ -203,7 +203,7 @@ public class JBeamAssembler {
                     if (bestTarget != null) {
                         double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
                         vehicle.addBeam(BeamContainer.BEAM_NORMAL,
-                                source.nodeName, bestTarget.nodeName, null,
+                                source.nodeName, bestTarget.nodeName, null, null,
                                 1e9, 1e7,
                                 PhysicsWorld.KINDA_BIG_NUMBER, finalStrength,
                                 0.0, precompRange, precompTime,

@@ -18,7 +18,7 @@ public class PhysicsWorld {
     public static final double METAL_PLASTIC_FLOW_RATE = 10.0;
     public static final double KINDA_SMALL_NUMBER = 1e-8;
     public static final double KINDA_BIG_NUMBER = 1e8;
-    public static final int MAX_AABB_SIZE = 5;
+    public static final int MAX_AABB_SIZE = 10;
     public static final double invPhysicsDT = 2000;
 
     // 用于处理和mc世界的碰撞
@@ -386,10 +386,7 @@ public class PhysicsWorld {
             // 2. 🚀 O(1) 检查发生碰撞的节点是否为轮胎
             int wIdx = nVeh.nodes.wheelId[nHit];
 
-            if (wIdx != -1) {
-                // ==========================================================
-                // 🚗 轮胎节点：启用 BeamNG 高级载荷敏感与速度过渡乘子模型
-                // ==========================================================
+            if (wIdx >= 0 && wIdx < nVeh.wheels.count) {
                 double staticBase  = nVeh.wheels.frictionCoef[wIdx];
                 double slidingBase = nVeh.wheels.slidingFrictionCoef[wIdx];
                 double noLoad      = nVeh.wheels.noLoadCoef[wIdx];
@@ -422,9 +419,6 @@ public class PhysicsWorld {
                 mu_k = (dynamicMuMultiplier * loadFactor * treadCoef) * tri_mu_k;
 
             } else {
-                // ==========================================================
-                // 🛡️ 普通车身节点：采用标准乘积法则兜底
-                // ==========================================================
                 // 普通金属/塑料撞击，同样严格遵循乘积法则而不是算术平均
                 mu_s = nVeh.nodes.friction[nHit] * tri_mu_s;
                 mu_k = nVeh.nodes.slidingFriction[nHit] * tri_mu_k;

@@ -92,7 +92,7 @@ public class NodeContainer {
     /**
      * Adds a node to the container or accumulates mass if the node already exists.
      */
-    public void addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
+    public int addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
                         int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, java.util.List<String> groups) {
         ensureNodeCapacity();
 
@@ -155,13 +155,21 @@ public class NodeContainer {
 
         collision[idx] = nodeCollision;
         selfCollision[idx] = nodeSelfCollision;
+
+        return idx;
     }
 
-    public void addTireNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
-                            int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, int nodeWheelId, java.util.List<String> groups){
-        addNode(name, x, y, z, nodeMass, nodeFriction, nodeSlidingFriction, nodePartId, nodeCollision, nodeSelfCollision, groups);
-        int idx = nameToIndex.get(name);
-        wheelId[idx] = nodeWheelId;
+    public void bindToTire(String nodeName, int wheelIdx) {
+        if (nameToIndex.containsKey(nodeName)) {
+            int idx = nameToIndex.get(nodeName);
+            bindToTire(idx, wheelIdx);
+        }
+    }
+
+    public void bindToTire(int nodeIdx, int wheelIdx) {
+        if (0 <= nodeIdx && nodeIdx <= count - 1) {
+            wheelId[nodeIdx] = wheelIdx;
+        }
     }
 
     public void clear() {

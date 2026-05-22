@@ -272,6 +272,8 @@ public class JBeamParser {
         double currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
         double currentTransitionZone = 0.0;
 
+        java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
+
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
@@ -308,6 +310,10 @@ public class JBeamParser {
                 currentSpringExpansion = getDoubleSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
                 currentDampExpansion = getDoubleSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
                 currentTransitionZone = getDoubleSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
+
+                if (modifier.has("breakGroup")) {
+                    currentBreakGroups = parseGroups(modifier.get("breakGroup"));
+                }
                 continue;
             }
 
@@ -326,7 +332,8 @@ public class JBeamParser {
                     double inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
                     double inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
                     double inlineTransitionZone = currentTransitionZone;
-                    String inlineId3 = null;
+                    String inlineId3 = null; // for L-Beams
+                    java.util.List<String> inlineBreakGroups = currentBreakGroups;
 
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
@@ -355,6 +362,10 @@ public class JBeamParser {
                         inlineDampExpansion = getDoubleSafe(inline, "dampExpansion", inlineDampExpansion, entry.variables);
                         inlineTransitionZone = getDoubleSafe(inline, "transitionZone", inlineTransitionZone, entry.variables);
 
+                        if (inline.has("breakGroup")) {
+                            inlineBreakGroups = parseGroups(inline.get("breakGroup"));
+                        }
+
                         String bt = getStringSafe(inline, "beamType", "");
                         if (!bt.isEmpty()) {
                             if (bt.equals("|NORMAL")) inlineType = BeamContainer.BEAM_NORMAL;
@@ -369,7 +380,7 @@ public class JBeamParser {
 
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
-                    vehicle.addBeam(inlineType, id1, id2, inlineId3,
+                    vehicle.addBeam(inlineType, id1, id2, inlineId3, inlineBreakGroups,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
