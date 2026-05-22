@@ -123,7 +123,8 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(int type,
-                        String name1, String name2, String name3, java.util.List<String> breakGroups,
+                        String name1, String name2, String name3,
+                        java.util.List<String> breakGroups, int breakGroupType,
                         double spring, double damp,
                         double deform, double strength,
                         double precomp, double precompRange, double precompTime,
@@ -149,13 +150,15 @@ public class SoftBodyVehicle {
 
             if (type == BeamContainer.BEAM_SUPPORT) {
 
-                beamIdx = supportBeams.addBeam(breakGroups, n1, n2, dist, spring, damp,
+                beamIdx = supportBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
                 container = supportBeams;
 
             } else if (type == BeamContainer.BEAM_BOUNDED) {
 
-                beamIdx = boundedBeams.addBeam(breakGroups, n1, n2, dist,
+                beamIdx = boundedBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, dist,
                         spring, damp, deform, strength,
                         precomp, precompRange, precompTime,
                         shortBound, longBound,
@@ -178,20 +181,22 @@ public class SoftBodyVehicle {
                 dy = nodes.posY[n3] - nodes.posY[n2];
                 dz = nodes.posZ[n3] - nodes.posZ[n2];
                 double node23Dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                beamIdx = lBeams.addBeam(breakGroups, n1, n2, n3, node12Dist, node13Dist, node23Dist,
+                beamIdx = lBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, n3, node12Dist, node13Dist, node23Dist,
                         spring, damp, deform, strength, precomp, precompRange, precompTime);
                 container = lBeams;
 
             } else if (type == BeamContainer.BEAM_ANISOTROPIC) {
 
-                beamIdx = anisotropicBeams.addBeam(breakGroups, n1, n2, dist, spring, damp,
+                beamIdx = anisotropicBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime,
                         springExpansion, dampExpansion, transitionZone);
                 container = anisotropicBeams;
 
             } else {
 
-                beamIdx = normalBeams.addBeam(breakGroups, n1, n2, dist, spring, damp,
+                beamIdx = normalBeams.addBeam(breakGroups, breakGroupType, n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
                 container = normalBeams;
 
@@ -703,13 +708,15 @@ public class SoftBodyVehicle {
 
     private void breakBeamAt(BeamContainer container, int idx) {
         container.broken[idx] = true;
-        if (container.assignedBreakGroups != null && container.assignedBreakGroups[idx] != null) {
-            for (String bg : container.assignedBreakGroups[idx]) {
-                this.triggerBreakGroup(bg); // 抛给车辆的只读状态机处理
+        if (container.breakGroupType[idx] == 0) {
+            if (container.assignedBreakGroups != null && container.assignedBreakGroups[idx] != null) {
+                for (String bg : container.assignedBreakGroups[idx]) {
+                    this.triggerBreakGroup(bg); // 抛给车辆的只读状态机处理
+                }
             }
+            int wheelIdx = container.wheelId[idx];
+            wheels.deflateWheel(wheelIdx);
         }
-        int wheelIdx = container.wheelId[idx];
-        wheels.deflateWheel(wheelIdx);
     }
 
     private void solveNormalBeams(double dt, double invDt) {

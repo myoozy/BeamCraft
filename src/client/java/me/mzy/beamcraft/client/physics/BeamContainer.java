@@ -30,6 +30,7 @@ public class BeamContainer {
     public double[] deform;
     public double[] strength;
     public boolean[] broken;
+    public int[] breakGroupType;
     public int[] wheelId;
 
     public BeamContainer() {
@@ -45,6 +46,7 @@ public class BeamContainer {
         deform = new double[INIT_BEAM_CAP];
         strength = new double[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
+        breakGroupType = new int[INIT_BEAM_CAP];
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
         wheelId = new int[INIT_BEAM_CAP];
     }
@@ -71,10 +73,11 @@ public class BeamContainer {
         deform = Utility.expand(deform, newSize);
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
+        breakGroupType = Utility.expand(breakGroupType, newSize);
         wheelId = Utility.expand(wheelId, newSize);
     }
 
-    protected int addBeamInternal(java.util.List<String> breakGroups,
+    protected int addBeamInternal(java.util.List<String> breakGroups, int breakGroupType,
                                   int node1Idx, int node2Idx, double nodeDist,
                                   double spring, double damp,
                                   double deform, double strength,
@@ -110,18 +113,19 @@ public class BeamContainer {
         this.deform[idx] = deform;
         this.strength[idx] = strength;
         this.broken[idx] = false;
+        this.breakGroupType[idx] = breakGroupType;
         this.wheelId[idx] = -1;
 
         count++;
         return idx;
     }
 
-    public int addBeam(java.util.List<String> breakGroups,
+    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
                         int node1Idx, int node2Idx, double nodeDist,
                         double spring, double damp,
                         double deform, double strength,
                         double precomp, double precompRange, double precompTime) {
-        return addBeamInternal(breakGroups, node1Idx, node2Idx, nodeDist, spring, damp,
+        return addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist, spring, damp,
                 deform, strength, precomp, precompRange, precompTime);
     }
 

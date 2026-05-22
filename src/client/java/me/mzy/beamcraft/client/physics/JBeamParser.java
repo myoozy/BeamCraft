@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.physics;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.mzy.beamcraft.BeamCraft;
 
 import java.util.Map;
 
@@ -96,8 +97,8 @@ public class JBeamParser {
         if (str.isEmpty()) return defaultValue;
 
         // 处理特殊常量
-        if (str.contains("FLT_MAX") || str.contains("MAX_FLT")) return PhysicsWorld.KINDA_BIG_NUMBER;
-        if (str.contains("FLT_MIN") || str.contains("MIN_FLT")) return PhysicsWorld.KINDA_SMALL_NUMBER;
+        if (str.contains("FLT_MAX") || str.contains("MAX_FLT")) return Double.MAX_VALUE;
+        if (str.contains("FLT_MIN") || str.contains("MIN_FLT")) return Double.MIN_VALUE;
 
         // 拦截表达式
         if (str.startsWith("$=")) {
@@ -273,6 +274,9 @@ public class JBeamParser {
         double currentTransitionZone = 0.0;
 
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
+        int currentBreakGroupType = 0;
+        // TODO: breakGroupType:
+        // If set to 0, this beam will break others in the breakGroup. if set to 1, this beam will NOT break others in the breakGroup, but will be broken by the group.
 
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
@@ -313,6 +317,8 @@ public class JBeamParser {
 
                 if (modifier.has("breakGroup")) {
                     currentBreakGroups = parseGroups(modifier.get("breakGroup"));
+                    String type = getStringSafe(modifier, "breakGroupType", String.valueOf(currentBreakGroupType));
+                    currentBreakGroupType = Integer.parseInt(type);
                 }
                 continue;
             }
@@ -334,6 +340,7 @@ public class JBeamParser {
                     double inlineTransitionZone = currentTransitionZone;
                     String inlineId3 = null; // for L-Beams
                     java.util.List<String> inlineBreakGroups = currentBreakGroups;
+                    int inlineBreakGroupType = currentBreakGroupType;
 
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
@@ -364,6 +371,8 @@ public class JBeamParser {
 
                         if (inline.has("breakGroup")) {
                             inlineBreakGroups = parseGroups(inline.get("breakGroup"));
+                            String type = getStringSafe(inline, "breakGroupType", String.valueOf(inlineBreakGroupType));
+                            inlineBreakGroupType = Integer.parseInt(type);
                         }
 
                         String bt = getStringSafe(inline, "beamType", "");
@@ -380,7 +389,8 @@ public class JBeamParser {
 
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
-                    vehicle.addBeam(inlineType, id1, id2, inlineId3, inlineBreakGroups,
+                    vehicle.addBeam(inlineType, id1, id2, inlineId3,
+                            inlineBreakGroups, inlineBreakGroupType,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,

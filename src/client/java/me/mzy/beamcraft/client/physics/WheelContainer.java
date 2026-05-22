@@ -441,7 +441,7 @@ public class WheelContainer {
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        return vehicle.normalBeams.addBeam(null, id1, id2, dist, spring, damp, deform, strength,
+        return vehicle.normalBeams.addBeam(null, 0, id1, id2, dist, spring, damp, deform, strength,
                 1.0, 0.0, 0.0);
     }
 
@@ -461,7 +461,7 @@ public class WheelContainer {
         dy = vehicle.nodes.posY[id3] - vehicle.nodes.posY[id2];
         dz = vehicle.nodes.posZ[id3] - vehicle.nodes.posZ[id2];
         double dist23 = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        return vehicle.lBeams.addBeam(null, id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength,
+        return vehicle.lBeams.addBeam(null, 0, id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength,
                 1.0, 0.0, 0.0);
     }
 
@@ -470,7 +470,7 @@ public class WheelContainer {
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        return vehicle.anisotropicBeams.addBeam(null, id1, id2, dist, spring, damp, deform, strength,
+        return vehicle.anisotropicBeams.addBeam(null, 0, id1, id2, dist, spring, damp, deform, strength,
                 1.0, 0.0, 0.0,
                 springExp, dampExp, transitionZone);
     }

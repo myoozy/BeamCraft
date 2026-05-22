@@ -56,7 +56,7 @@ public class BoundedBeamContainer extends BeamContainer {
      * @param inDampRebound     回弹阻尼，<0 时回退至普通阻尼
      * @param inDampReboundFast 高速回弹阻尼，<0 时回退至 inDampRebound
      */
-    public int addBeam(java.util.List<String> breakGroups,
+    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
                         int node1Idx, int node2Idx, double nodeDist,
                         double beamSpring, double beamDamp,
                         double beamDeform, double beamStrength,
@@ -73,7 +73,7 @@ public class BoundedBeamContainer extends BeamContainer {
         double finalReboundFast = (inDampReboundFast < 0) ? finalRebound : inDampReboundFast;
 
         // 复用父类公共属性的添加
-        int idx = addBeamInternal(breakGroups, node1Idx, node2Idx, nodeDist,
+        int idx = addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist,
                 beamSpring, beamDamp, beamDeform, beamStrength,
                 precomp, precompRange, precompTime);
 
