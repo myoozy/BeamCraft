@@ -1,7 +1,8 @@
 package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.utility.Utility;
+
+import java.util.HashMap;
 
 public class BeamContainer {
     public static final int INIT_BEAM_CAP = 256;
@@ -13,6 +14,8 @@ public class BeamContainer {
     public static final int BEAM_LBEAM = 3;
     public static final int BEAM_HYDRO = 4;
     public static final int BEAM_ANISOTROPIC = 5;
+
+    public java.util.List<String>[] assignedBreakGroups;
 
     public int count = 0;
     public int[] node1;
@@ -27,6 +30,8 @@ public class BeamContainer {
     public double[] deform;
     public double[] strength;
     public boolean[] broken;
+    public int[] breakGroupType;
+    public int[] wheelId;
 
     public BeamContainer() {
         node1 = new int[INIT_BEAM_CAP];
@@ -41,6 +46,9 @@ public class BeamContainer {
         deform = new double[INIT_BEAM_CAP];
         strength = new double[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
+        breakGroupType = new int[INIT_BEAM_CAP];
+        assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
+        wheelId = new int[INIT_BEAM_CAP];
     }
 
     private void ensureCapacity() {
@@ -52,6 +60,7 @@ public class BeamContainer {
     }
 
     protected void resize(int newSize) {
+        assignedBreakGroups = java.util.Arrays.copyOf(assignedBreakGroups, newSize);
         node1 = Utility.expand(node1, newSize);
         node2 = Utility.expand(node2, newSize);
         restLength = Utility.expand(restLength, newSize);
@@ -64,48 +73,66 @@ public class BeamContainer {
         deform = Utility.expand(deform, newSize);
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
+        breakGroupType = Utility.expand(breakGroupType, newSize);
+        wheelId = Utility.expand(wheelId, newSize);
     }
 
-    protected int addBeamInternal(int node1Idx, int node2Idx, double nodeDist,
-                                  double beamSpring, double beamDamp,
-                                  double beamDeform, double beamStrength,
+    protected int addBeamInternal(java.util.List<String> breakGroups, int breakGroupType,
+                                  int node1Idx, int node2Idx, double nodeDist,
+                                  double spring, double damp,
+                                  double deform, double strength,
                                   double precomp, double precompRange, double precompTime) {
         ensureCapacity();
-        int idx = count;
+        int idx = this.count;
 
-        node1[idx] = node1Idx;
-        node2[idx] = node2Idx;
-
-        double targetLen = (nodeDist * precomp) + precompRange;
-        targetRestLength[idx] = targetLen;
-
-        if (precompTime > 0.0) {
-            restLength[idx] = nodeDist;
-            precompTimer[idx] = precompTime;
-            precompTimeTotal[idx] = precompTime;
+        if (breakGroups != null && !breakGroups.isEmpty()) {
+            this.assignedBreakGroups[count] = new java.util.ArrayList<>(breakGroups);
         } else {
-            restLength[idx] = targetLen;
-            precompTimer[idx] = 0.0;
-            precompTimeTotal[idx] = 0.0;
+            this.assignedBreakGroups[count] = null;
         }
 
-        baseRestLength[idx] = restLength[idx];
-        spring[idx] = beamSpring;
-        damp[idx] = beamDamp;
-        deform[idx] = beamDeform;
-        strength[idx] = beamStrength;
-        broken[idx] = false;
+        this.node1[idx] = node1Idx;
+        this.node2[idx] = node2Idx;
+
+        double targetLen = (nodeDist * precomp) + precompRange;
+        this.targetRestLength[idx] = targetLen;
+
+        if (precompTime > 0.0) {
+            this.restLength[idx] = nodeDist;
+            this.precompTimer[idx] = precompTime;
+            this.precompTimeTotal[idx] = precompTime;
+        } else {
+            this.restLength[idx] = targetLen;
+            this.precompTimer[idx] = 0.0;
+            this.precompTimeTotal[idx] = 0.0;
+        }
+
+        this.baseRestLength[idx] = this.restLength[idx];
+        this.spring[idx] = spring;
+        this.damp[idx] = damp;
+        this.deform[idx] = deform;
+        this.strength[idx] = strength;
+        this.broken[idx] = false;
+        this.breakGroupType[idx] = breakGroupType;
+        this.wheelId[idx] = -1;
 
         count++;
         return idx;
     }
 
-    public void addBeam(int node1Idx, int node2Idx, double nodeDist,
-                        double beamSpring, double beamDamp,
-                        double beamDeform, double beamStrength,
+    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
+                        int node1Idx, int node2Idx, double nodeDist,
+                        double spring, double damp,
+                        double deform, double strength,
                         double precomp, double precompRange, double precompTime) {
-        addBeamInternal(node1Idx, node2Idx, nodeDist, beamSpring, beamDamp,
-                beamDeform, beamStrength, precomp, precompRange, precompTime);
+        return addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist, spring, damp,
+                deform, strength, precomp, precompRange, precompTime);
+    }
+
+    public void bindToTire(int beamIdx, int wheelIdx) {
+        if (0 <= beamIdx && beamIdx <= count - 1) {
+            wheelId[beamIdx] = wheelIdx;
+        }
     }
 
     public void clear() {

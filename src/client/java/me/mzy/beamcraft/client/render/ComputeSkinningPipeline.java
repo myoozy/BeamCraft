@@ -167,9 +167,9 @@ public class ComputeSkinningPipeline {
         GL20.glUseProgram(this.computeProgramId);
 
         // 🔥 将端口指向我们的纯净 VBO
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 10, this.ssboRigging);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 11, this.customPosNormVbo);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 12, this.ssboNodes);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, this.ssboRigging);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, this.customPosNormVbo);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, this.ssboNodes);
 
         int loc = GL20.glGetUniformLocation(this.computeProgramId, "u_vertexCount");
         if (loc != -1) GL20.glUniform1i(loc, this.totalVertices);
@@ -178,9 +178,9 @@ public class ComputeSkinningPipeline {
         GL43.glDispatchCompute(numGroups, 1, 1);
 
         GL20.glUseProgram(0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 10, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 11, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 12, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
     }
 
     public void free() {

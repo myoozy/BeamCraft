@@ -25,12 +25,13 @@ public class LBeamContainer extends BeamContainer {
         targetCosTheta = Utility.expand(targetCosTheta, newSize);
     }
 
-    public void addBeam(int node1Idx, int node2Idx, int node3Idx,
+    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
+                        int node1Idx, int node2Idx, int node3Idx,
                         double node12Dist, double node13Dist, double node23Dist,
                         double beamSpring, double beamDamp,
                         double beamDeform, double beamStrength,
                         double precomp, double precompRange, double precompTime) {
-        int idx = addBeamInternal(node1Idx, node2Idx, node12Dist, beamSpring, beamDamp,
+        int idx = addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, node12Dist, beamSpring, beamDamp,
                 beamDeform, beamStrength, precomp, precompRange, precompTime);
         node3[idx] = node3Idx;
 
@@ -60,6 +61,8 @@ public class LBeamContainer extends BeamContainer {
         }
 
         baseCosTheta[idx] = restCosTheta[idx];
+
+        return idx;
     }
 
     public void reset() {

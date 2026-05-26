@@ -71,6 +71,8 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // 2. 绑定我们自己的纯净 VBO
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, flex.skinningPipeline.customPosNormVbo);
 
+        // TODO: 找个万无一失的方法，替换掉硬编码
+
         // 3. 强行篡改 0 号属性 (Position) 指南
         GL20.glEnableVertexAttribArray(0);
         // 告诉显卡：读 3 个 Float，步长 24 字节，从 0 字节开始读
@@ -81,7 +83,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // 告诉显卡：读 3 个 Float，步长 24 字节，跳过前 12 字节 (即跳过位置) 开始读
         GL20.glVertexAttribPointer(5, 3, GL11.GL_FLOAT, false, 24, 12);
 
-        // 5. 🔥 核心黑客改动：关闭 4 号光照属性的数组读取，改用全局常量注入
+        // 5. 关闭 4 号光照属性的数组读取，改用全局常量注入
         GL20.glDisableVertexAttribArray(4); // 告诉显卡：别去 VBO 里翻光照数据了！
 
         // 拆解 Minecraft 的 packedLight (高16位是天空光，低16位是方块光)
@@ -104,6 +106,9 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
         // 解绑我们强行挂载的自定义 VBO，把全局状态物归原主
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+
+        // 彻底解绑当前被污染的VAO
+        VertexBuffer.unbind();// 或者调用 GL30.glBindVertexArray(0);
 
         // 恢复环境
         MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().disable();

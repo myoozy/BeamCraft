@@ -52,6 +52,8 @@ public class WheelContainer {
     public double[] prevVolume = new double[INIT_WHEEL_CAP];
     public double[] normalSign = new double[INIT_WHEEL_CAP];
 
+    public boolean[] isDeflated = new boolean[INIT_WHEEL_CAP];
+
     private final SoftBodyVehicle vehicle;
 
     public WheelContainer(SoftBodyVehicle vehicle) {
@@ -97,6 +99,7 @@ public class WheelContainer {
         node2[wIdx] = n2;
         numRays[wIdx] = rays > 0 ? Math.min(rays, MAX_RAYS) : MAX_RAYS;
         hubRadius[wIdx] = radius;
+        this.isDeflated[wIdx] = false;
 
         int partId = vehicle.nodes.partId[n1];
         int baseOffset = wIdx * MAX_RAYS;
@@ -137,15 +140,15 @@ public class WheelContainer {
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
             // 生成物理节点
-            vehicle.nodes.addNode(wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight,
+            hubInnerNodes[baseOffset + i] = vehicle.nodes.addNode(
+                    wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight,
                     frictionCoef, 0.0, partId,
                     true, false, List.of(hubGroup));
-            hubInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
 
-            vehicle.nodes.addNode(wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight,
+            hubOuterNodes[baseOffset + i]  = vehicle.nodes.addNode(
+                    wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight,
                     frictionCoef, 0.0, partId,
                     true, false, List.of(hubGroup));
-            hubOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
         }
 
         // 3. 生成物理拓扑 (Beams)
@@ -156,8 +159,10 @@ public class WheelContainer {
 
             // ================= 1. 轮辋蒙皮 =================
             // 周长支撑 (Tread)
-            addFastBeam(hInCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
-            addFastBeam(hOutCur, hOutNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
+            int treadInIdx = addFastBeam(hInCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
+            int treadOutIdx = addFastBeam(hOutCur, hOutNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
+            vehicle.normalBeams.bindToTire(treadInIdx, wIdx);
+            vehicle.normalBeams.bindToTire(treadOutIdx, wIdx);
 
             // 横向支撑与 X 型交叉防扭曲 (Periphery)
             //addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, hubBeamStrength); // 直连  <--直连和交叉只能二选一，不然会不稳定，根据观察，BeamNG只有交叉梁
@@ -239,6 +244,7 @@ public class WheelContainer {
         tireRadius[wIdx] = radius;
         tireWidth[wIdx] = width;
         this.pressurePSI[wIdx] = pressurePSI;
+        this.isDeflated[wIdx] = false;
 
         this.frictionCoef[wIdx] = frictionCoef;
         this.slidingFrictionCoef[wIdx] = slidingFrictionCoef;
@@ -283,15 +289,17 @@ public class WheelContainer {
             double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
-            vehicle.nodes.addTireNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight,
+            int idxIn = vehicle.nodes.addNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight,
                     frictionCoef, slidingFrictionCoef, partId,
-                    true, false, wIdx, List.of(group));
-            tireInnerNodes[baseOffset + i] = vehicle.nodes.count - 1;
+                    true, false, List.of(group));
+            tireInnerNodes[baseOffset + i] = idxIn;
+            vehicle.nodes.bindToTire(idxIn, wIdx);
 
-            vehicle.nodes.addTireNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight,
+            int idxOut = vehicle.nodes.addNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight,
                     frictionCoef, slidingFrictionCoef, partId,
-                    true, false, wIdx, List.of(group));
-            tireOuterNodes[baseOffset + i] = vehicle.nodes.count - 1;
+                    true, false, List.of(group));
+            tireOuterNodes[baseOffset + i] = idxOut;
+            vehicle.nodes.bindToTire(idxOut, wIdx);
         }
 
         boolean COLLISION = false;
@@ -330,8 +338,10 @@ public class WheelContainer {
             // 1. 圆周梁 (Periphery Beams) —— 维持周长，主导纵向抓地力
             // ========================================================
             // 普通圆周梁 (沿 i 连 i+1)
-            addFastBeam(tInCur,  tInNext,  periSpring, periDamp, periDeform, periStrength);
-            addFastBeam(tOutCur, tOutNext, periSpring, periDamp, periDeform, periStrength);
+            int periInIdx = addFastBeam(tInCur,  tInNext,  periSpring, periDamp, periDeform, periStrength);
+            int periOutIdx = addFastBeam(tOutCur, tOutNext, periSpring, periDamp, periDeform, periStrength);
+            vehicle.normalBeams.bindToTire(periInIdx, wIdx);
+            vehicle.normalBeams.bindToTire(periOutIdx, wIdx);
 
             // 圆周加强筋 (沿 i 连 i+2，文档中的 circumference +-2 nodes)
             if (enableTirePeripheryReinfBeams) {
@@ -357,10 +367,12 @@ public class WheelContainer {
             // 3. 侧壁梁 (Sidewall Beams) —— 连 Hub 和 Tire，由气压主导
             // ========================================================
             // 普通侧壁支撑 (沿半径直连)
-            addFastAnisotropicBeam(hInCur,  tInCur,  sideSpring, sideDamp, sideDeform, sideStrength,
+            int sideInIdx = addFastAnisotropicBeam(hInCur,  tInCur,  sideSpring, sideDamp, sideDeform, sideStrength,
                     sideSpringExp, sideDampExp, sideTransZone);
-            addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
+            int sideOutIdx = addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
                     sideSpringExp, sideDampExp, sideTransZone);
+            vehicle.anisotropicBeams.bindToTire(sideInIdx, wIdx);
+            vehicle.anisotropicBeams.bindToTire(sideOutIdx, wIdx);
 
             // 侧壁加强筋 (侧壁交叉防扭曲，连目标环带的 i+2，文档中的 sidewall +-2 nodes)
             if (enableTireSideReinfBeams) {
@@ -424,16 +436,16 @@ public class WheelContainer {
         normalSign[wIdx] = (volSum < 0.0) ? -1.0 : 1.0;
     }
 
-    private void addFastBeam(int id1, int id2, double spring, double damp, double deform, double strength) {
+    private int addFastBeam(int id1, int id2, double spring, double damp, double deform, double strength) {
         double dx = vehicle.nodes.posX[id2] - vehicle.nodes.posX[id1];
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        vehicle.normalBeams.addBeam(id1, id2, dist, spring, damp, deform, strength,
+        return vehicle.normalBeams.addBeam(null, 0, id1, id2, dist, spring, damp, deform, strength,
                 1.0, 0.0, 0.0);
     }
 
-    private void addFastLBeam(int id1, int id2, int id3, double spring, double damp, double deform, double strength) {
+    private int addFastLBeam(int id1, int id2, int id3, double spring, double damp, double deform, double strength) {
         double dx;
         double dy;
         double dz;
@@ -449,16 +461,16 @@ public class WheelContainer {
         dy = vehicle.nodes.posY[id3] - vehicle.nodes.posY[id2];
         dz = vehicle.nodes.posZ[id3] - vehicle.nodes.posZ[id2];
         double dist23 = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        vehicle.lBeams.addBeam(id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength,
+        return vehicle.lBeams.addBeam(null, 0, id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength,
                 1.0, 0.0, 0.0);
     }
 
-    private void addFastAnisotropicBeam(int id1, int id2, double spring, double damp, double deform, double strength, double springExp, double dampExp, double transitionZone) {
+    private int addFastAnisotropicBeam(int id1, int id2, double spring, double damp, double deform, double strength, double springExp, double dampExp, double transitionZone) {
         double dx = vehicle.nodes.posX[id2] - vehicle.nodes.posX[id1];
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        vehicle.anisotropicBeams.addBeam(id1, id2, dist, spring, damp, deform, strength,
+        return vehicle.anisotropicBeams.addBeam(null, 0, id1, id2, dist, spring, damp, deform, strength,
                 1.0, 0.0, 0.0,
                 springExp, dampExp, transitionZone);
     }
@@ -523,7 +535,15 @@ public class WheelContainer {
             tireInnerNodes = Utility.expand(tireInnerNodes, newFlatSize);
             tireOuterNodes = Utility.expand(tireOuterNodes, newFlatSize);
 
+            isDeflated = Utility.expand(isDeflated, newFlatSize);
+
             System.out.println("⚠️ [WheelContainer] Resized to: " + newSize + " wheels, flat size: " + newFlatSize);
+        }
+    }
+
+    public void deflateWheel(int idx) {
+        if (idx >= 0 && idx < count) {
+            if (!isDeflated[idx])isDeflated[idx] = true;
         }
     }
 

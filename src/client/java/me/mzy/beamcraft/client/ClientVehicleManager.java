@@ -1,12 +1,14 @@
 package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.*;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.utility.Utility;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.math.Box;
 import org.lwjgl.opengl.GL43;
 
 import java.util.HashMap;
@@ -51,8 +53,14 @@ public class ClientVehicleManager {
                         Map<String, String> localConfig = new HashMap<>();
                         JBeamLoader.loadVehicle(BeamCraftClient.VEHICLES_DIR, rootPart, pcFile, localRegistry, localConfig);
 
+                        DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
+
                         JBeamAssembler assembler = new JBeamAssembler();
-                        assembler.assembleVehicle(rootPart, localConfig, localRegistry, softBody);
+                        boolean success = assembler.assembleVehicle(rootPart, localConfig, localRegistry, softBody);
+
+                        if (!success) {
+                            System.err.println("⚠️ 车辆组装出现错误，实体 ID: " + id);
+                        }
 
                         softBody.nodes.rotateNodes(client.player.getYaw(), 0, 0);
 
@@ -61,6 +69,28 @@ public class ClientVehicleManager {
                         VEHICLE_MAP.put(id, softBody);
                     }
                 }
+                else {
+                    SoftBodyVehicle softBody = VEHICLE_MAP.get(id);
+
+                    double minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
+                    double maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+
+                    for (int n = 0; n < softBody.nodes.count; n++) {
+                        double nx = softBody.nodes.renderSnapCurrX[n];
+                        double ny = softBody.nodes.renderSnapCurrY[n];
+                        double nz = softBody.nodes.renderSnapCurrZ[n];
+
+                        minX = Math.min(minX, nx); maxX = Math.max(maxX, nx);
+                        minY = Math.min(minY, ny); maxY = Math.max(maxY, ny);
+                        minZ = Math.min(minZ, nz); maxZ = Math.max(maxZ, nz);
+                    }
+
+                    minX += softBody.parentEntity.getX(); maxX += softBody.parentEntity.getX();
+                    minY += softBody.parentEntity.getY(); maxY += softBody.parentEntity.getY();
+                    minZ += softBody.parentEntity.getZ(); maxZ += softBody.parentEntity.getZ();
+
+                    softBody.parentEntity.setBoundingBox(new Box(minX, minY, minZ, maxX, maxY, maxZ));
+                }
             }
         }
 
@@ -68,8 +98,14 @@ public class ClientVehicleManager {
         VEHICLE_MAP.entrySet().removeIf(entry -> {
             SoftBodyVehicle vehicle = entry.getValue();
             if (vehicle.parentEntity == null || vehicle.parentEntity.isRemoved()) {
-                // 直接调用现有的 PhysicsWorld 接口安全移除
+                // 在删除车辆前删除它的mesh
+                DaeMeshLoader.releaseVehicleModels(vehicle.flexbodies.vehicleNamespace);
+                // 直接调用现有的 PhysicsWorld 接口安全移除车辆
                 BeamCraftClient.PHYSICS_WORLD.removeVehicle(vehicle);
+                // 释放显存
+                if (vehicle.flexbodies.skinningPipeline != null) {
+                    vehicle.flexbodies.skinningPipeline.free();
+                }
                 return true;
             }
             return false;

@@ -277,7 +277,7 @@ public class JBeamPressureWheelsParser {
         if (val.contains("$=")) {
             if (!globalVariables.containsKey("tirepressure_F")) globalVariables.put("tirepressure_F", 30.0);
             if (!globalVariables.containsKey("tirepressure_R")) globalVariables.put("tirepressure_R", 30.0);
-            Double parsed = evaluateBeamNGExpression(val, globalVariables);
+            Double parsed = JBeamParser.evaluateBeamNGExpression(val, globalVariables);
             return parsed != null ? parsed : def;
         }
         try { return Double.parseDouble(val); } catch (NumberFormatException e) { return def; }
@@ -298,81 +298,6 @@ public class JBeamPressureWheelsParser {
         if (!activeConfig.containsKey(key)) return def;
         String val = activeConfig.get(key).toLowerCase();
         return val.equals("true") || val.equals("1");
-    }
-
-    /**
-     * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"
-     * 支持 + - * / 和变量替换（变量以 $ 开头，未定义变量 → 0.0）
-     */
-    public static Double evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
-        expr = expr.trim();
-        if (!expr.startsWith("$=")) {
-            try { return Double.parseDouble(expr); } catch (Exception e) { return null; }
-        }
-        String equation = expr.substring(2);
-
-        // 递归替换所有 $variable (最长匹配)
-        boolean changed;
-        do {
-            changed = false;
-            StringBuilder sb = new StringBuilder();
-            int i = 0;
-            while (i < equation.length()) {
-                if (equation.charAt(i) == '$') {
-                    int j = i + 1;
-                    while (j < equation.length() && (Character.isLetterOrDigit(equation.charAt(j)) || equation.charAt(j) == '_')) j++;
-                    String varName = equation.substring(i + 1, j);
-                    Double val = variables.getOrDefault(varName, 0.0);
-                    sb.append(val);
-                    i = j;
-                    changed = true;
-                } else {
-                    sb.append(equation.charAt(i));
-                    i++;
-                }
-            }
-            equation = sb.toString();
-        } while (changed);
-
-        // 简单四则运算 (支持 + - * /，按顺序从左到右，无优先级)
-        try {
-            equation = equation.replaceAll("\\s+", "");
-            // 先计算乘除
-            while (equation.contains("*") || equation.contains("/")) {
-                int idxMul = equation.indexOf('*');
-                int idxDiv = equation.indexOf('/');
-                int opIdx = (idxMul >= 0 && (idxDiv < 0 || idxMul < idxDiv)) ? idxMul : idxDiv;
-                if (opIdx < 0) break;
-                int leftStart = opIdx - 1;
-                while (leftStart >= 0 && (Character.isDigit(equation.charAt(leftStart)) || equation.charAt(leftStart) == '.')) leftStart--;
-                leftStart++;
-                int rightEnd = opIdx + 1;
-                while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                double left = Double.parseDouble(equation.substring(leftStart, opIdx));
-                double right = Double.parseDouble(equation.substring(opIdx + 1, rightEnd));
-                double res = (equation.charAt(opIdx) == '*') ? left * right : left / right;
-                equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
-            }
-            // 再计算加减
-            while (equation.contains("+") || (equation.contains("-") && equation.lastIndexOf('-') > 0)) {
-                int idxAdd = equation.indexOf('+');
-                int idxSub = equation.lastIndexOf('-');
-                int opIdx = (idxAdd >= 0 && (idxSub < 0 || idxAdd < idxSub)) ? idxAdd : idxSub;
-                if (opIdx < 0) break;
-                int leftStart = opIdx - 1;
-                while (leftStart >= 0 && (Character.isDigit(equation.charAt(leftStart)) || equation.charAt(leftStart) == '.')) leftStart--;
-                leftStart++;
-                int rightEnd = opIdx + 1;
-                while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                double left = Double.parseDouble(equation.substring(leftStart, opIdx));
-                double right = Double.parseDouble(equation.substring(opIdx + 1, rightEnd));
-                double res = (equation.charAt(opIdx) == '+') ? left + right : left - right;
-                equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
-            }
-            return Double.parseDouble(equation);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     public static void resetBlackboard() {

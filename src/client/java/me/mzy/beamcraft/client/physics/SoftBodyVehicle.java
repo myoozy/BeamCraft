@@ -31,7 +31,7 @@ public class SoftBodyVehicle {
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
 
     // Bounding box cache array for independent part culling
-    private int maxTrackedPartId = -1;
+    private int maxTrackedPartId = -1; // 必须在reset时重置
     private double[] partMinX = new double[0], partMinY = new double[0], partMinZ = new double[0];
     private double[] partMaxX = new double[0], partMaxY = new double[0], partMaxZ = new double[0];
     private boolean[] partActive = new boolean[0];
@@ -39,6 +39,9 @@ public class SoftBodyVehicle {
     // 存储扁平化的 2D 矩阵: nodeInPart[nodeId * (maxPartId + 1) + partId]
     public boolean[] nodeInPartMatrix;
     public int matrixPartStride; // 矩阵的列数 (maxTrackedPartId + 1)
+
+    public java.util.Map<String, List<BeamPointer>> breakGroupMap = new java.util.HashMap<>();
+    private final java.util.Set<String> triggeredBreakGroups = new java.util.HashSet<>();
 
     private final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
@@ -114,6 +117,16 @@ public class SoftBodyVehicle {
                         double friction, double slidingFriction, int partId,
                         boolean collision, boolean selfCollision, java.util.List<String> groups) {
         nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision, groups);
+
+
+        // ==========================================
+        // ⭐追踪所有的part
+        // 用来优化碰撞 (和minecraft世界 & 和softbody)
+        // ==========================================
+        if (partId > maxTrackedPartId) {
+            maxTrackedPartId = partId;
+            ensurePartCapacity(maxTrackedPartId);
+        }
     }
 
     /**
@@ -121,6 +134,7 @@ public class SoftBodyVehicle {
      */
     public void addBeam(int type,
                         String name1, String name2, String name3,
+                        java.util.List<String> breakGroups, int breakGroupType,
                         double spring, double damp,
                         double deform, double strength,
                         double precomp, double precompRange, double precompTime,
@@ -141,11 +155,20 @@ public class SoftBodyVehicle {
             nodes.degree[n1]++;
             nodes.degree[n2]++;
 
+            BeamContainer container;
+            int beamIdx;
+
             if (type == BeamContainer.BEAM_SUPPORT) {
-                supportBeams.addBeam(n1, n2, dist, spring, damp,
+
+                beamIdx = supportBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
+                container = supportBeams;
+
             } else if (type == BeamContainer.BEAM_BOUNDED) {
-                boundedBeams.addBeam(n1, n2, dist,
+
+                beamIdx = boundedBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, dist,
                         spring, damp, deform, strength,
                         precomp, precompRange, precompTime,
                         shortBound, longBound,
@@ -153,7 +176,10 @@ public class SoftBodyVehicle {
                         limitSpring, limitDamp,
                         dampVelSplit, dampFast,
                         dampRebound, dampReboundFast);
+                container = boundedBeams;
+
             } else if (type == BeamContainer.BEAM_LBEAM && nodes.nameToIndex.containsKey(name3)) {
+
                 int n3 = nodes.nameToIndex.get(name3);
                 nodes.degree[n3]++;
                 double node12Dist = dist;
@@ -165,15 +191,33 @@ public class SoftBodyVehicle {
                 dy = nodes.posY[n3] - nodes.posY[n2];
                 dz = nodes.posZ[n3] - nodes.posZ[n2];
                 double node23Dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                lBeams.addBeam(n1, n2, n3, node12Dist, node13Dist, node23Dist,
+                beamIdx = lBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, n3, node12Dist, node13Dist, node23Dist,
                         spring, damp, deform, strength, precomp, precompRange, precompTime);
+                container = lBeams;
+
             } else if (type == BeamContainer.BEAM_ANISOTROPIC) {
-                anisotropicBeams.addBeam(n1, n2, dist, spring, damp,
+
+                beamIdx = anisotropicBeams.addBeam(breakGroups, breakGroupType,
+                        n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime,
                         springExpansion, dampExpansion, transitionZone);
+                container = anisotropicBeams;
+
             } else {
-                normalBeams.addBeam(n1, n2, dist, spring, damp,
+
+                beamIdx = normalBeams.addBeam(breakGroups, breakGroupType, n1, n2, dist, spring, damp,
                         deform, strength, precomp, precompRange, precompTime);
+                container = normalBeams;
+
+            }
+
+            if (breakGroups != null && !breakGroups.isEmpty()) {
+                for (String bg : breakGroups) {
+                    this.breakGroupMap
+                            .computeIfAbsent(bg, k -> new java.util.ArrayList<>())
+                            .add(new BeamPointer(container, beamIdx));
+                }
             }
         }
     }
@@ -280,19 +324,6 @@ public class SoftBodyVehicle {
         // ⭐处理FlexBody的所有group
         // ==========================================
         flexbodies.compileGroupsCSR(nodes);
-
-        // ==========================================
-        // ⭐追踪所有的part
-        // 用来优化碰撞 (和minecraft世界 & 和softbody)
-        // ==========================================
-        int currentMaxPartId = -1;
-        for (int i = 0; i < nodes.count; i++) {
-            if (nodes.partId[i] > currentMaxPartId) {
-                currentMaxPartId = nodes.partId[i];
-            }
-        }
-        maxTrackedPartId = currentMaxPartId;
-        ensurePartCapacity(maxTrackedPartId);
 
         // ==========================================
         // ⭐相同零件碰撞剔除
@@ -463,6 +494,7 @@ public class SoftBodyVehicle {
      * Sreset velocity and deformation state
      */
     public void reset() {
+        triggeredBreakGroups.clear();
         nodes.reset();
         normalBeams.reset();
         supportBeams.reset();
@@ -485,6 +517,8 @@ public class SoftBodyVehicle {
         slidenodes.clear();
         wheels.clear();
         flexbodies.clear();
+        triggeredBreakGroups.clear();
+        maxTrackedPartId = -1;
 
         System.out.println("🧹 Vehicle data cleared and reset");
     }
@@ -596,6 +630,8 @@ public class SoftBodyVehicle {
      */
     private void solveTirePressure() {
         for (int w = 0; w < wheels.count; w++) {
+            if (wheels.isDeflated[w]) continue;
+
             int start = wheels.tireTriangleIdxStart[w];
             int end = wheels.tireTriangleIdxEnd[w];
             if (start >= end || start == 0) continue;
@@ -653,6 +689,35 @@ public class SoftBodyVehicle {
         }
     }
 
+    public void triggerBreakGroup(String groupName) {
+        // 使用 Set.add() 充当安全闸
+        // 如果 add 返回 false，说明这个组之前已经触发过了，直接拦截，彻底切断死循环
+        if (!triggeredBreakGroups.add(groupName)) {
+            return;
+        }
+
+        // 只读读取，不破坏结构
+        List<BeamPointer> linkedBeams = breakGroupMap.get(groupName);
+        if (linkedBeams == null) return;
+
+        for (BeamPointer ptr : linkedBeams) {
+            breakBeamAt(ptr.container, ptr.index);
+        }
+    }
+
+    private void breakBeamAt(BeamContainer container, int idx) {
+        container.broken[idx] = true;
+        if (container.breakGroupType[idx] == 0) {
+            if (container.assignedBreakGroups != null && container.assignedBreakGroups[idx] != null) {
+                for (String bg : container.assignedBreakGroups[idx]) {
+                    this.triggerBreakGroup(bg); // 抛给车辆的只读状态机处理
+                }
+            }
+            int wheelIdx = container.wheelId[idx];
+            wheels.deflateWheel(wheelIdx);
+        }
+    }
+
     private void solveNormalBeams(double dt, double invDt) {
         for (int i = 0; i < normalBeams.count; i++) {
             if (normalBeams.broken[i]) continue;
@@ -684,7 +749,7 @@ public class SoftBodyVehicle {
             double absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > normalBeams.strength[i]) {
-                normalBeams.broken[i] = true;
+                breakBeamAt(normalBeams, i);
                 continue;
             }
 
@@ -739,7 +804,7 @@ public class SoftBodyVehicle {
             double absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > supportBeams.strength[i]) {
-                supportBeams.broken[i] = true;
+                breakBeamAt(supportBeams, i);
                 continue;
             }
 
@@ -826,7 +891,7 @@ public class SoftBodyVehicle {
             double absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > boundedBeams.strength[i]) {
-                boundedBeams.broken[i] = true;
+                breakBeamAt(boundedBeams, i);
                 continue;
             }
 
@@ -925,7 +990,7 @@ public class SoftBodyVehicle {
 
             double absTotalForce = Math.abs(totalForce);
             if (absTotalForce > lBeams.strength[i]) {
-                lBeams.broken[i] = true;
+                breakBeamAt(lBeams, i);
                 continue;
             }
 
@@ -1033,7 +1098,7 @@ public class SoftBodyVehicle {
 
             // 断裂判定
             if (absTotalForce > anisotropicBeams.strength[i]) {
-                anisotropicBeams.broken[i] = true;
+                breakBeamAt(anisotropicBeams, i);
                 continue;
             }
 
@@ -1445,8 +1510,7 @@ public class SoftBodyVehicle {
                     // 提取常驻重力在一小段时间内向下施加的冲量大小标量
                     double gravityImpulse = nodes.mass[i] * Math.abs(PhysicsWorld.GRAVITY) * dt;
 
-                    // 1. 🚀 无分支提取 3D 合成法向推挤向量 (天然兼容单面、双面棱边与三面内角接触)
-                    // 仅当该轴发生碰撞时，才计入位置修正量，利用三元运算符避免跳转开销
+                    // 1. 仅当该轴发生碰撞时，才计入位置修正量，利用三元运算符避免跳转开销
                     double pushX = hitX ? Math.abs(nodes.posX[i] - oldLocalX) : 0.0;
                     double pushY = hitY ? Math.abs(nodes.posY[i] - oldLocalY) : 0.0;
                     double pushZ = hitZ ? Math.abs(nodes.posZ[i] - oldLocalZ) : 0.0;
@@ -1454,7 +1518,7 @@ public class SoftBodyVehicle {
                     // 真实的立体合成法向挤压距离 (欧几里得长度)
                     double totalNormalPush = Math.sqrt(pushX*pushX + pushY*pushY + pushZ*pushZ);
 
-                    // 2. 🚀 计算统一的等效立体载荷力 Fn (牛顿)
+                    // 2. 计算统一的等效立体载荷力 Fn (牛顿)
                     double equivalentLoadN = (nodes.mass[i] * totalNormalPush) * (invDt * invDt);
                     double minGravityLoad = nodes.mass[i] * Math.abs(PhysicsWorld.GRAVITY);
                     if (equivalentLoadN < minGravityLoad) equivalentLoadN = minGravityLoad;
@@ -1465,7 +1529,7 @@ public class SoftBodyVehicle {
 
                     // 3. 针对轮胎节点计算统一的高级载荷衰减与 Stribeck 乘子
                     int wIdx = nodes.wheelId[i];
-                    if (wIdx != -1) {
+                    if (0 <= wIdx && wIdx < wheels.count) {
                         double staticBase  = wheels.frictionCoef[wIdx];
                         double slidingBase = wheels.slidingFrictionCoef[wIdx];
                         double noLoad      = wheels.noLoadCoef[wIdx];
@@ -1497,12 +1561,8 @@ public class SoftBodyVehicle {
                         mu_k = (dynamicMuMultiplier * loadFactor * treadCoef) * blockFriction;
                     }
 
-                    // ==========================================================
-                    // 2. 🚀 物理精确映射：动量守恒与独立解耦衰减
-                    // ==========================================================
-
                     if (hitY) {
-                        // 🚀 终极修正：真实的法向总冲量 = 反弹动量差值 + 重力压迫冲量
+                        //修正：真实的法向总冲量 = 反弹动量差值 + 重力压迫冲量
                         // J = m * |v| * (1 + e) + m * |g| * dt
                         double jn = nodes.mass[i] * Math.abs(nodes.velY[i]) * (1.0 + reboundCoef) + gravityImpulse;
 
