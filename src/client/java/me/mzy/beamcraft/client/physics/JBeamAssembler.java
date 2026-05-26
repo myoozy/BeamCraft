@@ -98,7 +98,7 @@ public class JBeamAssembler {
         }
     }
 
-    public void assembleVehicle(
+    public boolean assembleVehicle(
             String rootPartName,
             Map<String, String> userConfig,
             Map<String, JsonObject> registry,
@@ -220,8 +220,12 @@ public class JBeamAssembler {
             System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
 
             vehicle.finalizePhysicsSetup();
+
+            return true;
         } catch (Throwable t) {
+            System.err.println("🚨 车辆装配过程中发生严重错误！");
             t.printStackTrace();
+            return false;
         }
     }
 

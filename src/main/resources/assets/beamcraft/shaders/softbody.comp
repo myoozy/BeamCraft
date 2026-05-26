@@ -9,17 +9,17 @@ struct VertexRig {
     vec4 skPos_and_vyNode;
     vec4 uv_and_flags;
 };
-layout(std430, binding = 10) readonly buffer RiggingData {
+layout(std430, binding = 0) readonly buffer RiggingData {
     VertexRig rigs[];
 };
 
 // 2. 🔥 纯净 VBO 仓库：只有坐标和法线！步长永远是完美的 24 字节 (6 个 Float)
-layout(std430, binding = 11) writeonly buffer CustomVBO {
+layout(std430, binding = 1) writeonly buffer CustomVBO {
     float posNormArray[];
 };
 
 // 3. 动态物理节点保持不变
-layout(std430, binding = 12) readonly buffer PhysicsNodes {
+layout(std430, binding = 2) readonly buffer PhysicsNodes {
     vec4 dynamic_nodes[];
 };
 

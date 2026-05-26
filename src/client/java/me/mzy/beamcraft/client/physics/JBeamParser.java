@@ -88,6 +88,22 @@ public class JBeamParser {
         }
     }
 
+    public static int getIntSafe(JsonObject obj, String key, int defaultValue) {
+        if (obj == null || !obj.has(key)) return defaultValue;
+        JsonElement el = obj.get(key);
+        if (el.isJsonNull()) return defaultValue;
+
+        String str = el.getAsString().trim();
+        if (str.isEmpty()) return defaultValue; // 完美拦截 ""
+
+        try {
+            return Integer.parseInt(str);
+        } catch (NumberFormatException e) {
+            // 如果遇到小数或者乱码，退回到默认值
+            return defaultValue;
+        }
+    }
+
     public static double getDoubleSafe(JsonObject obj, String key, double defaultValue, Map<String, Double> vars) {
         if (obj == null || !obj.has(key)) return defaultValue;
         JsonElement el = obj.get(key);
@@ -275,8 +291,6 @@ public class JBeamParser {
 
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
         int currentBreakGroupType = 0;
-        // TODO: breakGroupType:
-        // If set to 0, this beam will break others in the breakGroup. if set to 1, this beam will NOT break others in the breakGroup, but will be broken by the group.
 
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
@@ -317,8 +331,7 @@ public class JBeamParser {
 
                 if (modifier.has("breakGroup")) {
                     currentBreakGroups = parseGroups(modifier.get("breakGroup"));
-                    String type = getStringSafe(modifier, "breakGroupType", String.valueOf(currentBreakGroupType));
-                    currentBreakGroupType = Integer.parseInt(type);
+                    currentBreakGroupType = getIntSafe(modifier, "breakGroupType", currentBreakGroupType);
                 }
                 continue;
             }
@@ -371,8 +384,7 @@ public class JBeamParser {
 
                         if (inline.has("breakGroup")) {
                             inlineBreakGroups = parseGroups(inline.get("breakGroup"));
-                            String type = getStringSafe(inline, "breakGroupType", String.valueOf(inlineBreakGroupType));
-                            inlineBreakGroupType = Integer.parseInt(type);
+                            inlineBreakGroupType = getIntSafe(inline, "breakGroupType", inlineBreakGroupType);
                         }
 
                         String bt = getStringSafe(inline, "beamType", "");

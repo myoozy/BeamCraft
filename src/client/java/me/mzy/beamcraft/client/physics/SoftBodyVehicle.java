@@ -31,7 +31,7 @@ public class SoftBodyVehicle {
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
 
     // Bounding box cache array for independent part culling
-    private int maxTrackedPartId = -1;
+    private int maxTrackedPartId = -1; // 必须在reset时重置
     private double[] partMinX = new double[0], partMinY = new double[0], partMinZ = new double[0];
     private double[] partMaxX = new double[0], partMaxY = new double[0], partMaxZ = new double[0];
     private boolean[] partActive = new boolean[0];
@@ -117,6 +117,16 @@ public class SoftBodyVehicle {
                         double friction, double slidingFriction, int partId,
                         boolean collision, boolean selfCollision, java.util.List<String> groups) {
         nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision, groups);
+
+
+        // ==========================================
+        // ⭐追踪所有的part
+        // 用来优化碰撞 (和minecraft世界 & 和softbody)
+        // ==========================================
+        if (partId > maxTrackedPartId) {
+            maxTrackedPartId = partId;
+            ensurePartCapacity(maxTrackedPartId);
+        }
     }
 
     /**
@@ -316,19 +326,6 @@ public class SoftBodyVehicle {
         flexbodies.compileGroupsCSR(nodes);
 
         // ==========================================
-        // ⭐追踪所有的part
-        // 用来优化碰撞 (和minecraft世界 & 和softbody)
-        // ==========================================
-        int currentMaxPartId = -1;
-        for (int i = 0; i < nodes.count; i++) {
-            if (nodes.partId[i] > currentMaxPartId) {
-                currentMaxPartId = nodes.partId[i];
-            }
-        }
-        maxTrackedPartId = currentMaxPartId;
-        ensurePartCapacity(maxTrackedPartId);
-
-        // ==========================================
         // ⭐相同零件碰撞剔除
         // ==========================================
 
@@ -520,6 +517,8 @@ public class SoftBodyVehicle {
         slidenodes.clear();
         wheels.clear();
         flexbodies.clear();
+        triggeredBreakGroups.clear();
+        maxTrackedPartId = -1;
 
         System.out.println("🧹 Vehicle data cleared and reset");
     }
