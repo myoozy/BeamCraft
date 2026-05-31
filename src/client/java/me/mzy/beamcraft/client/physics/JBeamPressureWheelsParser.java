@@ -12,20 +12,14 @@ import java.util.Map;
  */
 public class JBeamPressureWheelsParser {
 
-    private static final Map<String, String> activeConfig = new HashMap<>();
-    public static final Map<String, Double> globalVariables = new HashMap<>();
-
-    public static void parsePressureWheels(JsonArray pressureWheels, SoftBodyVehicle vehicle) {
+    public static void parsePressureWheels(JsonArray pressureWheels, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry, JsonObject activeConfig) {
         boolean isHeader = true;
         for (JsonElement element : pressureWheels) {
             // 1. 状态修饰符 {...} → 更新活跃配置黑板
             if (element.isJsonObject()) {
                 JsonObject mod = element.getAsJsonObject();
                 for (String key : mod.keySet()) {
-                    JsonElement val = mod.get(key);
-                    if (val.isJsonPrimitive()) {
-                        activeConfig.put(key, val.getAsString());
-                    }
+                    activeConfig.add(key, mod.get(key));
                 }
                 continue;
             }
@@ -59,158 +53,158 @@ public class JBeamPressureWheelsParser {
                 // ========== 以下读取文档中所有可选参数（即使暂不使用） ==========
 
                 // ----- 基础开关与尺寸 -----
-                boolean hasTire = getBool("hasTire", true);
-                int numRays = (int) getVal("numRays", 12.0);
-                double wheelOffset = getVal("wheelOffset", 0.0);
-                double radius = getVal("radius", 0.35);
-                double tireWidth = getVal("tireWidth", 0.2);
-                String speedo = getStr("speedo", null);
-                double propulsed = getVal("propulsed", 0.0);
-                boolean selfCollision = getBool("selfCollision", false);
-                boolean collision = getBool("collision", true);
-                boolean disableMeshBreaking = getBool("disableMeshBreaking", false);
-                boolean disableHubMeshBreaking = getBool("disableHubMeshBreaking", false);
-                String axleBeams = getStr("axleBeams", null);      // 实际为数组，此处只读字符串形式
+                boolean hasTire = getBool(activeConfig, "hasTire", true);
+                int numRays = (int) getVal(activeConfig, "numRays", 12.0, entry.variables);
+                double wheelOffset = getVal(activeConfig, "wheelOffset", 0.0, entry.variables);
+                double radius = getVal(activeConfig, "radius", 0.35, entry.variables);
+                double tireWidth = getVal(activeConfig, "tireWidth", 0.2, entry.variables);
+                String speedo = getStr(activeConfig, "speedo", null);
+                double propulsed = getVal(activeConfig, "propulsed", 0.0, entry.variables);
+                boolean selfCollision = getBool(activeConfig, "selfCollision", false);
+                boolean collision = getBool(activeConfig, "collision", true);
+                boolean disableMeshBreaking = getBool(activeConfig, "disableMeshBreaking", false);
+                boolean disableHubMeshBreaking = getBool(activeConfig, "disableHubMeshBreaking", false);
+                String axleBeams = getStr(activeConfig, "axleBeams", null);      // 实际为数组，此处只读字符串形式
 
                 // ----- 轮毂参数 -----
-                double hubRadius = getVal("hubRadius", 0.2);
-                double hubWidth = getVal("hubWidth", 0.2);
-                double hubNodeWeight = getFirstVal("hubNodeWeight", "hubWeight", 0.5);
-                double hubFrictionCoef = getFirstVal("hubFrictionCoef", "frictionCoef", 0.5);
-                String hubNodeMaterial = getStr("hubNodeMaterial", "METAL");
+                double hubRadius = getVal(activeConfig, "hubRadius", 0.2, entry.variables);
+                double hubWidth = getVal(activeConfig, "hubWidth", 0.2, entry.variables);
+                double hubNodeWeight = getFirstVal(activeConfig, "hubNodeWeight", "hubWeight", 0.5, entry.variables);
+                double hubFrictionCoef = getFirstVal(activeConfig, "hubFrictionCoef", "frictionCoef", 0.5, entry.variables);
+                String hubNodeMaterial = getStr(activeConfig, "hubNodeMaterial", "METAL");
                 // hub 各种梁参数
-                double hubBeamSpring = getVal("hubBeamSpring", 251000);
-                double hubBeamDamp = getVal("hubBeamDamp", 5);
-                double hubBeamDeform = getVal("hubBeamDeform", 40000);
-                double hubBeamStrength = getVal("hubBeamStrength", 160000);
-                double hubTreadBeamSpring = getVal("hubTreadBeamSpring", 901000);
-                double hubTreadBeamDamp = getVal("hubTreadBeamDamp", 6);
-                double hubPeripheryBeamSpring = getVal("hubPeripheryBeamSpring", 901000);
-                double hubPeripheryBeamDamp = getVal("hubPeripheryBeamDamp", 6);
-                double hubSideBeamSpring = getVal("hubSideBeamSpring", 1351000);
-                double hubSideBeamDamp = getVal("hubSideBeamDamp", 6);
-                double hubReinfBeamSpring = getVal("hubReinfBeamSpring", 0);  // 简化模型使用
-                double hubReinfBeamDamp = getVal("hubReinfBeamDamp", 0);
+                double hubBeamSpring = getVal(activeConfig, "hubBeamSpring", 251000, entry.variables);
+                double hubBeamDamp = getVal(activeConfig, "hubBeamDamp", 5, entry.variables);
+                double hubBeamDeform = getVal(activeConfig, "hubBeamDeform", 40000, entry.variables);
+                double hubBeamStrength = getVal(activeConfig, "hubBeamStrength", 160000, entry.variables);
+                double hubTreadBeamSpring = getVal(activeConfig, "hubTreadBeamSpring", 901000, entry.variables);
+                double hubTreadBeamDamp = getVal(activeConfig, "hubTreadBeamDamp", 6, entry.variables);
+                double hubPeripheryBeamSpring = getVal(activeConfig, "hubPeripheryBeamSpring", 901000, entry.variables);
+                double hubPeripheryBeamDamp = getVal(activeConfig, "hubPeripheryBeamDamp", 6, entry.variables);
+                double hubSideBeamSpring = getVal(activeConfig, "hubSideBeamSpring", 1351000, entry.variables);
+                double hubSideBeamDamp = getVal(activeConfig, "hubSideBeamDamp", 6, entry.variables);
+                double hubReinfBeamSpring = getVal(activeConfig, "hubReinfBeamSpring", 0, entry.variables);
+                double hubReinfBeamDamp = getVal(activeConfig, "hubReinfBeamDamp", 0, entry.variables);
 
                 // ----- 轮胎参数 -----
-                double tireNodeWeight = getFirstVal("nodeWeight", "tireWeight", 0.15);
-                double tireFrictionCoef = getFirstVal("frictionCoeff", "frictionCoef", 1.0);
-                double slidingFrictionCoef = getVal("slidingFrictionCoeff", 1.0);
-                double stribeckVelMult = getVal("stribeckVelMult", 1.0);
-                double stribeckExponent = getVal("stribeckExponent", 1.75);
-                double treadCoef = getVal("treadCoeff", 1.0);
-                double noLoadCoef = getVal("noLoadCoeff", 1.28);
-                double loadSensitivitySlope = getVal("loadSensitivitySlope", 0.00019);
-                double fullLoadCoef = getVal("fullLoadCoeff", 0.4);
-                double softnessCoef = getVal("softnessCoeff", 0.6);
-                String nodeMaterial = getStr("nodeMaterial", "RUBBER");
-                double pressurePSI = getVal("pressurePSI", 30.0);
-                double maxPressurePSI = getVal("maxPressurePSI", 60.0);
-                double dragCoef = getVal("dragCoef", 5.0);
-                double skinDragCoef = getVal("skinDragCoef", 0.0);
-                boolean triangleCollision = getBool("triangleCollision", false);
-                boolean treadTriangleCollision = getBool("treadTriangleCollision", false);
-                boolean side1TriangleCollision = getBool("side1TriangleCollision", false);
-                boolean side2TriangleCollision = getBool("side2TriangleCollision", false);
-                boolean hubTriangleCollision = getBool("hubTriangleCollision", false);
-                boolean hubSide1TriangleCollision = getBool("hubSide1TriangleCollision", false);
-                boolean hubSide2TriangleCollision = getBool("hubSide2TriangleCollision", false);
+                double tireNodeWeight = getFirstVal(activeConfig, "nodeWeight", "tireWeight", 0.15, entry.variables);
+                double tireFrictionCoef = getFirstVal(activeConfig, "frictionCoeff", "frictionCoef", 1.0, entry.variables);
+                double slidingFrictionCoef = getVal(activeConfig, "slidingFrictionCoeff", 1.0, entry.variables);
+                double stribeckVelMult = getVal(activeConfig, "stribeckVelMult", 1.0, entry.variables);
+                double stribeckExponent = getVal(activeConfig, "stribeckExponent", 1.75, entry.variables);
+                double treadCoef = getVal(activeConfig, "treadCoeff", 1.0, entry.variables);
+                double noLoadCoef = getVal(activeConfig, "noLoadCoeff", 1.28, entry.variables);
+                double loadSensitivitySlope = getVal(activeConfig, "loadSensitivitySlope", 0.00019, entry.variables);
+                double fullLoadCoef = getVal(activeConfig, "fullLoadCoeff", 0.4, entry.variables);
+                double softnessCoef = getVal(activeConfig, "softnessCoeff", 0.6, entry.variables);
+                String nodeMaterial = getStr(activeConfig, "nodeMaterial", "RUBBER");
+                double pressurePSI = getVal(activeConfig, "pressurePSI", 30.0, entry.variables);
+                double maxPressurePSI = getVal(activeConfig, "maxPressurePSI", 60.0, entry.variables);
+                double dragCoef = getVal(activeConfig, "dragCoef", 5.0, entry.variables);
+                double skinDragCoef = getVal(activeConfig, "skinDragCoef", 0.0, entry.variables);
+                boolean triangleCollision = getBool(activeConfig, "triangleCollision", false);
+                boolean treadTriangleCollision = getBool(activeConfig, "treadTriangleCollision", false);
+                boolean side1TriangleCollision = getBool(activeConfig, "side1TriangleCollision", false);
+                boolean side2TriangleCollision = getBool(activeConfig, "side2TriangleCollision", false);
+                boolean hubTriangleCollision = getBool(activeConfig, "hubTriangleCollision", false);
+                boolean hubSide1TriangleCollision = getBool(activeConfig, "hubSide1TriangleCollision", false);
+                boolean hubSide2TriangleCollision = getBool(activeConfig, "hubSide2TriangleCollision", false);
 
                 // 轮胎梁参数（各向异性）
-                double wheelSideBeamSpring = getVal("wheelSideBeamSpring", 15000);
-                double wheelSideBeamDamp = getVal("wheelSideBeamDamp", 30);
-                double wheelSideBeamSpringExpansion = getVal("wheelSideBeamSpringExpansion", 281000);
-                double wheelSideBeamDampExpansion = getVal("wheelSideBeamDampExpansion", 30);
-                double wheelSideTransitionZone = getVal("wheelSideTransitionZone", 0);
-                double wheelSideBeamDeform = getVal("wheelSideBeamDeform", 11000);
-                double wheelSideBeamStrength = getVal("wheelSideBeamStrength", 15000);
-                double wheelSideReinfBeamSpring = getVal("wheelSideReinfBeamSpring", 15000);
-                double wheelSideReinfBeamDamp = getVal("wheelSideReinfBeamDamp", 30);
-                double wheelSideReinfBeamSpringExpansion = getVal("wheelSideReinfBeamSpringExpansion", 281000);
-                double wheelSideReinfBeamDampExpansion = getVal("wheelSideReinfBeamDampExpansion", 30);
-                double wheelReinfBeamSpring = getFirstVal("wheelReinfBeamSpring", "wheelTreadReinfBeamSpring", 120000);
-                double wheelReinfBeamDamp = getFirstVal("wheelReinfBeamDamp", "wheelTreadReinfBeamDamp", 40);
-                double wheelReinfBeamDeform = getVal("wheelReinfBeamDeform", 220000);
-                double wheelReinfBeamStrength = getVal("wheelReinfBeamStrength", PhysicsWorld.KINDA_BIG_NUMBER);
-                double wheelTreadBeamSpring = getVal("wheelTreadBeamSpring", 50000);
-                double wheelTreadBeamDamp = getVal("wheelTreadBeamDamp", 50);
-                double wheelTreadBeamDeform = getVal("wheelTreadBeamDeform", 10000);
-                double wheelTreadBeamStrength = getVal("wheelTreadBeamStrength", 13000);
-                double wheelTreadReinfBeamSpring = getVal("wheelTreadReinfBeamSpring", 120000);
-                double wheelTreadReinfBeamDamp = getVal("wheelTreadReinfBeamDamp", 40);
-                double wheelPeripheryBeamSpring = getVal("wheelPeripheryBeamSpring", 35000);
-                double wheelPeripheryBeamDamp = getVal("wheelPeripheryBeamDamp", 23);
-                double wheelPeripheryBeamDeform = getVal("wheelPeripheryBeamDeform", 40000);
-                double wheelPeripheryBeamStrength = getVal("wheelPeripheryBeamStrength", 40000);
-                double wheelPeripheryReinfBeamSpring = getVal("wheelPeripheryReinfBeamSpring", 95000);
-                double wheelPeripheryReinfBeamDamp = getVal("wheelPeripheryReinfBeamDamp", 23);
-                boolean enableTireReinfBeams = getBool("enableTireReinfBeams", false);
-                boolean enableTireLBeams = getBool("enableTireLBeams", true);
-                boolean enableTireSideReinfBeams = getBool("enableTireSideReinfBeams", true);
-                boolean enableTreadReinfBeams = getBool("enableTreadReinfBeams", true);
-                boolean enableTirePeripheryReinfBeams = getBool("enableTirePeripheryReinfBeams", true);
-                boolean enableTireSupportBeams = getBool("enableTireSupportBeams", false);
-                double tireSupportBeamSpring = getVal("tireSupportBeamSpring", 0);
-                double tireSupportBeamDamp = getVal("tireSupportBeamDamp", 0);
+                double wheelSideBeamSpring = getVal(activeConfig, "wheelSideBeamSpring", 15000, entry.variables);
+                double wheelSideBeamDamp = getVal(activeConfig, "wheelSideBeamDamp", 30, entry.variables);
+                double wheelSideBeamSpringExpansion = getVal(activeConfig, "wheelSideBeamSpringExpansion", 281000, entry.variables);
+                double wheelSideBeamDampExpansion = getVal(activeConfig, "wheelSideBeamDampExpansion", 30, entry.variables);
+                double wheelSideTransitionZone = getVal(activeConfig, "wheelSideTransitionZone", 0, entry.variables);
+                double wheelSideBeamDeform = getVal(activeConfig, "wheelSideBeamDeform", 11000, entry.variables);
+                double wheelSideBeamStrength = getVal(activeConfig, "wheelSideBeamStrength", 15000, entry.variables);
+                double wheelSideReinfBeamSpring = getVal(activeConfig, "wheelSideReinfBeamSpring", 15000, entry.variables);
+                double wheelSideReinfBeamDamp = getVal(activeConfig, "wheelSideReinfBeamDamp", 30, entry.variables);
+                double wheelSideReinfBeamSpringExpansion = getVal(activeConfig, "wheelSideReinfBeamSpringExpansion", 281000, entry.variables);
+                double wheelSideReinfBeamDampExpansion = getVal(activeConfig, "wheelSideReinfBeamDampExpansion", 30, entry.variables);
+                double wheelReinfBeamSpring = getFirstVal(activeConfig, "wheelReinfBeamSpring", "wheelTreadReinfBeamSpring", 120000, entry.variables);
+                double wheelReinfBeamDamp = getFirstVal(activeConfig, "wheelReinfBeamDamp", "wheelTreadReinfBeamDamp", 40, entry.variables);
+                double wheelReinfBeamDeform = getVal(activeConfig, "wheelReinfBeamDeform", 220000, entry.variables);
+                double wheelReinfBeamStrength = getVal(activeConfig, "wheelReinfBeamStrength", PhysicsWorld.KINDA_BIG_NUMBER, entry.variables);
+                double wheelTreadBeamSpring = getVal(activeConfig, "wheelTreadBeamSpring", 50000, entry.variables);
+                double wheelTreadBeamDamp = getVal(activeConfig, "wheelTreadBeamDamp", 50, entry.variables);
+                double wheelTreadBeamDeform = getVal(activeConfig, "wheelTreadBeamDeform", 10000, entry.variables);
+                double wheelTreadBeamStrength = getVal(activeConfig, "wheelTreadBeamStrength", 13000, entry.variables);
+                double wheelTreadReinfBeamSpring = getVal(activeConfig, "wheelTreadReinfBeamSpring", 120000, entry.variables);
+                double wheelTreadReinfBeamDamp = getVal(activeConfig, "wheelTreadReinfBeamDamp", 40, entry.variables);
+                double wheelPeripheryBeamSpring = getVal(activeConfig, "wheelPeripheryBeamSpring", 35000, entry.variables);
+                double wheelPeripheryBeamDamp = getVal(activeConfig, "wheelPeripheryBeamDamp", 23, entry.variables);
+                double wheelPeripheryBeamDeform = getVal(activeConfig, "wheelPeripheryBeamDeform", 40000, entry.variables);
+                double wheelPeripheryBeamStrength = getVal(activeConfig, "wheelPeripheryBeamStrength", 40000, entry.variables);
+                double wheelPeripheryReinfBeamSpring = getVal(activeConfig, "wheelPeripheryReinfBeamSpring", 95000, entry.variables);
+                double wheelPeripheryReinfBeamDamp = getVal(activeConfig, "wheelPeripheryReinfBeamDamp", 23, entry.variables);
+                boolean enableTireReinfBeams = getBool(activeConfig, "enableTireReinfBeams", false);
+                boolean enableTireLBeams = getBool(activeConfig, "enableTireLBeams", true);
+                boolean enableTireSideReinfBeams = getBool(activeConfig, "enableTireSideReinfBeams", true);
+                boolean enableTreadReinfBeams = getBool(activeConfig, "enableTreadReinfBeams", true);
+                boolean enableTirePeripheryReinfBeams = getBool(activeConfig, "enableTirePeripheryReinfBeams", true);
+                boolean enableTireSupportBeams = getBool(activeConfig, "enableTireSupportBeams", false);
+                double tireSupportBeamSpring = getVal(activeConfig, "tireSupportBeamSpring", 0, entry.variables);
+                double tireSupportBeamDamp = getVal(activeConfig, "tireSupportBeamDamp", 0, entry.variables);
 
                 // ----- 刹车参数 -----
-                double brakeTorque = getVal("brakeTorque", 0);
-                double parkingTorque = getVal("parkingTorque", 0);
-                double brakeSpring = getVal("brakeSpring", 10);
-                boolean enableBrakeThermals = getBool("enableBrakeThermals", false);
-                double brakeDiameter = getVal("brakeDiameter", 0.35);
-                double brakeMass = getVal("brakeMass", 10);
-                String brakeType = getStr("brakeType", "vented-disc");
-                String rotorMaterial = getStr("rotorMaterial", "steel");
-                double brakeVentingCoef = getVal("brakeVentingCoeff", 1.0);
-                String padMaterial = getStr("padMaterial", "basic");
-                double brakeInputSplit = getVal("brakeInputSplit", 1.0);
-                double brakeSplitCoef = getVal("brakeSplitCoef", 1.0);
-                double squealCoefNatural = getVal("squealCoefNatural", 0);
-                double squealCoefLowSpeed = getVal("squealCoefLowSpeed", 0);
-                double squealCoefGlazing = getVal("squealCoefGlazing", 1);
-                boolean enableABS = getBool("enableABS", false);
-                double absSlipRatioTarget = getVal("absSlipRatioTarget", 0.18);
-                double absHz = getVal("absHz", 100);
-                double brakePressureInDelay = getVal("brakePressureInDelay", 0.05);
-                double brakePressureOutDelay = getVal("brakePressureOutDelay", 0.1);
+                double brakeTorque = getVal(activeConfig, "brakeTorque", 0, entry.variables);
+                double parkingTorque = getVal(activeConfig, "parkingTorque", 0, entry.variables);
+                double brakeSpring = getVal(activeConfig, "brakeSpring", 10, entry.variables);
+                boolean enableBrakeThermals = getBool(activeConfig, "enableBrakeThermals", false);
+                double brakeDiameter = getVal(activeConfig, "brakeDiameter", 0.35, entry.variables);
+                double brakeMass = getVal(activeConfig, "brakeMass", 10, entry.variables);
+                String brakeType = getStr(activeConfig, "brakeType", "vented-disc");
+                String rotorMaterial = getStr(activeConfig, "rotorMaterial", "steel");
+                double brakeVentingCoef = getVal(activeConfig, "brakeVentingCoeff", 1.0, entry.variables);
+                String padMaterial = getStr(activeConfig, "padMaterial", "basic");
+                double brakeInputSplit = getVal(activeConfig, "brakeInputSplit", 1.0, entry.variables);
+                double brakeSplitCoef = getVal(activeConfig, "brakeSplitCoef", 1.0, entry.variables);
+                double squealCoefNatural = getVal(activeConfig, "squealCoefNatural", 0, entry.variables);
+                double squealCoefLowSpeed = getVal(activeConfig, "squealCoefLowSpeed", 0, entry.variables);
+                double squealCoefGlazing = getVal(activeConfig, "squealCoefGlazing", 1, entry.variables);
+                boolean enableABS = getBool(activeConfig, "enableABS", false);
+                double absSlipRatioTarget = getVal(activeConfig, "absSlipRatioTarget", 0.18, entry.variables);
+                double absHz = getVal(activeConfig, "absHz", 100, entry.variables);
+                double brakePressureInDelay = getVal(activeConfig, "brakePressureInDelay", 0.05, entry.variables);
+                double brakePressureOutDelay = getVal(activeConfig, "brakePressureOutDelay", 0.1, entry.variables);
 
                 // ----- 轮毂盖参数 -----
-                boolean enableHubcaps = getBool("enableHubcaps", false);
-                String hubcapBreakGroup = getStr("hubcapBreakGroup", null);
-                String hubcapGroup = getStr("hubcapGroup", null);
-                boolean hubcapCollision = getBool("hubcapCollision", false);
-                boolean hubcapSelfCollision = getBool("hubcapSelfCollision", false);
-                boolean enableExtraHubcapBeams = getBool("enableExtraHubcapBeams", false);
-                double hubcapOffset = getVal("hubcapOffset", 0);
-                double hubcapWidth = getVal("hubcapWidth", 0.06);
-                double hubcapRadius = getVal("hubcapRadius", 0.11);
-                double hubcapBeamSpring = getVal("hubcapBeamSpring", 121000);
-                double hubcapBeamDamp = getVal("hubcapBeamDamp", 4);
-                double hubcapBeamDeform = getVal("hubcapBeamDeform", 3500);
-                double hubcapBeamStrength = getVal("hubcapBeamStrength", 15000);
-                double hubcapAttachBeamSpring = getVal("hubcapAttachBeamSpring", 121000);
-                double hubcapAttachBeamDamp = getVal("hubcapAttachBeamDamp", 8);
-                double hubcapAttachBeamDeform = getVal("hubcapAttachBeamDeform", 1200);
-                double hubcapAttachBeamStrength = getVal("hubcapAttachBeamStrength", 1800);
-                double hubcapSupportBeamDeform = getVal("hubcapSupportBeamDeform", 2500);
-                double hubcapSupportBeamStrength = getVal("hubcapSupportBeamStrength", 5000);
-                double hubcapNodeWeight = getVal("hubcapNodeWeight", 0.06);
-                double hubcapCenterNodeWeight = getVal("hubcapCenterNodeWeight", 0.06);
-                String hubcapNodeMaterial = getStr("hubcapNodeMaterial", "METAL");
-                double hubcapFrictionCoef = getVal("hubcapFrictionCoef", 0.7);
+                boolean enableHubcaps = getBool(activeConfig, "enableHubcaps", false);
+                String hubcapBreakGroup = getStr(activeConfig, "hubcapBreakGroup", null);
+                String hubcapGroup = getStr(activeConfig, "hubcapGroup", null);
+                boolean hubcapCollision = getBool(activeConfig, "hubcapCollision", false);
+                boolean hubcapSelfCollision = getBool(activeConfig, "hubcapSelfCollision", false);
+                boolean enableExtraHubcapBeams = getBool(activeConfig, "enableExtraHubcapBeams", false);
+                double hubcapOffset = getVal(activeConfig, "hubcapOffset", 0, entry.variables);
+                double hubcapWidth = getVal(activeConfig, "hubcapWidth", 0.06, entry.variables);
+                double hubcapRadius = getVal(activeConfig, "hubcapRadius", 0.11, entry.variables);
+                double hubcapBeamSpring = getVal(activeConfig, "hubcapBeamSpring", 121000, entry.variables);
+                double hubcapBeamDamp = getVal(activeConfig, "hubcapBeamDamp", 4, entry.variables);
+                double hubcapBeamDeform = getVal(activeConfig, "hubcapBeamDeform", 3500, entry.variables);
+                double hubcapBeamStrength = getVal(activeConfig, "hubcapBeamStrength", 15000, entry.variables);
+                double hubcapAttachBeamSpring = getVal(activeConfig, "hubcapAttachBeamSpring", 121000, entry.variables);
+                double hubcapAttachBeamDamp = getVal(activeConfig, "hubcapAttachBeamDamp", 8, entry.variables);
+                double hubcapAttachBeamDeform = getVal(activeConfig, "hubcapAttachBeamDeform", 1200, entry.variables);
+                double hubcapAttachBeamStrength = getVal(activeConfig, "hubcapAttachBeamStrength", 1800, entry.variables);
+                double hubcapSupportBeamDeform = getVal(activeConfig, "hubcapSupportBeamDeform", 2500, entry.variables);
+                double hubcapSupportBeamStrength = getVal(activeConfig, "hubcapSupportBeamStrength", 5000, entry.variables);
+                double hubcapNodeWeight = getVal(activeConfig, "hubcapNodeWeight", 0.06, entry.variables);
+                double hubcapCenterNodeWeight = getVal(activeConfig, "hubcapCenterNodeWeight", 0.06, entry.variables);
+                String hubcapNodeMaterial = getStr(activeConfig, "hubcapNodeMaterial", "METAL");
+                double hubcapFrictionCoef = getVal(activeConfig, "hubcapFrictionCoef", 0.7, entry.variables);
 
                 // ----- 转向/传动高级节点 -----
-                String steerAxisUp = getStr("steerAxisUp", null);
-                String steerAxisDown = getStr("steerAxisDown", null);
-                String torqueCoupling = getStr("torqueCoupling", null);
-                String torqueArm = getStr("torqueArm", null);
-                String torqueArm2 = getStr("torqueArm2", null);
-                String torqueJointNode1 = getStr("torqueJointNode1", null);
-                String torqueJointNode2 = getStr("torqueJointNode2", null);
+                String steerAxisUp = getStr(activeConfig, "steerAxisUp", null);
+                String steerAxisDown = getStr(activeConfig, "steerAxisDown", null);
+                String torqueCoupling = getStr(activeConfig, "torqueCoupling", null);
+                String torqueArm = getStr(activeConfig, "torqueArm", null);
+                String torqueArm2 = getStr(activeConfig, "torqueArm2", null);
+                String torqueJointNode1 = getStr(activeConfig, "torqueJointNode1", null);
+                String torqueJointNode2 = getStr(activeConfig, "torqueJointNode2", null);
 
                 // 简化车辆专用
-                double hubRadiusSimple = getVal("hubRadiusSimple", -1);
+                double hubRadiusSimple = getVal(activeConfig, "hubRadiusSimple", -1, entry.variables);
 
                 vehicle.wheels.generateHub(
                         wheelName, n1, n2, nodeS, nodeArm, wheelDir, numRays,
@@ -271,36 +265,28 @@ public class JBeamPressureWheelsParser {
 
     // ======================= 参数读取辅助函数 =======================
 
-    private static double getVal(String key, double def) {
-        if (!activeConfig.containsKey(key)) return def;
-        String val = activeConfig.get(key);
-        if (val.contains("$=")) {
-            if (!globalVariables.containsKey("tirepressure_F")) globalVariables.put("tirepressure_F", 30.0);
-            if (!globalVariables.containsKey("tirepressure_R")) globalVariables.put("tirepressure_R", 30.0);
-            Double parsed = JBeamParser.evaluateBeamNGExpression(val, globalVariables);
-            return parsed != null ? parsed : def;
-        }
-        try { return Double.parseDouble(val); } catch (NumberFormatException e) { return def; }
+    private static double getVal(JsonObject config, String key, double def, Map<String, Double> vars) {
+        return JBeamParser.getDoubleSafe(config, key, def, vars);
     }
 
-    private static String getStr(String key, String def) {
-        if (!activeConfig.containsKey(key)) return def;
-        return activeConfig.get(key);
+    private static String getStr(JsonObject config, String key, String def) {
+        if (!config.has(key)) return def;
+        JsonElement el = config.get(key);
+        if (el.isJsonNull()) return def;
+        return el.getAsString();
     }
 
-    private static double getFirstVal(String key1, String key2, double def) {
-        if (activeConfig.containsKey(key1)) return getVal(key1, def);
-        if (activeConfig.containsKey(key2)) return getVal(key2, def);
+    private static double getFirstVal(JsonObject config, String key1, String key2, double def, Map<String, Double> vars) {
+        if (config.has(key1)) return JBeamParser.getDoubleSafe(config, key1, def, vars);
+        if (config.has(key2)) return JBeamParser.getDoubleSafe(config, key2, def, vars);
         return def;
     }
 
-    private static boolean getBool(String key, boolean def) {
-        if (!activeConfig.containsKey(key)) return def;
-        String val = activeConfig.get(key).toLowerCase();
+    private static boolean getBool(JsonObject config, String key, boolean def) {
+        if (!config.has(key)) return def;
+        JsonElement el = config.get(key);
+        if (el.isJsonNull()) return def;
+        String val = el.getAsString().toLowerCase();
         return val.equals("true") || val.equals("1");
-    }
-
-    public static void resetBlackboard() {
-        activeConfig.clear();
     }
 }

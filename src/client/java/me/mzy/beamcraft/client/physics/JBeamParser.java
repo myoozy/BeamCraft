@@ -19,9 +19,21 @@ public class JBeamParser {
      */
     public static Double evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
         expr = expr.trim();
+
+        // 处理 BeamNG 的直接变量引用 (例如 "$trackoffset_F")
+        if (expr.startsWith("$") && !expr.startsWith("$=")) {
+            String varName = expr.substring(1); // 砍掉前面的 '$'
+            if (variables != null && variables.containsKey(varName)) {
+                return variables.get(varName);
+            }
+            return 0.0; // 按照 BeamNG 规范，找不到的变量默认归零
+        }
+
+        // 如果既不是 $= 也不是纯变量，尝试按普通数字解析
         if (!expr.startsWith("$=")) {
             try { return Double.parseDouble(expr); } catch (Exception e) { return null; }
         }
+
         String equation = expr.substring(2);
 
         // 递归替换所有 $variable (最长匹配)

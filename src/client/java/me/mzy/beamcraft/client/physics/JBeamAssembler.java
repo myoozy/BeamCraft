@@ -108,11 +108,12 @@ public class JBeamAssembler {
             List<PartEntry> activeParts = new ArrayList<>();
             CouplerRegistry couplerRegistry = new CouplerRegistry();
             Map<String, String[]> vehicleRailMap = new HashMap<>();
+            Map<String, Double> globalVariables = new HashMap<>();
 
             // Phase 0: Recursively collect all required parts before assembly
             JsonObject rootPart = registry.get(rootPartName);
             if (rootPart != null) {
-                collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, new TransformContext());
+                collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, new TransformContext(), globalVariables);
             }
 
             System.out.println("====== 🛠️ Starting multi-Pass Assembly ======");
@@ -156,10 +157,15 @@ public class JBeamAssembler {
 
             // Pass 3: 逆向解析车轮
             System.out.println("====== 🛞 Assembling Wheels ======");
-            JBeamPressureWheelsParser.resetBlackboard();
+            JsonObject wheelConfigBlackboard = new JsonObject();
             for (PartEntry entry : activeParts) {
                 if (entry.json.has("pressureWheels")) {
-                    JBeamPressureWheelsParser.parsePressureWheels(entry.json.getAsJsonArray("pressureWheels"), vehicle);
+                    JBeamPressureWheelsParser.parsePressureWheels(
+                            entry.json.getAsJsonArray("pressureWheels"),
+                            vehicle,
+                            entry,
+                            wheelConfigBlackboard
+                    );
                 }
             }
             System.out.println("✅ Pass 3 Complete: Wheels generated.");
@@ -229,10 +235,8 @@ public class JBeamAssembler {
         }
     }
 
-    private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext currentTransform) {
+    private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext currentTransform, Map<String, Double> globalVariables) {
         currentPartId++;
-
-        Map<String, Double> currentVariables = new HashMap<>();
 
         // 提取变量并存入上下文
         if (part.has("variables")) {
@@ -249,24 +253,24 @@ public class JBeamAssembler {
                         if (varName.startsWith("$")) varName = varName.substring(1);
                         try {
                             double defVal = row.get(4).getAsDouble();
-                            currentVariables.put(varName, defVal);
+                            globalVariables.put(varName, defVal);
                         } catch (Exception ignored) {}
                     }
                 }
             }
         }
 
-        activeParts.add(new PartEntry(part, currentPartId, partName, currentTransform, currentVariables));
+        activeParts.add(new PartEntry(part, currentPartId, partName, currentTransform, globalVariables));
 
         if (part.has("slots2")) {
-            parseSlotsArray(part.getAsJsonArray("slots2"), partName, userConfig, registry, activeParts, currentTransform);
+            parseSlotsArray(part.getAsJsonArray("slots2"), partName, userConfig, registry, activeParts, currentTransform, globalVariables);
         }
         if (part.has("slots")) {
-            parseSlotsArray(part.getAsJsonArray("slots"), partName, userConfig, registry, activeParts, currentTransform);
+            parseSlotsArray(part.getAsJsonArray("slots"), partName, userConfig, registry, activeParts, currentTransform, globalVariables);
         }
     }
 
-    private void parseSlotsArray(JsonArray slotsArray, String partName, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext parentTransform) {
+    private void parseSlotsArray(JsonArray slotsArray, String partName, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext parentTransform, Map<String, Double> globalVariables) {
         boolean isHeader = true;
         int typeIdx = 0;
         int defaultIdx = 1;
@@ -299,7 +303,7 @@ public class JBeamAssembler {
 
                         if (row.get(row.size() - 1).isJsonObject()) {
                             JsonObject mod = row.get(row.size() - 1).getAsJsonObject();
-                            Map<String, Double> vars = new HashMap<>();
+                            Map<String, Double> vars = globalVariables;
 
                             // 1. 提取 nodeRotate (按照标准顺序首先生效旋转)
                             if (mod.has("nodeRotate")) {
@@ -334,7 +338,7 @@ public class JBeamAssembler {
                                 if (mz != null) childTransform.posZ += mz;
                             }
                         }
-                        collectPartsRecursive(partToLoad, childPart, userConfig, registry, activeParts, childTransform);
+                        collectPartsRecursive(partToLoad, childPart, userConfig, registry, activeParts, childTransform, globalVariables);
                     } else {
                         System.err.println("🚨 Part [" + partName + "] slot [" + slotName + "] tried to load missing part: " + partToLoad);
                     }
