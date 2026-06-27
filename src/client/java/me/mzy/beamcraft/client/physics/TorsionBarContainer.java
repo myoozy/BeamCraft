@@ -12,12 +12,12 @@ public class TorsionBarContainer {
     public int[] node3 = new int[INIT_TORSION_CAP];
     public int[] node4 = new int[INIT_TORSION_CAP];
 
-    public double[] restAngle = new double[INIT_TORSION_CAP]; // 静止角度
-    public double[] baseRestAngle = new double[INIT_TORSION_CAP];
-    public double[] spring = new double[INIT_TORSION_CAP];
-    public double[] damp = new double[INIT_TORSION_CAP];
-    public double[] deform = new double[INIT_TORSION_CAP];
-    public double[] strength = new double[INIT_TORSION_CAP];
+    public float[] restAngle = new float[INIT_TORSION_CAP]; // 静止角度
+    public float[] baseRestAngle = new float[INIT_TORSION_CAP];
+    public float[] spring = new float[INIT_TORSION_CAP];
+    public float[] damp = new float[INIT_TORSION_CAP];
+    public float[] deform = new float[INIT_TORSION_CAP];
+    public float[] strength = new float[INIT_TORSION_CAP];
     public boolean[] broken = new boolean[INIT_TORSION_CAP];
 
     private void ensureCapacity() {
@@ -51,8 +51,8 @@ public class TorsionBarContainer {
         node1[count] = n1; node2[count] = n2;
         node3[count] = n3; node4[count] = n4;
 
-        spring[count] = torsionSpring; damp[count] = torsionDamp;
-        deform[count] = torsionDeform; strength[count] = torsionStrength;
+        spring[count] = (float) torsionSpring; damp[count] = (float) torsionDamp;
+        deform[count] = (float) torsionDeform; strength[count] = (float) torsionStrength;
         broken[count] = false;
 
         // 获取初始坐标
@@ -86,7 +86,7 @@ public class TorsionBarContainer {
 
         double angle = Math.atan2(dot1, dot2);
 
-        restAngle[count] = angle;
+        restAngle[count] = (float) angle;
         baseRestAngle[count] = restAngle[count];
         if (Double.isNaN(angle)) broken[count] = true;
 

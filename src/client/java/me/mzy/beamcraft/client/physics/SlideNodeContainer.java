@@ -9,9 +9,9 @@ public class SlideNodeContainer {
     public int[] nodeId = new int[INIT_SLIDENODE_CAP];
     public int[] railA = new int[INIT_SLIDENODE_CAP];
     public int[] railB = new int[INIT_SLIDENODE_CAP];
-    public double[] spring = new double[INIT_SLIDENODE_CAP];
-    public double[] damp = new double[INIT_SLIDENODE_CAP];
-    public double[] restDist = new double[INIT_SLIDENODE_CAP];
+    public float[] spring = new float[INIT_SLIDENODE_CAP];
+    public float[] damp = new float[INIT_SLIDENODE_CAP];
+    public float[] restDist = new float[INIT_SLIDENODE_CAP];
 
     private void ensureCapacity() {
         if (count >= nodeId.length) {
@@ -31,9 +31,9 @@ public class SlideNodeContainer {
         nodeId[count] = nId;
         railA[count] = railAId;
         railB[count] = railBId;
-        spring[count] = slideSpring;
-        damp[count] = slideDamp;
-        restDist[count] = slideRestDist;
+        spring[count] = (float) slideSpring;
+        damp[count] = (float) slideDamp;
+        restDist[count] = (float) slideRestDist;
         count++;
     }
 

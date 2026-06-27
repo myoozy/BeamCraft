@@ -11,25 +11,25 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
  * Manages nodes, beams, collision caching and physics integration
  */
 public class PhysicsWorld {
-    public static final double GRAVITY = -9.81;
-    public static final double SOUND_SPEED = 340;
-    public static final double BLOCK_REBOUND = 0.0;
-    public static final double BLOCK_FRICTION = 1.0;
-    public static final double METAL_PLASTIC_FLOW_RATE = 10.0;
-    public static final double KINDA_SMALL_NUMBER = 1e-8;
-    public static final double KINDA_BIG_NUMBER = 1e8;
+    public static final float GRAVITY = -9.81f;
+    public static final float SOUND_SPEED = 340.0f;
+    public static final float BLOCK_REBOUND = 0.0f;
+    public static final float BLOCK_FRICTION = 1.0f;
+    public static final float METAL_PLASTIC_FLOW_RATE = 10.0f;
+    public static final float KINDA_SMALL_NUMBER = 1e-8f;
+    public static final float KINDA_BIG_NUMBER = 1e8f;
     public static final int MAX_AABB_SIZE = 10;
-    public static final double invPhysicsDT = 2000;
+    public static final float invPhysicsDT = 2000.0f;
 
-    // 用于处理和mc世界的碰撞
+    // 鐢ㄤ簬澶勭悊鍜宮c涓栫晫鐨勭鎾?
     public final VoxelSnapshot voxelSnapshot = new VoxelSnapshot();
     BlockPos.Mutable mutablePos = new BlockPos.Mutable();
 
-    // 处理软体之间的碰撞
+    // 澶勭悊杞綋涔嬮棿鐨勭鎾?
     public final DynamicAxisSweep globalSap = new DynamicAxisSweep();
     public final SoftBodyCollisionManager collisionManager = new SoftBodyCollisionManager();
 
-    private int nextVehicleId = 0;     // 永远递增的全局车牌号 (绝不重复)
+    private int nextVehicleId = 0;     // 姘歌繙閫掑鐨勫叏灞€杞︾墝鍙?(缁濅笉閲嶅)
 
     public final java.util.List<SoftBodyVehicle> vehicles = new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -45,31 +45,31 @@ public class PhysicsWorld {
     }
 
     /**
-     * 安全地将车辆从物理世界中移除并销毁
+     * 瀹夊叏鍦板皢杞﹁締浠庣墿鐞嗕笘鐣屼腑绉婚櫎骞堕攢姣?
      */
     public void removeVehicle(SoftBodyVehicle vehicle) {
         if (vehicle == null || !vehicles.contains(vehicle)) return;
 
-        // 1. 从活跃列表中移除
-        // 由于你的 vehicles 是 CopyOnWriteArrayList，这一步天生线程安全！
-        // 哪怕物理线程正在 foreach 遍历所有车，移除操作也不会导致崩溃。
+        // 1. 浠庢椿璺冨垪琛ㄤ腑绉婚櫎
+        // 鐢变簬浣犵殑 vehicles 鏄?CopyOnWriteArrayList锛岃繖涓€姝ュぉ鐢熺嚎绋嬪畨鍏紒
+        // 鍝€曠墿鐞嗙嚎绋嬫鍦?foreach 閬嶅巻鎵€鏈夎溅锛岀Щ闄ゆ搷浣滀篃涓嶄細瀵艰嚧宕╂簝銆?
         vehicles.remove(vehicle);
 
-        // 2. 释放该车辆占用的底层 SoA 数组内存
+        // 2. 閲婃斁璇ヨ溅杈嗗崰鐢ㄧ殑搴曞眰 SoA 鏁扮粍鍐呭瓨
         vehicle.clear();
 
-        System.out.println("🚗 Vehicle removed safely. ID: " + vehicle.vehicleId);
+        System.out.println("馃殫 Vehicle removed safely. ID: " + vehicle.vehicleId);
 
-        // 注意：我们不需要去清理 SAP 树或者(SoftBody)CollisionManager！
-        // 因为 SAP 树在宽阶段会调用 globalSap.clear() 并完全根据当前的 vehicles 列表重建。
-        // CollisionManager也会在宽阶段自动 clearContacts()。
-        // 这就是每次重建宽阶段架构的最大优势：没有状态残留！
+        // 娉ㄦ剰锛氭垜浠笉闇€瑕佸幓娓呯悊 SAP 鏍戞垨鑰?SoftBody)CollisionManager锛?
+        // 鍥犱负 SAP 鏍戝湪瀹介樁娈典細璋冪敤 globalSap.clear() 骞跺畬鍏ㄦ牴鎹綋鍓嶇殑 vehicles 鍒楄〃閲嶅缓銆?
+        // CollisionManager涔熶細鍦ㄥ闃舵鑷姩 clearContacts()銆?
+        // 杩欏氨鏄瘡娆￠噸寤哄闃舵鏋舵瀯鐨勬渶澶т紭鍔匡細娌℃湁鐘舵€佹畫鐣欙紒
     }
 
     public void clear() {
         vehicles.clear();
-        collisionManager.clearContacts(); // 清理碰撞管理器
-        System.out.println("🧹 Physics world data cleared");
+        collisionManager.clearContacts(); // 娓呯悊纰版挒绠＄悊鍣?
+        System.out.println("馃Ч Physics world data cleared");
     }
 
     /**
@@ -77,13 +77,13 @@ public class PhysicsWorld {
      */
     public void step(World mcWorld, double dt, double[] lastPhycisMsDetail) {
         int subSteps = (int)Math.ceil(dt * invPhysicsDT);
-        double subDt = dt / subSteps;
+        float subDt = (float) (dt / subSteps);
         int broadphaseRate = 10;
 
         long t1 = System.nanoTime();
 
         voxelSnapshot.clear();
-        // 让每辆车自己去扫描周围的方块并写入全局 snapshot
+        // 璁╂瘡杈嗚溅鑷繁鍘绘壂鎻忓懆鍥寸殑鏂瑰潡骞跺啓鍏ュ叏灞€ snapshot
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.cacheEntityLocation();
             vehicle.updateVoxelSnapshot(mcWorld, voxelSnapshot, mutablePos, dt);
@@ -97,7 +97,7 @@ public class PhysicsWorld {
 
             long ti1 = System.nanoTime();
 
-            // 1. 算内力并积分预测坐标【完全独立并行】
+            // 1. 绠楀唴鍔涘苟绉垎棰勬祴鍧愭爣銆愬畬鍏ㄧ嫭绔嬪苟琛屻€?
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveInternalForces(subDt);
             });
@@ -105,23 +105,23 @@ public class PhysicsWorld {
             long ti2 = System.nanoTime();
             internalForceMs += (ti2 - ti1) / 1_000_000.0;
 
-            // 2. 宽阶段：降频更新树与接触缓存
+            // 2. 瀹介樁娈碉細闄嶉鏇存柊鏍戜笌鎺ヨЕ缂撳瓨
             if (s % broadphaseRate == 0) {
                 long tii1 = System.nanoTime();
                 globalSap.clear();
 
-                // ★ 动态内存紧凑 (Dynamic Packing) ★
-                // 每次宽阶段前，重新为存活的车辆分配紧凑的全局 ID 偏移量。
-                // 这样无论玩家怎么删除和生成车辆，内存永远是 0 空隙
+                // 鈽?鍔ㄦ€佸唴瀛樼揣鍑?(Dynamic Packing) 鈽?
+                // 姣忔瀹介樁娈靛墠锛岄噸鏂颁负瀛樻椿鐨勮溅杈嗗垎閰嶇揣鍑戠殑鍏ㄥ眬 ID 鍋忕Щ閲忋€?
+                // 杩欐牱鏃犺鐜╁鎬庝箞鍒犻櫎鍜岀敓鎴愯溅杈嗭紝鍐呭瓨姘歌繙鏄?0 绌洪殭
                 int activeOffset = 0;
                 for (SoftBodyVehicle vehicle : vehicles) {
                     vehicle.globalNodeOffset = activeOffset;
                     activeOffset += vehicle.nodes.count;
 
-                    globalSap.insertNodes(vehicle); // 顺便把节点插入 SAP 树
+                    globalSap.insertNodes(vehicle); // 椤轰究鎶婅妭鐐规彃鍏?SAP 鏍?
                 }
 
-                // 如果当前所有车的节点总数超过了管理器的上限，可以在这里加个警告甚至扩容逻辑
+                // 濡傛灉褰撳墠鎵€鏈夎溅鐨勮妭鐐规€绘暟瓒呰繃浜嗙鐞嗗櫒鐨勪笂闄愶紝鍙互鍦ㄨ繖閲屽姞涓鍛婄敋鑷虫墿瀹归€昏緫
                 // if (activeOffset >= SoftBodyCollisionManager.MAX_GLOBAL_NODES) { ... }
 
                 globalSap.updateAndSort();
@@ -131,12 +131,12 @@ public class PhysicsWorld {
 
                 collisionManager.clearContacts();
 
-                // 并行查树
+                // 骞惰鏌ユ爲
                 vehicles.parallelStream().forEach(vehicle -> {
                     vehicle.generateCollisionCandidates(globalSap, collisionManager, subDt * broadphaseRate);
                 });
 
-                // 极速图染色分批
+                // 鏋侀€熷浘鏌撹壊鍒嗘壒
                 collisionManager.buildAndColorBatches();
 
                 long tii3 = System.nanoTime();
@@ -145,13 +145,13 @@ public class PhysicsWorld {
 
             long ti3 = System.nanoTime();
 
-            // 3. 窄阶段：多车/单车智能动态并行求解
+            // 3. 绐勯樁娈碉細澶氳溅/鍗曡溅鏅鸿兘鍔ㄦ€佸苟琛屾眰瑙?
             solveCachedContacts(subDt);
 
             long ti4 = System.nanoTime();
             softCollisionMs += (ti4 - ti3) / 1_000_000.0;
 
-            // 4. 环境方块碰撞【车辆级别完全独立并行！】
+            // 4. 鐜鏂瑰潡纰版挒銆愯溅杈嗙骇鍒畬鍏ㄧ嫭绔嬪苟琛岋紒銆?
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveEnvironmentCollisions(voxelSnapshot, subDt);
             });
@@ -197,10 +197,10 @@ public class PhysicsWorld {
     }
 
     /**
-     * 智能动态多线程调度器：根据批次大小动态决定是否开启并行
+     * 鏅鸿兘鍔ㄦ€佸绾跨▼璋冨害鍣細鏍规嵁鎵规澶у皬鍔ㄦ€佸喅瀹氭槸鍚﹀紑鍚苟琛?
      */
-    private void solveCachedContacts(double dt) {
-        // 动态阈值：你可以根据测试结果调整。
+    private void solveCachedContacts(float dt) {
+        // 鍔ㄦ€侀槇鍊硷細浣犲彲浠ユ牴鎹祴璇曠粨鏋滆皟鏁淬€?
         final int PARALLEL_THRESHOLD = 1024;
 
         for (int b = 0; b < collisionManager.activeBatchCount; b++) {
@@ -209,15 +209,15 @@ public class PhysicsWorld {
 
             final int batchIndex = b;
 
-            // 智能分发逻辑
+            // 鏅鸿兘鍒嗗彂閫昏緫
             if (currentBatchSize < PARALLEL_THRESHOLD) {
-                // 【单线程快车道】点数太少，唤醒线程池反而亏本，直接主线程纯数学速通！
+                // 銆愬崟绾跨▼蹇溅閬撱€戠偣鏁板お灏戯紝鍞ら啋绾跨▼姹犲弽鑰屼簭鏈紝鐩存帴涓荤嚎绋嬬函鏁板閫熼€氾紒
                 for (int idx = 0; idx < currentBatchSize; idx++) {
                     int contactId = collisionManager.batches[batchIndex][idx];
                     resolveSingleContact(contactId, dt);
                 }
             } else {
-                // 【多核重火力网】点数巨大（严重连环相撞），放开枷锁，多线程火力全开！
+                // 銆愬鏍搁噸鐏姏缃戙€戠偣鏁板法澶э紙涓ラ噸杩炵幆鐩告挒锛夛紝鏀惧紑鏋烽攣锛屽绾跨▼鐏姏鍏ㄥ紑锛?
                 java.util.stream.IntStream.range(0, currentBatchSize).parallel().forEach(idx -> {
                     int contactId = collisionManager.batches[batchIndex][idx];
                     resolveSingleContact(contactId, dt);
@@ -227,15 +227,14 @@ public class PhysicsWorld {
     }
 
     /**
-     * 被提取出来的纯数学 PBD 解算器
+     * 琚彁鍙栧嚭鏉ョ殑绾暟瀛?PBD 瑙ｇ畻鍣?
      */
-    private void resolveSingleContact(int contactId, double dt) {
-        // 物理参数（可根据车辆材质调整）
-        double THICKNESS = 0.01;
-        double PBD_RELAXATION = 1;
-        double MAX_POS_PUSH = 0.1;
-        double RESTITUTION = 0.0;
-        double invDt = 1.0 / dt;
+    private void resolveSingleContact(int contactId, float dt) {
+        final float THICKNESS = 0.01f;
+        final float PBD_RELAXATION = 1.0f;
+        final float MAX_POS_PUSH = 0.1f;
+        final float RESTITUTION = 0.0f;
+        final float invDt = 1.0f / dt;
 
         SoftBodyVehicle nVeh = collisionManager.contactNodeVeh[contactId];
         int nHit = collisionManager.contactNodeId[contactId];
@@ -245,212 +244,175 @@ public class PhysicsWorld {
         int nB = collisionManager.contactTriB[contactId];
         int nC = collisionManager.contactTriC[contactId];
 
-        // 1. 三角形坐标
-        double ax = tVeh.entityX + tVeh.nodes.posX[nA], ay = tVeh.entityY + tVeh.nodes.posY[nA], az = tVeh.entityZ + tVeh.nodes.posZ[nA];
-        double bx = tVeh.entityX + tVeh.nodes.posX[nB], by = tVeh.entityY + tVeh.nodes.posY[nB], bz = tVeh.entityZ + tVeh.nodes.posZ[nB];
-        double cx = tVeh.entityX + tVeh.nodes.posX[nC], cy = tVeh.entityY + tVeh.nodes.posY[nC], cz = tVeh.entityZ + tVeh.nodes.posZ[nC];
+        float entityDeltaX = (float) (nVeh.entityX - tVeh.entityX);
+        float entityDeltaY = (float) (nVeh.entityY - tVeh.entityY);
+        float entityDeltaZ = (float) (nVeh.entityZ - tVeh.entityZ);
 
-        // 节点当前位置（世界坐标）
-        double pX = nVeh.entityX + nVeh.nodes.posX[nHit];
-        double pY = nVeh.entityY + nVeh.nodes.posY[nHit];
-        double pZ = nVeh.entityZ + nVeh.nodes.posZ[nHit];
+        float ax = tVeh.nodes.posX[nA], ay = tVeh.nodes.posY[nA], az = tVeh.nodes.posZ[nA];
+        float bx = tVeh.nodes.posX[nB], by = tVeh.nodes.posY[nB], bz = tVeh.nodes.posZ[nB];
+        float cx = tVeh.nodes.posX[nC], cy = tVeh.nodes.posY[nC], cz = tVeh.nodes.posZ[nC];
 
-        // AABB 快速过滤（带厚度）
-        double minX = Math.min(ax, Math.min(bx, cx)) - THICKNESS;
-        double maxX = Math.max(ax, Math.max(bx, cx)) + THICKNESS;
-        double minY = Math.min(ay, Math.min(by, cy)) - THICKNESS;
-        double maxY = Math.max(ay, Math.max(by, cy)) + THICKNESS;
-        double minZ = Math.min(az, Math.min(bz, cz)) - THICKNESS;
-        double maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
+        float pX = entityDeltaX + nVeh.nodes.posX[nHit];
+        float pY = entityDeltaY + nVeh.nodes.posY[nHit];
+        float pZ = entityDeltaZ + nVeh.nodes.posZ[nHit];
+
+        float minX = Math.min(ax, Math.min(bx, cx)) - THICKNESS;
+        float maxX = Math.max(ax, Math.max(bx, cx)) + THICKNESS;
+        float minY = Math.min(ay, Math.min(by, cy)) - THICKNESS;
+        float maxY = Math.max(ay, Math.max(by, cy)) + THICKNESS;
+        float minZ = Math.min(az, Math.min(bz, cz)) - THICKNESS;
+        float maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
         if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) return;
 
-        // 三角形法线
-        double abx = bx - ax, aby = by - ay, abz = bz - az;
-        double acx = cx - ax, acy = cy - ay, acz = cz - az;
-        double nx = aby * acz - abz * acy;
-        double ny = abz * acx - abx * acz;
-        double nz = abx * acy - aby * acx;
+        float abx = bx - ax, aby = by - ay, abz = bz - az;
+        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float nx = aby * acz - abz * acy;
+        float ny = abz * acx - abx * acz;
+        float nz = abx * acy - aby * acx;
 
-        double nLenSq = nx*nx + ny*ny + nz*nz;
-        if (nLenSq < 1e-8) return;
-        double invNLen = 1.0 / Math.sqrt(nLenSq);
+        float nLenSq = nx * nx + ny * ny + nz * nz;
+        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        float invNLen = 1.0f / (float) Math.sqrt(nLenSq);
         nx *= invNLen; ny *= invNLen; nz *= invNLen;
 
-        // 预计算重心坐标用数据
-        double d00 = abx*abx + aby*aby + abz*abz;
-        double d01 = abx*acx + aby*acy + abz*acz;
-        double d11 = acx*acx + acy*acy + acz*acz;
-        double denom = d00 * d11 - d01 * d01;
-        if (denom < 1e-8) return;
-        double invDenom = 1.0 / denom;
+        float d00 = abx * abx + aby * aby + abz * abz;
+        float d01 = abx * acx + aby * acy + abz * acz;
+        float d11 = acx * acx + acy * acy + acz * acz;
+        float denom = d00 * d11 - d01 * d01;
+        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        float invDenom = 1.0f / denom;
 
-        // 2. CCD: 距离预测
-        double apx = pX - ax, apy = pY - ay, apz = pZ - az;
-        double distCurr = apx * nx + apy * ny + apz * nz;
+        float apx = pX - ax, apy = pY - ay, apz = pZ - az;
+        float distCurr = apx * nx + apy * ny + apz * nz;
 
-        double triVx = (tVeh.nodes.velX[nA] + tVeh.nodes.velX[nB] + tVeh.nodes.velX[nC]) * 0.33333333;
-        double triVy = (tVeh.nodes.velY[nA] + tVeh.nodes.velY[nB] + tVeh.nodes.velY[nC]) * 0.33333333;
-        double triVz = (tVeh.nodes.velZ[nA] + tVeh.nodes.velZ[nB] + tVeh.nodes.velZ[nC]) * 0.33333333;
+        float triVx = (tVeh.nodes.velX[nA] + tVeh.nodes.velX[nB] + tVeh.nodes.velX[nC]) * 0.33333334f;
+        float triVy = (tVeh.nodes.velY[nA] + tVeh.nodes.velY[nB] + tVeh.nodes.velY[nC]) * 0.33333334f;
+        float triVz = (tVeh.nodes.velZ[nA] + tVeh.nodes.velZ[nB] + tVeh.nodes.velZ[nC]) * 0.33333334f;
 
-        double approxRelV = (nVeh.nodes.velX[nHit] - triVx) * nx +
+        float approxRelV = (nVeh.nodes.velX[nHit] - triVx) * nx +
                 (nVeh.nodes.velY[nHit] - triVy) * ny +
                 (nVeh.nodes.velZ[nHit] - triVz) * nz;
 
-        double distPrev = distCurr - approxRelV * dt;
+        float distPrev = distCurr - approxRelV * dt;
+        float pushDir = (distPrev > 0.0f) ? 1.0f : -1.0f;
+        float signedDist = distCurr * pushDir;
+        float penetration = THICKNESS - signedDist;
+        if (penetration <= 0.0f) return;
 
-        // 3. 确定碰撞侧并计算穿透
-        double pushDir = (distPrev > 0) ? 1.0 : -1.0;
-        double signedDist = distCurr * pushDir;
-        double penetration = THICKNESS - signedDist;
-        if (penetration <= 0) return;
+        float ppx = apx - distCurr * nx;
+        float ppy = apy - distCurr * ny;
+        float ppz = apz - distCurr * nz;
 
-        // 4. 重心坐标
-        double ppx = apx - distCurr * nx;
-        double ppy = apy - distCurr * ny;
-        double ppz = apz - distCurr * nz;
+        float d20 = ppx * abx + ppy * aby + ppz * abz;
+        float d21 = ppx * acx + ppy * acy + ppz * acz;
 
-        double d20 = ppx*abx + ppy*aby + ppz*abz;
-        double d21 = ppx*acx + ppy*acy + ppz*acz;
+        float wB = (d11 * d20 - d01 * d21) * invDenom;
+        float wC = (d00 * d21 - d01 * d20) * invDenom;
+        float wA = 1.0f - wB - wC;
 
-        double wB = (d11 * d20 - d01 * d21) * invDenom;
-        double wC = (d00 * d21 - d01 * d20) * invDenom;
-        double wA = 1.0 - wB - wC;
-
-        double TOLERANCE = -0.01;
+        final float TOLERANCE = -0.01f;
         if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) return;
 
-        double effNx = nx * pushDir, effNy = ny * pushDir, effNz = nz * pushDir;
+        float effNx = nx * pushDir, effNy = ny * pushDir, effNz = nz * pushDir;
 
-        double massNode = nVeh.nodes.mass[nHit];
-        double massA = tVeh.nodes.mass[nA], massB = tVeh.nodes.mass[nB], massC = tVeh.nodes.mass[nC];
+        float massNode = nVeh.nodes.mass[nHit];
+        float massA = tVeh.nodes.mass[nA], massB = tVeh.nodes.mass[nB], massC = tVeh.nodes.mass[nC];
 
-        double wTotal = (1.0 / massNode) + (wA*wA / massA) + (wB*wB / massB) + (wC*wC / massC);
-        if (wTotal < 1e-8) return;
-        double invWTotal = 1.0 / wTotal;
+        float wTotal = (1.0f / massNode) + (wA * wA / massA) + (wB * wB / massB) + (wC * wC / massC);
+        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        float invWTotal = 1.0f / wTotal;
 
-        // 5. 位置修正 (PBD 硬约束)
-        double pushAmount = penetration * PBD_RELAXATION;
+        float pushAmount = penetration * PBD_RELAXATION;
         if (pushAmount > MAX_POS_PUSH) pushAmount = MAX_POS_PUSH;
-        double posImpulse = pushAmount * invWTotal;
-        double dpX = posImpulse * effNx;
-        double dpY = posImpulse * effNy;
-        double dpZ = posImpulse * effNz;
+        float posImpulse = pushAmount * invWTotal;
+        float dpX = posImpulse * effNx;
+        float dpY = posImpulse * effNy;
+        float dpZ = posImpulse * effNz;
 
-        // 6. 速度修正（法向弹性 + 切向库仑摩擦）
-        double dvX = 0, dvY = 0, dvZ = 0;
+        float dvX = 0.0f, dvY = 0.0f, dvZ = 0.0f;
 
-        double exactTriVx = wA * tVeh.nodes.velX[nA] + wB * tVeh.nodes.velX[nB] + wC * tVeh.nodes.velX[nC];
-        double exactTriVy = wA * tVeh.nodes.velY[nA] + wB * tVeh.nodes.velY[nB] + wC * tVeh.nodes.velY[nC];
-        double exactTriVz = wA * tVeh.nodes.velZ[nA] + wB * tVeh.nodes.velZ[nB] + wC * tVeh.nodes.velZ[nC];
+        float exactTriVx = wA * tVeh.nodes.velX[nA] + wB * tVeh.nodes.velX[nB] + wC * tVeh.nodes.velX[nC];
+        float exactTriVy = wA * tVeh.nodes.velY[nA] + wB * tVeh.nodes.velY[nB] + wC * tVeh.nodes.velY[nC];
+        float exactTriVz = wA * tVeh.nodes.velZ[nA] + wB * tVeh.nodes.velZ[nB] + wC * tVeh.nodes.velZ[nC];
 
-        double relVx = nVeh.nodes.velX[nHit] - exactTriVx;
-        double relVy = nVeh.nodes.velY[nHit] - exactTriVy;
-        double relVz = nVeh.nodes.velZ[nHit] - exactTriVz;
+        float relVx = nVeh.nodes.velX[nHit] - exactTriVx;
+        float relVy = nVeh.nodes.velY[nHit] - exactTriVy;
+        float relVz = nVeh.nodes.velZ[nHit] - exactTriVz;
 
-        double approachSpeed = relVx * effNx + relVy * effNy + relVz * effNz;
-        double jn = 0; // 法向冲量大小
+        float approachSpeed = relVx * effNx + relVy * effNy + relVz * effNz;
+        float jn = 0.0f;
 
-        // 6.1 法向弹性冲量
-        if (approachSpeed < 0) {
-            double deltaRelVel = -(1 + RESTITUTION) * approachSpeed;
+        if (approachSpeed < 0.0f) {
+            float deltaRelVel = -(1.0f + RESTITUTION) * approachSpeed;
             jn = deltaRelVel * invWTotal;
             dvX += jn * effNx;
             dvY += jn * effNy;
             dvZ += jn * effNz;
         }
 
-        // 6.2 估算总法向支撑力
-        // 即便速度为 0 (静止靠在斜坡上)，如果有位置推挤，说明重力在挤压，也要产生摩擦力支撑！
-        double equivalentJn = jn;
-        if (penetration > 0 && approachSpeed >= -1e-4) {
+        float equivalentJn = jn;
+        if (penetration > 0.0f && approachSpeed >= -1e-4f) {
             equivalentJn += (pushAmount * invDt) * invWTotal;
         }
 
-        // 6.3 库仑摩擦力模型 (基于重心坐标插值与乘积混合法则)
-        if (equivalentJn > 0) {
+        if (equivalentJn > 0.0f) {
+            float tangentVx = relVx - (approachSpeed * effNx);
+            float tangentVy = relVy - (approachSpeed * effNy);
+            float tangentVz = relVz - (approachSpeed * effNz);
 
-            // 计算切向相对速度
-            double tangentVx = relVx - (approachSpeed * effNx);
-            double tangentVy = relVy - (approachSpeed * effNy);
-            double tangentVz = relVz - (approachSpeed * effNz);
+            float vtLen = (float) Math.sqrt(tangentVx * tangentVx + tangentVy * tangentVy + tangentVz * tangentVz);
 
-            double vtLen = Math.sqrt(tangentVx * tangentVx + tangentVy * tangentVy + tangentVz * tangentVz);
+            float triMuS = wA * tVeh.nodes.friction[nA] + wB * tVeh.nodes.friction[nB] + wC * tVeh.nodes.friction[nC];
+            float triMuK = wA * tVeh.nodes.slidingFriction[nA] + wB * tVeh.nodes.slidingFriction[nB] + wC * tVeh.nodes.slidingFriction[nC];
 
-            // 1. 🚀 利用现成的重心坐标 (wA, wB, wC) 精准插值出目标三角形表面的基础摩擦力
-            double tri_mu_s = wA * tVeh.nodes.friction[nA] + wB * tVeh.nodes.friction[nB] + wC * tVeh.nodes.friction[nC];
-            double tri_mu_k = wA * tVeh.nodes.slidingFriction[nA] + wB * tVeh.nodes.slidingFriction[nB] + wC * tVeh.nodes.slidingFriction[nC];
+            float muS;
+            float muK;
 
-            double mu_s;
-            double mu_k;
-
-            // 2. 🚀 O(1) 检查发生碰撞的节点是否为轮胎
             int wIdx = nVeh.nodes.wheelId[nHit];
-
             if (wIdx >= 0 && wIdx < nVeh.wheels.count) {
-                double staticBase  = nVeh.wheels.frictionCoef[wIdx];
-                double slidingBase = nVeh.wheels.slidingFrictionCoef[wIdx];
-                double noLoad      = nVeh.wheels.noLoadCoef[wIdx];
-                double fullLoad    = nVeh.wheels.fullLoadCoef[wIdx];
-                double slope       = nVeh.wheels.loadSensitivitySlope[wIdx];
+                float staticBase = nVeh.wheels.frictionCoef[wIdx];
+                float slidingBase = nVeh.wheels.slidingFrictionCoef[wIdx];
+                float noLoad = nVeh.wheels.noLoadCoef[wIdx];
+                float fullLoad = nVeh.wheels.fullLoadCoef[wIdx];
+                float slope = nVeh.wheels.loadSensitivitySlope[wIdx];
 
-                // --- A. 将当前累积的等效冲量转化为物理载荷力 (牛顿) ---
-                double equivalentLoadN = equivalentJn * invDt;
+                float equivalentLoadN = equivalentJn * invDt;
+                float loadFactor = noLoad - (slope * equivalentLoadN);
+                if (loadFactor < fullLoad) loadFactor = fullLoad;
 
-                // --- B. 计算载荷敏感度衰减 (Load Sensitivity) ---
-                double loadFactor = noLoad - (slope * equivalentLoadN);
-                if (loadFactor < fullLoad) loadFactor = fullLoad; // 触底保护
-
-                // --- C. 斯特里贝克速度过渡曲线 (Stribeck Curve) ---
-                double stribeckVel = nVeh.wheels.stribeckVelMult[wIdx];
-                double exponent    = nVeh.wheels.stribeckExponent[wIdx];
-
-                double speedFactor = 1.0;
-                if (vtLen > 1e-4 && stribeckVel > 1e-4) {
-                    double velRatio = vtLen / stribeckVel;
-                    speedFactor = Math.exp(-Math.pow(velRatio, exponent));
+                float stribeckVel = nVeh.wheels.stribeckVelMult[wIdx];
+                float exponent = nVeh.wheels.stribeckExponent[wIdx];
+                float speedFactor = 1.0f;
+                if (vtLen > 1e-4f && stribeckVel > 1e-4f) {
+                    float velRatio = vtLen / stribeckVel;
+                    speedFactor = (float) Math.exp(-Math.pow(velRatio, exponent));
                 }
 
-                // 动态滑动乘子插值
-                double dynamicMuMultiplier = slidingBase + (staticBase - slidingBase) * speedFactor;
-                double treadCoef = nVeh.wheels.treadCoef[wIdx];
+                float dynamicMuMultiplier = slidingBase + (staticBase - slidingBase) * speedFactor;
+                float treadCoef = nVeh.wheels.treadCoef[wIdx];
 
-                // 🚀 核心物理混合：轮胎乘子 × 目标表面插值基础值
-                mu_s = (staticBase * loadFactor * treadCoef)  * tri_mu_s;
-                mu_k = (dynamicMuMultiplier * loadFactor * treadCoef) * tri_mu_k;
-
+                muS = (staticBase * loadFactor * treadCoef) * triMuS;
+                muK = (dynamicMuMultiplier * loadFactor * treadCoef) * triMuK;
             } else {
-                // 普通金属/塑料撞击，同样严格遵循乘积法则而不是算术平均
-                mu_s = nVeh.nodes.friction[nHit] * tri_mu_s;
-                mu_k = nVeh.nodes.slidingFriction[nHit] * tri_mu_k;
+                muS = nVeh.nodes.friction[nHit] * triMuS;
+                muK = nVeh.nodes.slidingFriction[nHit] * triMuK;
             }
 
-            if (vtLen > 1e-8) {
-                // 完全抵消切向相对速度所需的冲量
-                double jtMax = vtLen * invWTotal;
+            if (vtLen > 1e-8f) {
+                float jtMax = vtLen * invWTotal;
+                float frictionImpulse = (jtMax <= muS * equivalentJn) ? jtMax : muK * equivalentJn;
 
-                double frictionImpulse;
-                if (jtMax <= mu_s * equivalentJn) {
-                    // 【静摩擦】：所需冲量没有突破极限，彻底消除切向速度（咬死）
-                    frictionImpulse = jtMax;
-                } else {
-                    // 【滑动摩擦】：突破极限发生打滑，提供恒定阻力
-                    frictionImpulse = mu_k * equivalentJn;
-                }
+                float invVtLen = 1.0f / vtLen;
+                float tDirX = tangentVx * invVtLen;
+                float tDirY = tangentVy * invVtLen;
+                float tDirZ = tangentVz * invVtLen;
 
-                // 切向单位向量
-                double invVtLen = 1.0 / vtLen;
-                double tDirX = tangentVx * invVtLen;
-                double tDirY = tangentVy * invVtLen;
-                double tDirZ = tangentVz * invVtLen;
-
-                // 施加摩擦冲量
                 dvX -= frictionImpulse * tDirX;
                 dvY -= frictionImpulse * tDirY;
                 dvZ -= frictionImpulse * tDirZ;
             }
         }
 
-        // 7. 应用位置和速度增量
         nVeh.applyPositionAndVelocityDeltaUnSafe(nHit,
                 dpX / massNode, dpY / massNode, dpZ / massNode,
                 dvX / massNode, dvY / massNode, dvZ / massNode);

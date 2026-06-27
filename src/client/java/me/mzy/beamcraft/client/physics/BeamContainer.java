@@ -20,15 +20,15 @@ public class BeamContainer {
     public int count = 0;
     public int[] node1;
     public int[] node2;
-    public double[] restLength;
-    public double[] baseRestLength;
-    public double[] targetRestLength;
-    public double[] precompTimeTotal;
-    public double[] precompTimer;
-    public double[] spring;
-    public double[] damp;
-    public double[] deform;
-    public double[] strength;
+    public float[] restLength;
+    public float[] baseRestLength;
+    public float[] targetRestLength;
+    public float[] precompTimeTotal;
+    public float[] precompTimer;
+    public float[] spring;
+    public float[] damp;
+    public float[] deform;
+    public float[] strength;
     public boolean[] broken;
     public int[] breakGroupType;
     public int[] wheelId;
@@ -36,15 +36,15 @@ public class BeamContainer {
     public BeamContainer() {
         node1 = new int[INIT_BEAM_CAP];
         node2 = new int[INIT_BEAM_CAP];
-        restLength = new double[INIT_BEAM_CAP];
-        baseRestLength = new double[INIT_BEAM_CAP];
-        targetRestLength = new double[INIT_BEAM_CAP];
-        precompTimeTotal = new double[INIT_BEAM_CAP];
-        precompTimer = new double[INIT_BEAM_CAP];
-        spring = new double[INIT_BEAM_CAP];
-        damp = new double[INIT_BEAM_CAP];
-        deform = new double[INIT_BEAM_CAP];
-        strength = new double[INIT_BEAM_CAP];
+        restLength = new float[INIT_BEAM_CAP];
+        baseRestLength = new float[INIT_BEAM_CAP];
+        targetRestLength = new float[INIT_BEAM_CAP];
+        precompTimeTotal = new float[INIT_BEAM_CAP];
+        precompTimer = new float[INIT_BEAM_CAP];
+        spring = new float[INIT_BEAM_CAP];
+        damp = new float[INIT_BEAM_CAP];
+        deform = new float[INIT_BEAM_CAP];
+        strength = new float[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
@@ -94,24 +94,24 @@ public class BeamContainer {
         this.node1[idx] = node1Idx;
         this.node2[idx] = node2Idx;
 
-        double targetLen = (nodeDist * precomp) + precompRange;
+        float targetLen = (float) ((nodeDist * precomp) + precompRange);
         this.targetRestLength[idx] = targetLen;
 
         if (precompTime > 0.0) {
-            this.restLength[idx] = nodeDist;
-            this.precompTimer[idx] = precompTime;
-            this.precompTimeTotal[idx] = precompTime;
+            this.restLength[idx] = (float) nodeDist;
+            this.precompTimer[idx] = (float) precompTime;
+            this.precompTimeTotal[idx] = (float) precompTime;
         } else {
             this.restLength[idx] = targetLen;
-            this.precompTimer[idx] = 0.0;
-            this.precompTimeTotal[idx] = 0.0;
+            this.precompTimer[idx] = 0.0f;
+            this.precompTimeTotal[idx] = 0.0f;
         }
 
         this.baseRestLength[idx] = this.restLength[idx];
-        this.spring[idx] = spring;
-        this.damp[idx] = damp;
-        this.deform[idx] = deform;
-        this.strength[idx] = strength;
+        this.spring[idx] = (float) spring;
+        this.damp[idx] = (float) damp;
+        this.deform[idx] = (float) deform;
+        this.strength[idx] = (float) strength;
         this.broken[idx] = false;
         this.breakGroupType[idx] = breakGroupType;
         this.wheelId[idx] = -1;
@@ -148,7 +148,7 @@ public class BeamContainer {
         }
     }
 
-    public void updatePrecompression(double mcDt) {
+    public void updatePrecompression(float mcDt) {
         for (int i = 0; i < count; i++) {
             if (precompTimer[i] > 0) {
                 precompTimer[i] -= mcDt;
@@ -156,7 +156,7 @@ public class BeamContainer {
                     precompTimer[i] = 0;
                     restLength[i] = targetRestLength[i];
                 } else {
-                    double progress = 1.0 - (precompTimer[i] / precompTimeTotal[i]);
+                    float progress = 1.0f - (precompTimer[i] / precompTimeTotal[i]);
                     restLength[i] = baseRestLength[i] + (targetRestLength[i] - baseRestLength[i]) * progress;
                 }
             }

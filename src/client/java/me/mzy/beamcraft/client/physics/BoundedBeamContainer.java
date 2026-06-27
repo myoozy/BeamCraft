@@ -7,31 +7,31 @@ import me.mzy.beamcraft.utility.Utility;
  */
 public class BoundedBeamContainer extends BeamContainer {
     // 限界与阻尼特有属性
-    public double[] shortBoundRange;      // 最短极限长度
-    public double[] longBoundRange;       // 最长极限长度
-    public double[] shortBound;           // 最短极限比例
-    public double[] longBound;            // 最长极限比例
-    public double[] limitSpring;     // 极限反弹力
-    public double[] limitDamp;       // 极限阻尼
-    public double[] dampVelocitySplit; // 速度分界点
-    public double[] dampFast;        // 高速阻尼
-    public double[] dampRebound;     // 回弹阻尼
-    public double[] dampReboundFast; // 高速回弹阻尼
+    public float[] shortBoundRange;      // 最短极限长度
+    public float[] longBoundRange;       // 最长极限长度
+    public float[] shortBound;           // 最短极限比例
+    public float[] longBound;            // 最长极限比例
+    public float[] limitSpring;     // 极限反弹力
+    public float[] limitDamp;       // 极限阻尼
+    public float[] dampVelocitySplit; // 速度分界点
+    public float[] dampFast;        // 高速阻尼
+    public float[] dampRebound;     // 回弹阻尼
+    public float[] dampReboundFast; // 高速回弹阻尼
 
-    private static final double KINDA_BIG_NUMBER = 1e9;
+    private static final float KINDA_BIG_NUMBER = 1e9f;
 
     public BoundedBeamContainer() {
         super();
-        shortBoundRange = new double[INIT_BEAM_CAP];
-        longBoundRange = new double[INIT_BEAM_CAP];
-        shortBound =  new double[INIT_BEAM_CAP];
-        longBound =  new double[INIT_BEAM_CAP];
-        limitSpring = new double[INIT_BEAM_CAP];
-        limitDamp = new double[INIT_BEAM_CAP];
-        dampVelocitySplit = new double[INIT_BEAM_CAP];
-        dampFast = new double[INIT_BEAM_CAP];
-        dampRebound = new double[INIT_BEAM_CAP];
-        dampReboundFast = new double[INIT_BEAM_CAP];
+        shortBoundRange = new float[INIT_BEAM_CAP];
+        longBoundRange = new float[INIT_BEAM_CAP];
+        shortBound =  new float[INIT_BEAM_CAP];
+        longBound =  new float[INIT_BEAM_CAP];
+        limitSpring = new float[INIT_BEAM_CAP];
+        limitDamp = new float[INIT_BEAM_CAP];
+        dampVelocitySplit = new float[INIT_BEAM_CAP];
+        dampFast = new float[INIT_BEAM_CAP];
+        dampRebound = new float[INIT_BEAM_CAP];
+        dampReboundFast = new float[INIT_BEAM_CAP];
     }
 
     @Override
@@ -67,23 +67,23 @@ public class BoundedBeamContainer extends BeamContainer {
                         double inDampVelSplit, double inDampFast,
                         double inDampRebound, double inDampReboundFast) {
         // 复杂阻尼默认值处理
-        double finalVelSplit = (inDampVelSplit < 0) ? KINDA_BIG_NUMBER : inDampVelSplit;
-        double finalFast = (inDampFast < 0) ? beamDamp : inDampFast;
-        double finalRebound = (inDampRebound < 0) ? beamDamp : inDampRebound;
-        double finalReboundFast = (inDampReboundFast < 0) ? finalRebound : inDampReboundFast;
+        float finalVelSplit = (float) ((inDampVelSplit < 0) ? KINDA_BIG_NUMBER : inDampVelSplit);
+        float finalFast = (float) ((inDampFast < 0) ? beamDamp : inDampFast);
+        float finalRebound = (float) ((inDampRebound < 0) ? beamDamp : inDampRebound);
+        float finalReboundFast = (float) ((inDampReboundFast < 0) ? finalRebound : inDampReboundFast);
 
         // 复用父类公共属性的添加
         int idx = addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist,
                 beamSpring, beamDamp, beamDeform, beamStrength,
                 precomp, precompRange, precompTime);
 
-        shortBoundRange[idx] = beamShortBoundRange;
-        longBoundRange[idx] = beamLongBoundRange;
-        shortBound[idx] = beamShortBound;
-        longBound[idx] = beamLongBound;
+        shortBoundRange[idx] = (float) beamShortBoundRange;
+        longBoundRange[idx] = (float) beamLongBoundRange;
+        shortBound[idx] = (float) beamShortBound;
+        longBound[idx] = (float) beamLongBound;
         
-        limitSpring[idx] = beamLimitSpring;
-        limitDamp[idx] = beamLimitDamp;
+        limitSpring[idx] = (float) beamLimitSpring;
+        limitDamp[idx] = (float) beamLimitDamp;
         dampVelocitySplit[idx] = finalVelSplit;
         dampFast[idx] = finalFast;
         dampRebound[idx] = finalRebound;

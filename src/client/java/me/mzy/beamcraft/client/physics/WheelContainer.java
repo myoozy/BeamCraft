@@ -20,21 +20,21 @@ public class WheelContainer {
     public int[] numRays = new int[INIT_WHEEL_CAP];
 
     // 物理参数
-    public double[] hubRadius = new double[INIT_WHEEL_CAP];
-    public double[] tireRadius = new double[INIT_WHEEL_CAP];
-    public double[] tireWidth = new double[INIT_WHEEL_CAP];
-    public double[] pressurePSI = new double[INIT_WHEEL_CAP];
+    public float[] hubRadius = new float[INIT_WHEEL_CAP];
+    public float[] tireRadius = new float[INIT_WHEEL_CAP];
+    public float[] tireWidth = new float[INIT_WHEEL_CAP];
+    public float[] pressurePSI = new float[INIT_WHEEL_CAP];
 
     // 轮胎节点摩擦参数
-    public double[] frictionCoef         = new double[INIT_WHEEL_CAP];
-    public double[] slidingFrictionCoef  = new double[INIT_WHEEL_CAP];
-    public double[] stribeckVelMult      = new double[INIT_WHEEL_CAP];
-    public double[] stribeckExponent     = new double[INIT_WHEEL_CAP];
-    public double[] treadCoef            = new double[INIT_WHEEL_CAP];
-    public double[] noLoadCoef           = new double[INIT_WHEEL_CAP];
-    public double[] loadSensitivitySlope = new double[INIT_WHEEL_CAP];
-    public double[] fullLoadCoef         = new double[INIT_WHEEL_CAP];
-    public double[] softnessCoef         = new double[INIT_WHEEL_CAP];
+    public float[] frictionCoef         = new float[INIT_WHEEL_CAP];
+    public float[] slidingFrictionCoef  = new float[INIT_WHEEL_CAP];
+    public float[] stribeckVelMult      = new float[INIT_WHEEL_CAP];
+    public float[] stribeckExponent     = new float[INIT_WHEEL_CAP];
+    public float[] treadCoef            = new float[INIT_WHEEL_CAP];
+    public float[] noLoadCoef           = new float[INIT_WHEEL_CAP];
+    public float[] loadSensitivitySlope = new float[INIT_WHEEL_CAP];
+    public float[] fullLoadCoef         = new float[INIT_WHEEL_CAP];
+    public float[] softnessCoef         = new float[INIT_WHEEL_CAP];
 
     // 🚀 一维展平数组：内存地址 100% 连续
     // 寻址方式： index = (wheelIndex * MAX_RAYS) + rayIndex
@@ -47,10 +47,10 @@ public class WheelContainer {
     public int[] tireTriangleIdxStart = new int[INIT_WHEEL_CAP];
     public int[] tireTriangleIdxEnd = new int[INIT_WHEEL_CAP];
 
-    public double[] initialVolume = new double[INIT_WHEEL_CAP];
+    public float[] initialVolume = new float[INIT_WHEEL_CAP];
 
-    public double[] prevVolume = new double[INIT_WHEEL_CAP];
-    public double[] normalSign = new double[INIT_WHEEL_CAP];
+    public float[] prevVolume = new float[INIT_WHEEL_CAP];
+    public float[] normalSign = new float[INIT_WHEEL_CAP];
 
     public boolean[] isDeflated = new boolean[INIT_WHEEL_CAP];
 
@@ -98,7 +98,7 @@ public class WheelContainer {
         node1[wIdx] = n1;
         node2[wIdx] = n2;
         numRays[wIdx] = rays > 0 ? Math.min(rays, MAX_RAYS) : MAX_RAYS;
-        hubRadius[wIdx] = radius;
+        hubRadius[wIdx] = (float) radius;
         this.isDeflated[wIdx] = false;
 
         int partId = vehicle.nodes.partId[n1];
@@ -241,20 +241,20 @@ public class WheelContainer {
         int baseOffset = wIdx * MAX_RAYS;
         int partId = vehicle.nodes.partId[n1];
 
-        tireRadius[wIdx] = radius;
-        tireWidth[wIdx] = width;
-        this.pressurePSI[wIdx] = pressurePSI;
+        tireRadius[wIdx] = (float) radius;
+        tireWidth[wIdx] = (float) width;
+        this.pressurePSI[wIdx] = (float) pressurePSI;
         this.isDeflated[wIdx] = false;
 
-        this.frictionCoef[wIdx] = frictionCoef;
-        this.slidingFrictionCoef[wIdx] = slidingFrictionCoef;
-        this.stribeckVelMult[wIdx] = stribeckVelMult;
-        this.stribeckExponent[wIdx] = stribeckExponent;
-        this.treadCoef[wIdx] = treadCoef;
-        this.noLoadCoef[wIdx] = noLoadCoef;
-        this.loadSensitivitySlope[wIdx] = loadSensitivitySlope;
-        this.fullLoadCoef[wIdx] = fullLoadCoef;
-        this.softnessCoef[wIdx] = softnessCoef;
+        this.frictionCoef[wIdx] = (float) frictionCoef;
+        this.slidingFrictionCoef[wIdx] = (float) slidingFrictionCoef;
+        this.stribeckVelMult[wIdx] = (float) stribeckVelMult;
+        this.stribeckExponent[wIdx] = (float) stribeckExponent;
+        this.treadCoef[wIdx] = (float) treadCoef;
+        this.noLoadCoef[wIdx] = (float) noLoadCoef;
+        this.loadSensitivitySlope[wIdx] = (float) loadSensitivitySlope;
+        this.fullLoadCoef[wIdx] = (float) fullLoadCoef;
+        this.softnessCoef[wIdx] = (float) softnessCoef;
 
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
@@ -429,11 +429,11 @@ public class WheelContainer {
             volSum += (ax * crossX + ay * crossY + az * crossZ);
         }
         // 记录绝对静止体积
-        initialVolume[wIdx] = Math.abs(volSum / 6.0);
+        initialVolume[wIdx] = (float) Math.abs(volSum / 6.0);
 
         // 不要忘记初始化！！！
         prevVolume[wIdx] = initialVolume[wIdx];
-        normalSign[wIdx] = (volSum < 0.0) ? -1.0 : 1.0;
+        normalSign[wIdx] = (volSum < 0.0) ? -1.0f : 1.0f;
     }
 
     private int addFastBeam(int id1, int id2, double spring, double damp, double deform, double strength) {

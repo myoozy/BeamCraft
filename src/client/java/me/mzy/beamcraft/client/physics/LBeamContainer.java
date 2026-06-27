@@ -4,16 +4,16 @@ import me.mzy.beamcraft.utility.Utility;
 
 public class LBeamContainer extends BeamContainer {
     public int[] node3;
-    public double[] restCosTheta;
-    public double[] baseCosTheta;
-    public double[] targetCosTheta;
+    public float[] restCosTheta;
+    public float[] baseCosTheta;
+    public float[] targetCosTheta;
 
     public LBeamContainer() {
         super();
         node3 = new int[INIT_BEAM_CAP];
-        restCosTheta = new double[INIT_BEAM_CAP];
-        baseCosTheta = new double[INIT_BEAM_CAP];
-        targetCosTheta = new double[INIT_BEAM_CAP];
+        restCosTheta = new float[INIT_BEAM_CAP];
+        baseCosTheta = new float[INIT_BEAM_CAP];
+        targetCosTheta = new float[INIT_BEAM_CAP];
     }
 
     @Override
@@ -48,16 +48,16 @@ public class LBeamContainer extends BeamContainer {
 
         if (Double.isNaN(targetCos) || Double.isNaN(baseCos)) broken[idx] = true;
 
-        targetCosTheta[idx] = targetCos;
+        targetCosTheta[idx] = (float) targetCos;
 
         if (precompTime > 0.0) {
-            restCosTheta[idx] = baseCos;
-            precompTimer[idx] = precompTime;
-            precompTimeTotal[idx] = precompTime;
+            restCosTheta[idx] = (float) baseCos;
+            precompTimer[idx] = (float) precompTime;
+            precompTimeTotal[idx] = (float) precompTime;
         } else {
-            restCosTheta[idx] = targetCos;
-            precompTimer[idx] = 0.0;
-            precompTimeTotal[idx] = 0.0;
+            restCosTheta[idx] = (float) targetCos;
+            precompTimer[idx] = 0.0f;
+            precompTimeTotal[idx] = 0.0f;
         }
 
         baseCosTheta[idx] = restCosTheta[idx];
@@ -72,7 +72,7 @@ public class LBeamContainer extends BeamContainer {
         }
     }
 
-    public void updatePrecompression(double mcDt) {
+    public void updatePrecompression(float mcDt) {
         for (int i = 0; i < count; i++) {
             if (precompTimer[i] > 0) {
                 precompTimer[i] -= mcDt;
@@ -80,7 +80,7 @@ public class LBeamContainer extends BeamContainer {
                     precompTimer[i] = 0;
                     restCosTheta[i] = targetCosTheta[i];
                 } else {
-                    double progress = 1.0 - (precompTimer[i] / precompTimeTotal[i]);
+                    float progress = 1.0f - (precompTimer[i] / precompTimeTotal[i]);
                     restCosTheta[i] = baseCosTheta[i] + (targetCosTheta[i] - baseCosTheta[i]) * progress;
                 }
             }
