@@ -252,8 +252,8 @@ public class JBeamAssembler {
                         // 去掉前面的 "$" 符号，方便统一管理
                         if (varName.startsWith("$")) varName = varName.substring(1);
                         try {
-                            double defVal = row.get(4).getAsDouble();
-                            globalVariables.put(varName, defVal);
+                            float defVal = row.get(4).getAsFloat();
+                            globalVariables.put(varName, (double) defVal);
                         } catch (Exception ignored) {}
                     }
                 }
@@ -308,9 +308,9 @@ public class JBeamAssembler {
                             // 1. 提取 nodeRotate (按照标准顺序首先生效旋转)
                             if (mod.has("nodeRotate")) {
                                 JsonObject nr = mod.getAsJsonObject("nodeRotate");
-                                Double rx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "x", "0"), vars);
-                                Double ry = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "y", "0"), vars);
-                                Double rz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "z", "0"), vars);
+                                Float rx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "x", "0"), vars);
+                                Float ry = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "y", "0"), vars);
+                                Float rz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "z", "0"), vars);
                                 if (rx != null) childTransform.rotX += rx;
                                 if (ry != null) childTransform.rotY += ry;
                                 if (rz != null) childTransform.rotZ += rz;
@@ -319,9 +319,9 @@ public class JBeamAssembler {
                             // 2. 提取 nodeOffset (累加至对称镜像平移层)
                             if (mod.has("nodeOffset")) {
                                 JsonObject no = mod.getAsJsonObject("nodeOffset");
-                                Double ox = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), vars);
-                                Double oy = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), vars);
-                                Double oz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), vars);
+                                Float ox = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), vars);
+                                Float oy = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), vars);
+                                Float oz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), vars);
                                 if (ox != null) childTransform.offsetX += ox;
                                 if (oy != null) childTransform.offsetY += oy;
                                 if (oz != null) childTransform.offsetZ += oz;
@@ -330,9 +330,9 @@ public class JBeamAssembler {
                             // 3. 提取 nodeMove (累加至绝对方向平移层)
                             if (mod.has("nodeMove")) {
                                 JsonObject nm = mod.getAsJsonObject("nodeMove");
-                                Double mx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "x", "0"), vars);
-                                Double my = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "y", "0"), vars);
-                                Double mz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "z", "0"), vars);
+                                Float mx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "x", "0"), vars);
+                                Float my = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "y", "0"), vars);
+                                Float mz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "z", "0"), vars);
                                 if (mx != null) childTransform.posX += mx;
                                 if (my != null) childTransform.posY += my;
                                 if (mz != null) childTransform.posZ += mz;

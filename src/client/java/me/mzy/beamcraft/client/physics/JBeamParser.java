@@ -17,21 +17,21 @@ public class JBeamParser {
      * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"
      * 支持 + - * / 和变量替换（变量以 $ 开头，未定义变量 → 0.0）
      */
-    public static Double evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
+    public static Float evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
         expr = expr.trim();
 
         // 处理 BeamNG 的直接变量引用 (例如 "$trackoffset_F")
         if (expr.startsWith("$") && !expr.startsWith("$=")) {
             String varName = expr.substring(1); // 砍掉前面的 '$'
             if (variables != null && variables.containsKey(varName)) {
-                return variables.get(varName);
+                return variables.get(varName).floatValue();
             }
-            return 0.0; // 按照 BeamNG 规范，找不到的变量默认归零
+            return 0.0f; // Undefined BeamNG variables default to zero.
         }
 
         // 如果既不是 $= 也不是纯变量，尝试按普通数字解析
         if (!expr.startsWith("$=")) {
-            try { return Double.parseDouble(expr); } catch (Exception e) { return null; }
+            try { return Float.parseFloat(expr); } catch (Exception e) { return null; }
         }
 
         String equation = expr.substring(2);
@@ -47,7 +47,7 @@ public class JBeamParser {
                     int j = i + 1;
                     while (j < equation.length() && (Character.isLetterOrDigit(equation.charAt(j)) || equation.charAt(j) == '_')) j++;
                     String varName = equation.substring(i + 1, j);
-                    Double val = variables.getOrDefault(varName, 0.0);
+                    float val = variables != null ? variables.getOrDefault(varName, 0.0).floatValue() : 0.0f;
                     sb.append(val);
                     i = j;
                     changed = true;
@@ -73,9 +73,9 @@ public class JBeamParser {
                 leftStart++;
                 int rightEnd = opIdx + 1;
                 while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                double left = Double.parseDouble(equation.substring(leftStart, opIdx));
-                double right = Double.parseDouble(equation.substring(opIdx + 1, rightEnd));
-                double res = (equation.charAt(opIdx) == '*') ? left * right : left / right;
+                float left = Float.parseFloat(equation.substring(leftStart, opIdx));
+                float right = Float.parseFloat(equation.substring(opIdx + 1, rightEnd));
+                float res = (equation.charAt(opIdx) == '*') ? left * right : left / right;
                 equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
             }
             // 再计算加减
@@ -89,12 +89,12 @@ public class JBeamParser {
                 leftStart++;
                 int rightEnd = opIdx + 1;
                 while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                double left = Double.parseDouble(equation.substring(leftStart, opIdx));
-                double right = Double.parseDouble(equation.substring(opIdx + 1, rightEnd));
-                double res = (equation.charAt(opIdx) == '+') ? left + right : left - right;
+                float left = Float.parseFloat(equation.substring(leftStart, opIdx));
+                float right = Float.parseFloat(equation.substring(opIdx + 1, rightEnd));
+                float res = (equation.charAt(opIdx) == '+') ? left + right : left - right;
                 equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
             }
-            return Double.parseDouble(equation);
+            return Float.parseFloat(equation);
         } catch (Exception e) {
             return null;
         }
@@ -117,6 +117,10 @@ public class JBeamParser {
     }
 
     public static double getDoubleSafe(JsonObject obj, String key, double defaultValue, Map<String, Double> vars) {
+        return getFloatSafe(obj, key, (float) defaultValue, vars);
+    }
+
+    public static float getFloatSafe(JsonObject obj, String key, float defaultValue, Map<String, Double> vars) {
         if (obj == null || !obj.has(key)) return defaultValue;
         JsonElement el = obj.get(key);
         if (el.isJsonNull()) return defaultValue;
@@ -124,23 +128,21 @@ public class JBeamParser {
         String str = el.getAsString().trim();
         if (str.isEmpty()) return defaultValue;
 
-        // 处理特殊常量
-        if (str.contains("FLT_MAX") || str.contains("MAX_FLT")) return Double.MAX_VALUE;
-        if (str.contains("FLT_MIN") || str.contains("MIN_FLT")) return Double.MIN_VALUE;
+        if (str.contains("FLT_MAX") || str.contains("MAX_FLT")) return Float.MAX_VALUE;
+        if (str.contains("FLT_MIN") || str.contains("MIN_FLT")) return Float.MIN_VALUE;
 
-        // 拦截表达式
         if (str.startsWith("$=")) {
-            Double val = evaluateBeamNGExpression(str, vars);
+            Float val = evaluateBeamNGExpression(str, vars);
             return val != null ? val : defaultValue;
         }
 
-        // 拦截纯变量替换 (如 "$camber_F")
         if (str.startsWith("$")) {
-            return vars.getOrDefault(str.substring(1), defaultValue);
+            Double val = vars != null ? vars.get(str.substring(1)) : null;
+            return val != null ? val.floatValue() : defaultValue;
         }
 
         try {
-            return Double.parseDouble(str);
+            return Float.parseFloat(str);
         } catch (NumberFormatException e) {
             return defaultValue;
         }
@@ -184,9 +186,9 @@ public class JBeamParser {
     public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry, CouplerRegistry couplerRegistry) {
         boolean isHeader = true;
 
-        double currentWeight = 50.0;
-        double currentFriction = 0.5;
-        double currentSlidingFriction = -1;
+        float currentWeight = 50.0f;
+        float currentFriction = 0.5f;
+        float currentSlidingFriction = -1;
         boolean currentCollision = true;
         boolean currentSelfCollision = false;
 
@@ -195,9 +197,9 @@ public class JBeamParser {
         for (JsonElement element : nodes) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentWeight = getDoubleSafe(modifier, "nodeWeight", currentWeight, entry.variables);
-                currentFriction = getDoubleSafe(modifier, "frictionCoef", currentFriction, entry.variables);
-                currentSlidingFriction = getDoubleSafe(modifier, "slidingFrictionCoef", currentSlidingFriction, entry.variables);
+                currentWeight = getFloatSafe(modifier, "nodeWeight", currentWeight, entry.variables);
+                currentFriction = getFloatSafe(modifier, "frictionCoef", currentFriction, entry.variables);
+                currentSlidingFriction = getFloatSafe(modifier, "slidingFrictionCoef", currentSlidingFriction, entry.variables);
                 currentCollision = getBooleanSafe(modifier, "collision", currentCollision);
                 currentSelfCollision = getBooleanSafe(modifier, "selfCollision", currentSelfCollision);
 
@@ -212,9 +214,9 @@ public class JBeamParser {
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() < 4) continue;
 
-                double inlineWeight = currentWeight;
-                double inlineFriction = currentFriction;
-                double inlineSlidingFriction = currentSlidingFriction;
+                float inlineWeight = currentWeight;
+                float inlineFriction = currentFriction;
+                float inlineSlidingFriction = currentSlidingFriction;
                 boolean inlineCollision = currentCollision;
                 boolean inlineSelfCollision = currentSelfCollision;
 
@@ -222,17 +224,17 @@ public class JBeamParser {
 
                 String inlineTag = "";
                 String inlineCouplerTag = "";
-                double inlineStartRadius = 0.25;
-                double inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+                float inlineStartRadius = 0.25f;
+                float inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
                 boolean inlineCouplerWeld = false;
-                double inlineCouplerLatchSpeed = 0.3;
-                double inlineCouplerLockRadius = 0.025;
+                float inlineCouplerLatchSpeed = 0.3f;
+                float inlineCouplerLockRadius = 0.025f;
 
                 if (row.get(row.size() - 1).isJsonObject()) {
                     JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
-                    inlineWeight = getDoubleSafe(inline, "nodeWeight", inlineWeight, entry.variables);
-                    inlineFriction = getDoubleSafe(inline, "frictionCoef", inlineFriction, entry.variables);
-                    inlineSlidingFriction = getDoubleSafe(inline, "slidingFrictionCoef", inlineSlidingFriction, entry.variables);
+                    inlineWeight = getFloatSafe(inline, "nodeWeight", inlineWeight, entry.variables);
+                    inlineFriction = getFloatSafe(inline, "frictionCoef", inlineFriction, entry.variables);
+                    inlineSlidingFriction = getFloatSafe(inline, "slidingFrictionCoef", inlineSlidingFriction, entry.variables);
                     inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
                     inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
 
@@ -242,32 +244,32 @@ public class JBeamParser {
 
                     inlineTag = getStringSafe(inline, "tag", inlineTag);
                     inlineCouplerTag = getStringSafe(inline, "couplerTag", inlineCouplerTag);
-                    inlineStartRadius = getDoubleSafe(inline, "couplerStartRadius", inlineStartRadius, entry.variables);
-                    inlineCouplerStrength = getDoubleSafe(inline, "couplerStrength", inlineCouplerStrength, entry.variables);
+                    inlineStartRadius = getFloatSafe(inline, "couplerStartRadius", inlineStartRadius, entry.variables);
+                    inlineCouplerStrength = getFloatSafe(inline, "couplerStrength", inlineCouplerStrength, entry.variables);
                     if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
                     else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
-                    inlineCouplerLatchSpeed = getDoubleSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed, entry.variables);
-                    inlineCouplerLockRadius = getDoubleSafe(inline, "couplerLockRadius", inlineCouplerLockRadius, entry.variables);
+                    inlineCouplerLatchSpeed = getFloatSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed, entry.variables);
+                    inlineCouplerLockRadius = getFloatSafe(inline, "couplerLockRadius", inlineCouplerLockRadius, entry.variables);
                 }
 
                 String id = row.get(0).getAsString();
-                double x = 0.0;
-                double y = 0.0;
-                double z = 0.0;
+                float x = 0.0f;
+                float y = 0.0f;
+                float z = 0.0f;
 
                 try {
                     // 提取原始 BeamNG 空间位置
-                    double rawX = row.get(1).getAsDouble();
-                    double rawY = row.get(2).getAsDouble();
-                    double rawZ = row.get(3).getAsDouble();
+                    float rawX = row.get(1).getAsFloat();
+                    float rawY = row.get(2).getAsFloat();
+                    float rawZ = row.get(3).getAsFloat();
 
                     // 应用插槽级联变换处理逻辑 (包含对称镜像平移、欧拉角旋转、绝对位移)
                     double[] transformed = entry.transform.transformNode(rawX, rawY, rawZ);
 
                     // 最终引擎空间转换: flip X, swap Y and Z
-                    x = +transformed[0];
-                    y = +transformed[2];
-                    z = -transformed[1];
+                    x = (float) transformed[0];
+                    y = (float) transformed[2];
+                    z = (float) -transformed[1];
                 } catch (Exception e) {
                     System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
                     continue;
@@ -287,19 +289,19 @@ public class JBeamParser {
         boolean isHeader = true;
         int currentType = BeamContainer.BEAM_NORMAL;
 
-        double currentPrecomp = 1.0, currentPrecompRange = 0.0, currentPrecompTime = 0.0;
-        double currentSpring = 9000000.0, currentDamp = 12000.0;
-        double currentDeform = 400000.0, currentStrength = 1000000.0;
+        float currentPrecomp = 1.0f, currentPrecompRange = 0.0f, currentPrecompTime = 0.0f;
+        float currentSpring = 9000000.0f, currentDamp = 12000.0f;
+        float currentDeform = 400000.0f, currentStrength = 1000000.0f;
 
-        double currentShortBound = 1.0, currentLongBound = 1.0;
-        double currentShortBoundRange = -1.0, currentLongBoundRange = -1.0;
-        double currentLimitSpring = currentSpring, currentLimitDamp = currentDamp;
+        float currentShortBound = 1.0f, currentLongBound = 1.0f;
+        float currentShortBoundRange = -1.0f, currentLongBoundRange = -1.0f;
+        float currentLimitSpring = currentSpring, currentLimitDamp = currentDamp;
 
-        double currentDampVelSplit = -1.0, currentDampFast = -1.0;
-        double currentDampRebound = -1.0, currentDampReboundFast = -1.0;
+        float currentDampVelSplit = -1.0f, currentDampFast = -1.0f;
+        float currentDampRebound = -1.0f, currentDampReboundFast = -1.0f;
 
-        double currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
-        double currentTransitionZone = 0.0;
+        float currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
+        float currentTransitionZone = 0.0f;
 
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
         int currentBreakGroupType = 0;
@@ -317,29 +319,29 @@ public class JBeamParser {
                     else if (bt.equals("|ANISOTROPIC")) currentType = BeamContainer.BEAM_ANISOTROPIC;
                 }
 
-                currentPrecomp = getDoubleSafe(modifier, "beamPrecompression", currentPrecomp, entry.variables);
-                currentPrecompRange = getDoubleSafe(modifier, "precompressionRange", currentPrecompRange, entry.variables);
-                currentPrecompTime = getDoubleSafe(modifier, "beamPrecompressionTime", currentPrecompTime, entry.variables);
-                currentSpring = getDoubleSafe(modifier, "beamSpring", currentSpring, entry.variables);
-                currentDamp = getDoubleSafe(modifier, "beamDamp", currentDamp, entry.variables);
-                currentDeform = getDoubleSafe(modifier, "beamDeform", currentDeform, entry.variables);
-                currentStrength = getDoubleSafe(modifier, "beamStrength", currentStrength, entry.variables);
+                currentPrecomp = getFloatSafe(modifier, "beamPrecompression", currentPrecomp, entry.variables);
+                currentPrecompRange = getFloatSafe(modifier, "precompressionRange", currentPrecompRange, entry.variables);
+                currentPrecompTime = getFloatSafe(modifier, "beamPrecompressionTime", currentPrecompTime, entry.variables);
+                currentSpring = getFloatSafe(modifier, "beamSpring", currentSpring, entry.variables);
+                currentDamp = getFloatSafe(modifier, "beamDamp", currentDamp, entry.variables);
+                currentDeform = getFloatSafe(modifier, "beamDeform", currentDeform, entry.variables);
+                currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
 
-                currentShortBound = getDoubleSafe(modifier, "beamShortBound", currentShortBound, entry.variables);
-                currentLongBound = getDoubleSafe(modifier, "beamLongBound", currentLongBound, entry.variables);
-                currentShortBoundRange = getDoubleSafe(modifier, "shortBoundRange", currentShortBoundRange, entry.variables);
-                currentLongBoundRange = getDoubleSafe(modifier, "longBoundRange", currentLongBoundRange, entry.variables);
-                currentLimitSpring = getDoubleSafe(modifier, "beamLimitSpring", currentLimitSpring, entry.variables);
-                currentLimitDamp = getDoubleSafe(modifier, "beamLimitDamp", currentLimitDamp, entry.variables);
+                currentShortBound = getFloatSafe(modifier, "beamShortBound", currentShortBound, entry.variables);
+                currentLongBound = getFloatSafe(modifier, "beamLongBound", currentLongBound, entry.variables);
+                currentShortBoundRange = getFloatSafe(modifier, "shortBoundRange", currentShortBoundRange, entry.variables);
+                currentLongBoundRange = getFloatSafe(modifier, "longBoundRange", currentLongBoundRange, entry.variables);
+                currentLimitSpring = getFloatSafe(modifier, "beamLimitSpring", currentLimitSpring, entry.variables);
+                currentLimitDamp = getFloatSafe(modifier, "beamLimitDamp", currentLimitDamp, entry.variables);
 
-                currentDampVelSplit = getDoubleSafe(modifier, "beamDampVelocitySplit", currentDampVelSplit, entry.variables);
-                currentDampFast = getDoubleSafe(modifier, "beamDampFast", currentDampFast, entry.variables);
-                currentDampRebound = getDoubleSafe(modifier, "beamDampRebound", currentDampRebound, entry.variables);
-                currentDampReboundFast = getDoubleSafe(modifier, "beamDampReboundFast", currentDampReboundFast, entry.variables);
+                currentDampVelSplit = getFloatSafe(modifier, "beamDampVelocitySplit", currentDampVelSplit, entry.variables);
+                currentDampFast = getFloatSafe(modifier, "beamDampFast", currentDampFast, entry.variables);
+                currentDampRebound = getFloatSafe(modifier, "beamDampRebound", currentDampRebound, entry.variables);
+                currentDampReboundFast = getFloatSafe(modifier, "beamDampReboundFast", currentDampReboundFast, entry.variables);
 
-                currentSpringExpansion = getDoubleSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
-                currentDampExpansion = getDoubleSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
-                currentTransitionZone = getDoubleSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
+                currentSpringExpansion = getFloatSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
+                currentDampExpansion = getFloatSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
+                currentTransitionZone = getFloatSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
 
                 if (modifier.has("breakGroup")) {
                     currentBreakGroups = parseGroups(modifier.get("breakGroup"));
@@ -353,16 +355,16 @@ public class JBeamParser {
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 2) {
                     int inlineType = currentType;
-                    double inlineSpring = currentSpring, inlineDamp = currentDamp;
-                    double inlineDeform = currentDeform, inlineStrength = currentStrength;
-                    double inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
-                    double inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
-                    double inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
-                    double inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
-                    double inlineDampVelSplit = currentDampVelSplit, inlineDampFast = currentDampFast;
-                    double inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
-                    double inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
-                    double inlineTransitionZone = currentTransitionZone;
+                    float inlineSpring = currentSpring, inlineDamp = currentDamp;
+                    float inlineDeform = currentDeform, inlineStrength = currentStrength;
+                    float inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
+                    float inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
+                    float inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
+                    float inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
+                    float inlineDampVelSplit = currentDampVelSplit, inlineDampFast = currentDampFast;
+                    float inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
+                    float inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
+                    float inlineTransitionZone = currentTransitionZone;
                     String inlineId3 = null; // for L-Beams
                     java.util.List<String> inlineBreakGroups = currentBreakGroups;
                     int inlineBreakGroupType = currentBreakGroupType;
@@ -370,29 +372,29 @@ public class JBeamParser {
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
 
-                        inlineSpring = getDoubleSafe(inline, "beamSpring", inlineSpring, entry.variables);
-                        inlineDamp = getDoubleSafe(inline, "beamDamp", inlineDamp, entry.variables);
-                        inlineDeform = getDoubleSafe(inline, "beamDeform", inlineDeform, entry.variables);
-                        inlineStrength = getDoubleSafe(inline, "beamStrength", inlineStrength, entry.variables);
-                        inlinePrecomp = getDoubleSafe(inline, "beamPrecompression", inlinePrecomp, entry.variables);
-                        inlinePrecompRange = getDoubleSafe(inline, "precompressionRange", inlinePrecompRange, entry.variables);
-                        inlinePrecompTime = getDoubleSafe(inline, "beamPrecompressionTime", inlinePrecompTime, entry.variables);
+                        inlineSpring = getFloatSafe(inline, "beamSpring", inlineSpring, entry.variables);
+                        inlineDamp = getFloatSafe(inline, "beamDamp", inlineDamp, entry.variables);
+                        inlineDeform = getFloatSafe(inline, "beamDeform", inlineDeform, entry.variables);
+                        inlineStrength = getFloatSafe(inline, "beamStrength", inlineStrength, entry.variables);
+                        inlinePrecomp = getFloatSafe(inline, "beamPrecompression", inlinePrecomp, entry.variables);
+                        inlinePrecompRange = getFloatSafe(inline, "precompressionRange", inlinePrecompRange, entry.variables);
+                        inlinePrecompTime = getFloatSafe(inline, "beamPrecompressionTime", inlinePrecompTime, entry.variables);
 
-                        inlineShortBound = getDoubleSafe(inline, "beamShortBound", inlineShortBound, entry.variables);
-                        inlineLongBound = getDoubleSafe(inline, "beamLongBound", inlineLongBound, entry.variables);
-                        inlineShortBoundRange = getDoubleSafe(inline, "shortBoundRange", inlineShortBoundRange, entry.variables);
-                        inlineLongBoundRange = getDoubleSafe(inline, "longBoundRange", inlineLongBoundRange, entry.variables);
-                        inlineLimitS = getDoubleSafe(inline, "beamLimitSpring", inlineLimitS, entry.variables);
-                        inlineLimitD = getDoubleSafe(inline, "beamLimitDamp", inlineLimitD, entry.variables);
+                        inlineShortBound = getFloatSafe(inline, "beamShortBound", inlineShortBound, entry.variables);
+                        inlineLongBound = getFloatSafe(inline, "beamLongBound", inlineLongBound, entry.variables);
+                        inlineShortBoundRange = getFloatSafe(inline, "shortBoundRange", inlineShortBoundRange, entry.variables);
+                        inlineLongBoundRange = getFloatSafe(inline, "longBoundRange", inlineLongBoundRange, entry.variables);
+                        inlineLimitS = getFloatSafe(inline, "beamLimitSpring", inlineLimitS, entry.variables);
+                        inlineLimitD = getFloatSafe(inline, "beamLimitDamp", inlineLimitD, entry.variables);
 
-                        inlineDampVelSplit = getDoubleSafe(inline, "beamDampVelocitySplit", inlineDampVelSplit, entry.variables);
-                        inlineDampFast = getDoubleSafe(inline, "beamDampFast", inlineDampFast, entry.variables);
-                        inlineDampRebound = getDoubleSafe(inline, "beamDampRebound", inlineDampRebound, entry.variables);
-                        inlineDampReboundFast = getDoubleSafe(inline, "beamDampReboundFast", inlineDampReboundFast, entry.variables);
+                        inlineDampVelSplit = getFloatSafe(inline, "beamDampVelocitySplit", inlineDampVelSplit, entry.variables);
+                        inlineDampFast = getFloatSafe(inline, "beamDampFast", inlineDampFast, entry.variables);
+                        inlineDampRebound = getFloatSafe(inline, "beamDampRebound", inlineDampRebound, entry.variables);
+                        inlineDampReboundFast = getFloatSafe(inline, "beamDampReboundFast", inlineDampReboundFast, entry.variables);
 
-                        inlineSpringExpansion = getDoubleSafe(inline, "springExpansion", inlineSpringExpansion, entry.variables);
-                        inlineDampExpansion = getDoubleSafe(inline, "dampExpansion", inlineDampExpansion, entry.variables);
-                        inlineTransitionZone = getDoubleSafe(inline, "transitionZone", inlineTransitionZone, entry.variables);
+                        inlineSpringExpansion = getFloatSafe(inline, "springExpansion", inlineSpringExpansion, entry.variables);
+                        inlineDampExpansion = getFloatSafe(inline, "dampExpansion", inlineDampExpansion, entry.variables);
+                        inlineTransitionZone = getFloatSafe(inline, "transitionZone", inlineTransitionZone, entry.variables);
 
                         if (inline.has("breakGroup")) {
                             inlineBreakGroups = parseGroups(inline.get("breakGroup"));
@@ -458,17 +460,17 @@ public class JBeamParser {
     // --- 4. Torsionbar Parsing ---
     public static void parseTorsionbars(JsonArray torsionbars, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
         boolean isHeader = true;
-        double currentSpring = 0.0, currentDamp = 0.0;
-        double currentDeform = PhysicsWorld.KINDA_BIG_NUMBER;
-        double currentStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        float currentSpring = 0.0f, currentDamp = 0.0f;
+        float currentDeform = PhysicsWorld.KINDA_BIG_NUMBER;
+        float currentStrength = PhysicsWorld.KINDA_BIG_NUMBER;
 
         for (JsonElement element : torsionbars) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentSpring = getDoubleSafe(modifier, "spring", currentSpring, entry.variables);
-                currentDamp = getDoubleSafe(modifier, "damp", currentDamp, entry.variables);
-                currentDeform = getDoubleSafe(modifier, "deform", currentDeform, entry.variables);
-                currentStrength = getDoubleSafe(modifier, "beamStrength", currentStrength, entry.variables);
+                currentSpring = getFloatSafe(modifier, "spring", currentSpring, entry.variables);
+                currentDamp = getFloatSafe(modifier, "damp", currentDamp, entry.variables);
+                currentDeform = getFloatSafe(modifier, "deform", currentDeform, entry.variables);
+                currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
                 continue;
             }
 
@@ -505,16 +507,16 @@ public class JBeamParser {
         boolean isHeader = true;
 
         // 给定默认值
-        double currentSpring = 0.0;
-        double currentDamp = 0.0;
+        float currentSpring = 0.0f;
+        float currentDamp = 0.0f;
 
         for (JsonElement element : slidenodes) {
 
             // 1. 拦截全局修饰符（字典 {}），这里就可以用 getDoubleSafe 了！
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentSpring = getDoubleSafe(modifier, "spring", currentSpring, entry.variables);
-                currentDamp = getDoubleSafe(modifier, "damp", currentDamp, entry.variables);
+                currentSpring = getFloatSafe(modifier, "spring", currentSpring, entry.variables);
+                currentDamp = getFloatSafe(modifier, "damp", currentDamp, entry.variables);
                 continue;
             }
 
@@ -529,14 +531,14 @@ public class JBeamParser {
                     String railName = row.get(1).getAsString();
 
                     // 继承全局状态
-                    double inlineSpring = currentSpring;
-                    double inlineDamp = currentDamp;
+                    float inlineSpring = currentSpring;
+                    float inlineDamp = currentDamp;
 
                     // 3. 拦截行内修饰符（字典 {}），比如 ["fh4r", "strut_FR", {"spring": 12000}]
                     if (row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
-                        inlineSpring = getDoubleSafe(inline, "spring", inlineSpring, entry.variables);
-                        inlineDamp = getDoubleSafe(inline, "damp", inlineDamp, entry.variables);
+                        inlineSpring = getFloatSafe(inline, "spring", inlineSpring, entry.variables);
+                        inlineDamp = getFloatSafe(inline, "damp", inlineDamp, entry.variables);
                     }
                     // 4. 兼容那个偷懒的旧写法（按格子顺序读）
                     else if (row.size() > 5) {
@@ -544,7 +546,7 @@ public class JBeamParser {
                             String sStr = row.get(5).getAsString().trim();
                             // 过滤掉 FLT_MAX 这种没用的占位符
                             if (!sStr.isEmpty() && !sStr.contains("FLT")) {
-                                inlineSpring = Double.parseDouble(sStr);
+                                inlineSpring = Float.parseFloat(sStr);
                             }
                         } catch (Exception ignored) {} // 如果读不到数字就算了，用默认值
                     }
@@ -591,9 +593,9 @@ public class JBeamParser {
                         targetGroups = parseGroups(groupElement);
                     }
 
-                    double px = 0, py = 0, pz = 0;
-                    double rx = 0, ry = 0, rz = 0;
-                    double sx = 1, sy = 1, sz = 1;
+                    float px = 0, py = 0, pz = 0;
+                    float rx = 0, ry = 0, rz = 0;
+                    float sx = 1, sy = 1, sz = 1;
 
                     // 提取行内末尾的位移/旋转/缩放字典
                     for (int i = 1; i < row.size(); i++) {
@@ -601,21 +603,21 @@ public class JBeamParser {
                             JsonObject trans = row.get(i).getAsJsonObject();
                             if (trans.has("pos")) {
                                 JsonObject pos = trans.getAsJsonObject("pos");
-                                px = getDoubleSafe(pos, "x", 0, entry.variables);
-                                py = getDoubleSafe(pos, "y", 0, entry.variables);
-                                pz = getDoubleSafe(pos, "z", 0, entry.variables);
+                                px = getFloatSafe(pos, "x", 0, entry.variables);
+                                py = getFloatSafe(pos, "y", 0, entry.variables);
+                                pz = getFloatSafe(pos, "z", 0, entry.variables);
                             }
                             if (trans.has("rot")) {
                                 JsonObject rot = trans.getAsJsonObject("rot");
-                                rx = getDoubleSafe(rot, "x", 0, entry.variables);
-                                ry = getDoubleSafe(rot, "y", 0, entry.variables);
-                                rz = getDoubleSafe(rot, "z", 0, entry.variables);
+                                rx = getFloatSafe(rot, "x", 0, entry.variables);
+                                ry = getFloatSafe(rot, "y", 0, entry.variables);
+                                rz = getFloatSafe(rot, "z", 0, entry.variables);
                             }
                             if (trans.has("scale")) {
                                 JsonObject scale = trans.getAsJsonObject("scale");
-                                sx = getDoubleSafe(scale, "x", 1, entry.variables);
-                                sy = getDoubleSafe(scale, "y", 1, entry.variables);
-                                sz = getDoubleSafe(scale, "z", 1, entry.variables);
+                                sx = getFloatSafe(scale, "x", 1, entry.variables);
+                                sy = getFloatSafe(scale, "y", 1, entry.variables);
+                                sz = getFloatSafe(scale, "z", 1, entry.variables);
                             }
                         }
                     }

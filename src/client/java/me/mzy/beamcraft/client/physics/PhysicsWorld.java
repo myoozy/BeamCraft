@@ -15,21 +15,19 @@ public class PhysicsWorld {
     public static final float SOUND_SPEED = 340.0f;
     public static final float BLOCK_REBOUND = 0.0f;
     public static final float BLOCK_FRICTION = 1.0f;
-    public static final float METAL_PLASTIC_FLOW_RATE = 10.0f;
+    public static final float METAL_PLASTIC_FLOW_RATE = 100.0f;
     public static final float KINDA_SMALL_NUMBER = 1e-8f;
     public static final float KINDA_BIG_NUMBER = 1e8f;
     public static final int MAX_AABB_SIZE = 10;
     public static final float invPhysicsDT = 2000.0f;
 
-    // 鐢ㄤ簬澶勭悊鍜宮c涓栫晫鐨勭鎾?
     public final VoxelSnapshot voxelSnapshot = new VoxelSnapshot();
     BlockPos.Mutable mutablePos = new BlockPos.Mutable();
 
-    // 澶勭悊杞綋涔嬮棿鐨勭鎾?
     public final DynamicAxisSweep globalSap = new DynamicAxisSweep();
     public final SoftBodyCollisionManager collisionManager = new SoftBodyCollisionManager();
 
-    private int nextVehicleId = 0;     // 姘歌繙閫掑鐨勫叏灞€杞︾墝鍙?(缁濅笉閲嶅)
+    private int nextVehicleId = 0;
 
     public final java.util.List<SoftBodyVehicle> vehicles = new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -45,31 +43,23 @@ public class PhysicsWorld {
     }
 
     /**
-     * 瀹夊叏鍦板皢杞﹁締浠庣墿鐞嗕笘鐣屼腑绉婚櫎骞堕攢姣?
+     * Remove a vehicle and release its owned SoA buffers.
      */
     public void removeVehicle(SoftBodyVehicle vehicle) {
         if (vehicle == null || !vehicles.contains(vehicle)) return;
 
-        // 1. 浠庢椿璺冨垪琛ㄤ腑绉婚櫎
-        // 鐢变簬浣犵殑 vehicles 鏄?CopyOnWriteArrayList锛岃繖涓€姝ュぉ鐢熺嚎绋嬪畨鍏紒
-        // 鍝€曠墿鐞嗙嚎绋嬫鍦?foreach 閬嶅巻鎵€鏈夎溅锛岀Щ闄ゆ搷浣滀篃涓嶄細瀵艰嚧宕╂簝銆?
         vehicles.remove(vehicle);
 
-        // 2. 閲婃斁璇ヨ溅杈嗗崰鐢ㄧ殑搴曞眰 SoA 鏁扮粍鍐呭瓨
         vehicle.clear();
 
-        System.out.println("馃殫 Vehicle removed safely. ID: " + vehicle.vehicleId);
+        System.out.println("Vehicle removed safely. ID: " + vehicle.vehicleId);
 
-        // 娉ㄦ剰锛氭垜浠笉闇€瑕佸幓娓呯悊 SAP 鏍戞垨鑰?SoftBody)CollisionManager锛?
-        // 鍥犱负 SAP 鏍戝湪瀹介樁娈典細璋冪敤 globalSap.clear() 骞跺畬鍏ㄦ牴鎹綋鍓嶇殑 vehicles 鍒楄〃閲嶅缓銆?
-        // CollisionManager涔熶細鍦ㄥ闃舵鑷姩 clearContacts()銆?
-        // 杩欏氨鏄瘡娆￠噸寤哄闃舵鏋舵瀯鐨勬渶澶т紭鍔匡細娌℃湁鐘舵€佹畫鐣欙紒
     }
 
     public void clear() {
         vehicles.clear();
-        collisionManager.clearContacts(); // 娓呯悊纰版挒绠＄悊鍣?
-        System.out.println("馃Ч Physics world data cleared");
+        collisionManager.clearContacts();
+        System.out.println("Physics world data cleared");
     }
 
     /**
@@ -83,7 +73,6 @@ public class PhysicsWorld {
         long t1 = System.nanoTime();
 
         voxelSnapshot.clear();
-        // 璁╂瘡杈嗚溅鑷繁鍘绘壂鎻忓懆鍥寸殑鏂瑰潡骞跺啓鍏ュ叏灞€ snapshot
         for (SoftBodyVehicle vehicle : vehicles) {
             vehicle.cacheEntityLocation();
             vehicle.updateVoxelSnapshot(mcWorld, voxelSnapshot, mutablePos, dt);
@@ -97,7 +86,6 @@ public class PhysicsWorld {
 
             long ti1 = System.nanoTime();
 
-            // 1. 绠楀唴鍔涘苟绉垎棰勬祴鍧愭爣銆愬畬鍏ㄧ嫭绔嬪苟琛屻€?
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveInternalForces(subDt);
             });
@@ -105,23 +93,18 @@ public class PhysicsWorld {
             long ti2 = System.nanoTime();
             internalForceMs += (ti2 - ti1) / 1_000_000.0;
 
-            // 2. 瀹介樁娈碉細闄嶉鏇存柊鏍戜笌鎺ヨЕ缂撳瓨
             if (s % broadphaseRate == 0) {
                 long tii1 = System.nanoTime();
                 globalSap.clear();
 
-                // 鈽?鍔ㄦ€佸唴瀛樼揣鍑?(Dynamic Packing) 鈽?
-                // 姣忔瀹介樁娈靛墠锛岄噸鏂颁负瀛樻椿鐨勮溅杈嗗垎閰嶇揣鍑戠殑鍏ㄥ眬 ID 鍋忕Щ閲忋€?
-                // 杩欐牱鏃犺鐜╁鎬庝箞鍒犻櫎鍜岀敓鎴愯溅杈嗭紝鍐呭瓨姘歌繙鏄?0 绌洪殭
                 int activeOffset = 0;
                 for (SoftBodyVehicle vehicle : vehicles) {
                     vehicle.globalNodeOffset = activeOffset;
                     activeOffset += vehicle.nodes.count;
 
-                    globalSap.insertNodes(vehicle); // 椤轰究鎶婅妭鐐规彃鍏?SAP 鏍?
+                    globalSap.insertNodes(vehicle);
                 }
 
-                // 濡傛灉褰撳墠鎵€鏈夎溅鐨勮妭鐐规€绘暟瓒呰繃浜嗙鐞嗗櫒鐨勪笂闄愶紝鍙互鍦ㄨ繖閲屽姞涓鍛婄敋鑷虫墿瀹归€昏緫
                 // if (activeOffset >= SoftBodyCollisionManager.MAX_GLOBAL_NODES) { ... }
 
                 globalSap.updateAndSort();
@@ -131,12 +114,10 @@ public class PhysicsWorld {
 
                 collisionManager.clearContacts();
 
-                // 骞惰鏌ユ爲
                 vehicles.parallelStream().forEach(vehicle -> {
                     vehicle.generateCollisionCandidates(globalSap, collisionManager, subDt * broadphaseRate);
                 });
 
-                // 鏋侀€熷浘鏌撹壊鍒嗘壒
                 collisionManager.buildAndColorBatches();
 
                 long tii3 = System.nanoTime();
@@ -145,13 +126,11 @@ public class PhysicsWorld {
 
             long ti3 = System.nanoTime();
 
-            // 3. 绐勯樁娈碉細澶氳溅/鍗曡溅鏅鸿兘鍔ㄦ€佸苟琛屾眰瑙?
             solveCachedContacts(subDt);
 
             long ti4 = System.nanoTime();
             softCollisionMs += (ti4 - ti3) / 1_000_000.0;
 
-            // 4. 鐜鏂瑰潡纰版挒銆愯溅杈嗙骇鍒畬鍏ㄧ嫭绔嬪苟琛岋紒銆?
             vehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveEnvironmentCollisions(voxelSnapshot, subDt);
             });
@@ -197,10 +176,9 @@ public class PhysicsWorld {
     }
 
     /**
-     * 鏅鸿兘鍔ㄦ€佸绾跨▼璋冨害鍣細鏍规嵁鎵规澶у皬鍔ㄦ€佸喅瀹氭槸鍚﹀紑鍚苟琛?
+     * Resolve cached soft-body contacts batch by batch.
      */
     private void solveCachedContacts(float dt) {
-        // 鍔ㄦ€侀槇鍊硷細浣犲彲浠ユ牴鎹祴璇曠粨鏋滆皟鏁淬€?
         final int PARALLEL_THRESHOLD = 1024;
 
         for (int b = 0; b < collisionManager.activeBatchCount; b++) {
@@ -209,15 +187,12 @@ public class PhysicsWorld {
 
             final int batchIndex = b;
 
-            // 鏅鸿兘鍒嗗彂閫昏緫
             if (currentBatchSize < PARALLEL_THRESHOLD) {
-                // 銆愬崟绾跨▼蹇溅閬撱€戠偣鏁板お灏戯紝鍞ら啋绾跨▼姹犲弽鑰屼簭鏈紝鐩存帴涓荤嚎绋嬬函鏁板閫熼€氾紒
                 for (int idx = 0; idx < currentBatchSize; idx++) {
                     int contactId = collisionManager.batches[batchIndex][idx];
                     resolveSingleContact(contactId, dt);
                 }
             } else {
-                // 銆愬鏍搁噸鐏姏缃戙€戠偣鏁板法澶э紙涓ラ噸杩炵幆鐩告挒锛夛紝鏀惧紑鏋烽攣锛屽绾跨▼鐏姏鍏ㄥ紑锛?
                 java.util.stream.IntStream.range(0, currentBatchSize).parallel().forEach(idx -> {
                     int contactId = collisionManager.batches[batchIndex][idx];
                     resolveSingleContact(contactId, dt);
@@ -227,7 +202,7 @@ public class PhysicsWorld {
     }
 
     /**
-     * 琚彁鍙栧嚭鏉ョ殑绾暟瀛?PBD 瑙ｇ畻鍣?
+     * Resolve one node-vs-triangle soft-body contact in triangle-local coordinates.
      */
     private void resolveSingleContact(int contactId, float dt) {
         final float THICKNESS = 0.01f;
