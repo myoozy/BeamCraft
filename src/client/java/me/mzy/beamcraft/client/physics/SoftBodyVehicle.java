@@ -110,16 +110,14 @@ public class SoftBodyVehicle {
     /**
      * Register node into physics world and expand part bounding box cache
      */
-    public void addNode(String name, double x, double y, double z, double nodeMass,
-                        double friction, double slidingFriction, int partId,
-                        boolean collision, boolean selfCollision, java.util.List<String> groups) {
-        nodes.addNode(name, x, y, z, nodeMass, friction, slidingFriction, partId, collision, selfCollision, groups);
+    public void addNode(PhysicsSpecs.NodeSpec spec) {
+        nodes.addNode(spec);
 
 
         // ==========================================
         // ==========================================
-        if (partId > maxTrackedPartId) {
-            maxTrackedPartId = partId;
+        if (spec.partId() > maxTrackedPartId) {
+            maxTrackedPartId = spec.partId();
             ensurePartCapacity(maxTrackedPartId);
         }
     }
@@ -127,18 +125,33 @@ public class SoftBodyVehicle {
     /**
      * Create physical beam constraint between two existing nodes
      */
-    public void addBeam(int type,
-                        String name1, String name2, String name3,
-                        java.util.List<String> breakGroups, int breakGroupType,
-                        double spring, double damp,
-                        double deform, double strength,
-                        double precomp, double precompRange, double precompTime,
-                        double shortBound, double longBound,
-                        double shortBoundRange, double longBoundRange,
-                        double limitSpring, double limitDamp,
-                        double dampVelSplit, double dampFast,
-                        double dampRebound, double dampReboundFast,
-                        double springExpansion, double dampExpansion, double transitionZone) {
+    public void addBeam(PhysicsSpecs.BeamSpec spec) {
+        int type = spec.type();
+        String name1 = spec.name1();
+        String name2 = spec.name2();
+        String name3 = spec.name3();
+        java.util.List<String> breakGroups = spec.breakGroups();
+        int breakGroupType = spec.breakGroupType();
+        float spring = spec.spring();
+        float damp = spec.damp();
+        float deform = spec.deform();
+        float strength = spec.strength();
+        float precomp = spec.precomp();
+        float precompRange = spec.precompRange();
+        float precompTime = spec.precompTime();
+        float shortBound = spec.shortBound();
+        float longBound = spec.longBound();
+        float shortBoundRange = spec.shortBoundRange();
+        float longBoundRange = spec.longBoundRange();
+        float limitSpring = spec.limitSpring();
+        float limitDamp = spec.limitDamp();
+        float dampVelSplit = spec.dampVelSplit();
+        float dampFast = spec.dampFast();
+        float dampRebound = spec.dampRebound();
+        float dampReboundFast = spec.dampReboundFast();
+        float springExpansion = spec.springExpansion();
+        float dampExpansion = spec.dampExpansion();
+        float transitionZone = spec.transitionZone();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
             int n1 = nodes.nameToIndex.get(name1);
             int n2 = nodes.nameToIndex.get(name2);
@@ -220,21 +233,27 @@ public class SoftBodyVehicle {
     /**
      * Register collision triangle face composed of three nodes
      */
-    public void addTriangle(String name1, String name2, String name3, int triPartId, boolean collision) {
+    public void addTriangle(PhysicsSpecs.TriangleSpec spec) {
+        String name1 = spec.name1();
+        String name2 = spec.name2();
+        String name3 = spec.name3();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2) && nodes.nameToIndex.containsKey(name3)) {
             int n1 = nodes.nameToIndex.get(name1);
             int n2 = nodes.nameToIndex.get(name2);
             int n3 = nodes.nameToIndex.get(name3);
 
-            triangles.addTriangle(n1, n2, n3, triPartId, collision);
+            triangles.addTriangle(n1, n2, n3, spec.partId(), spec.collision());
         }
     }
 
     /**
      * Spawn torsion bar joint with four control nodes and physical properties
      */
-    public void addTorsionBar(String name1, String name2, String name3, String name4,
-                              double spring, double damp, double deform, double strength) {
+    public void addTorsionBar(PhysicsSpecs.TorsionBarSpec spec) {
+        String name1 = spec.name1();
+        String name2 = spec.name2();
+        String name3 = spec.name3();
+        String name4 = spec.name4();
 
         // Verify all node exists
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2) &&
@@ -254,14 +273,16 @@ public class SoftBodyVehicle {
                     px1, px2, px3, px4,
                     py1, py2, py3, py4,
                     pz1, pz2, pz3, pz4,
-                    spring, damp, deform, strength);
+                    spec.spring(), spec.damp(), spec.deform(), spec.strength());
         }
     }
 
     /**
      * Calculate closest rail segment and add sliding node constraint
      */
-    public void addSlideNode(String node, String[] railNodes, double spring, double damp) {
+    public void addSlideNode(PhysicsSpecs.SlideNodeSpec spec) {
+        String node = spec.node();
+        String[] railNodes = spec.railNodes();
         if (!nodes.nameToIndex.containsKey(node)) return;
         int nId = nodes.nameToIndex.get(node);
 
@@ -308,7 +329,7 @@ public class SoftBodyVehicle {
 
         // Pass calculated index data to slide node container
         if (bestA != -1 && bestB != -1) {
-            slidenodes.addSlideNode(nId, bestA, bestB, spring, damp, bestRestDist);
+            slidenodes.addSlideNode(nId, bestA, bestB, spec.spring(), spec.damp(), bestRestDist);
         }
     }
 

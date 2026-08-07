@@ -279,7 +279,11 @@ public class JBeamParser {
                     couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
                 }
 
-                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, entry.partId, inlineCollision, inlineSelfCollision, inlineGroups);
+                vehicle.addNode(new PhysicsSpecs.NodeSpec(
+                        id, x, y, z,
+                        inlineWeight, inlineFriction, inlineSlidingFriction,
+                        entry.partId, inlineCollision, inlineSelfCollision, inlineGroups
+                ));
             }
         }
     }
@@ -415,14 +419,15 @@ public class JBeamParser {
 
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
-                    vehicle.addBeam(inlineType, id1, id2, inlineId3,
+                    vehicle.addBeam(new PhysicsSpecs.BeamSpec(
+                            inlineType, id1, id2, inlineId3,
                             inlineBreakGroups, inlineBreakGroupType,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
                             inlineLimitS, inlineLimitD, inlineDampVelSplit, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone
-                    );
+                    ));
                 }
             }
         }
@@ -451,7 +456,13 @@ public class JBeamParser {
                             inlineCollision = !inline.get("triangleType").getAsString().equals("NONCOLLIDABLE");
                         }
                     }
-                    vehicle.addTriangle(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), entry.partId, inlineCollision);
+                    vehicle.addTriangle(new PhysicsSpecs.TriangleSpec(
+                            row.get(0).getAsString(),
+                            row.get(1).getAsString(),
+                            row.get(2).getAsString(),
+                            entry.partId,
+                            inlineCollision
+                    ));
                 }
             }
         }
@@ -478,8 +489,13 @@ public class JBeamParser {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 4) {
-                    vehicle.addTorsionBar(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), row.get(3).getAsString(),
-                            currentSpring, currentDamp, currentDeform, currentStrength);
+                    vehicle.addTorsionBar(new PhysicsSpecs.TorsionBarSpec(
+                            row.get(0).getAsString(),
+                            row.get(1).getAsString(),
+                            row.get(2).getAsString(),
+                            row.get(3).getAsString(),
+                            currentSpring, currentDamp, currentDeform, currentStrength
+                    ));
                 }
             }
         }
@@ -554,7 +570,7 @@ public class JBeamParser {
                     // 绑定到轨道上
                     String[] links = globalRailMap.get(railName);
                     if (links != null && links.length >= 2) {
-                        vehicle.addSlideNode(nodeId, links, inlineSpring, inlineDamp);
+                        vehicle.addSlideNode(new PhysicsSpecs.SlideNodeSpec(nodeId, links, inlineSpring, inlineDamp));
                     }
                 }
             }

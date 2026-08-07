@@ -92,6 +92,22 @@ public class NodeContainer {
     /**
      * Adds a node to the container or accumulates mass if the node already exists.
      */
+    public int addNode(PhysicsSpecs.NodeSpec spec) {
+        return addNode(
+                spec.name(),
+                spec.x(),
+                spec.y(),
+                spec.z(),
+                spec.mass(),
+                spec.friction(),
+                spec.slidingFriction(),
+                spec.partId(),
+                spec.collision(),
+                spec.selfCollision(),
+                spec.groups()
+        );
+    }
+
     public int addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
                         int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, java.util.List<String> groups) {
         ensureNodeCapacity();

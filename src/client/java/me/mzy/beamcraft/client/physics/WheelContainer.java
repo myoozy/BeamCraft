@@ -63,7 +63,30 @@ public class WheelContainer {
     /**
      * 生成轮毂 (Hub)
      */
-    public void generateHub(
+    public void generateHub(PhysicsSpecs.WheelHubSpec spec) {
+        generateHub(
+                spec.wheelName(), spec.node1(), spec.node2(), spec.nodeS(), spec.nodeArm(), spec.wheelDir(), spec.rays(),
+                spec.radius(), spec.width(), spec.offset(),
+                spec.nodeWeight(), spec.frictionCoef(),
+                spec.hubBeamSpring(), spec.hubBeamDamp(), spec.hubBeamDeform(), spec.hubBeamStrength(),
+                spec.hubTreadSpring(), spec.hubTreadDamp(),
+                spec.hubPeriphSpring(), spec.hubPeriphDamp(),
+                spec.hubSideSpring(), spec.hubSideDamp(),
+                spec.hubReinfSpring(), spec.hubReinfDamp(),
+                spec.hubTriCollision(), spec.hubSide1TriCollision(), spec.hubSide2TriCollision(),
+                spec.hubNodeMaterial(), spec.hubGroup(),
+                spec.enableHubcaps(), spec.hubcapBreakGroup(), spec.hubcapGroup(),
+                spec.hubcapCollision(), spec.hubcapSelfCollision(), spec.enableExtraHubcapBeams(),
+                spec.hubcapOffset(), spec.hubcapWidth(), spec.hubcapRadius(),
+                spec.hubcapBeamSpring(), spec.hubcapBeamDamp(), spec.hubcapBeamDeform(), spec.hubcapBeamStrength(),
+                spec.hubcapAttachSpring(), spec.hubcapAttachDamp(), spec.hubcapAttachDeform(), spec.hubcapAttachStrength(),
+                spec.hubcapSupportDeform(), spec.hubcapSupportStrength(),
+                spec.hubcapNodeWeight(), spec.hubcapCenterWeight(), spec.hubcapMaterial(), spec.hubcapFriction(),
+                spec.simpleRadius()
+        );
+    }
+
+    private void generateHub(
             // --- 基础标识与连接 ---
             String wheelName, int n1, int n2, Integer nodeS, Integer nodeArm, int wheelDir, int rays,
             // --- 轮毂几何 ---
@@ -192,7 +215,41 @@ public class WheelContainer {
     /**
      * 生成轮胎 (Tire)
      */
-    public void generateTire(
+    public void generateTire(PhysicsSpecs.WheelTireSpec spec) {
+        generateTire(
+                spec.wheelName(), spec.node1(), spec.node2(), spec.wheelDir(), spec.rays(),
+                spec.radius(), spec.width(), spec.offset(),
+                spec.nodeWeight(), spec.frictionCoef(), spec.pressurePSI(),
+                spec.slidingFrictionCoef(), spec.stribeckVelMult(), spec.stribeckExponent(),
+                spec.treadCoef(), spec.noLoadCoef(), spec.loadSensitivitySlope(), spec.fullLoadCoef(),
+                spec.softnessCoef(), spec.maxPressurePSI(),
+                spec.dragCoef(), spec.skinDragCoef(),
+                spec.treadSpring(), spec.treadDamp(), spec.treadDeform(), spec.treadStrength(),
+                spec.periSpring(), spec.periDamp(), spec.periDeform(), spec.periStrength(),
+                spec.sideSpring(), spec.sideDamp(),
+                spec.sideSpringExp(), spec.sideDampExp(), spec.sideTransZone(),
+                spec.sideDeform(), spec.sideStrength(),
+                spec.reinfSpring(), spec.reinfDamp(), spec.reinfDeform(), spec.reinfStrength(),
+                spec.treadReinfSpring(), spec.treadReinfDamp(),
+                spec.periReinfSpring(), spec.periReinfDamp(),
+                spec.sideReinfSpring(), spec.sideReinfDamp(),
+                spec.sideReinfSpringExp(), spec.sideReinfDampExp(),
+                spec.enableTireLBeams(), spec.enableTireReinfBeams(), spec.enableTireSideReinfBeams(),
+                spec.enableTreadReinfBeams(), spec.enableTirePeripheryReinfBeams(), spec.enableTireSupportBeams(),
+                spec.supportBeamSpring(), spec.supportBeamDamp(),
+                spec.triCollision(), spec.treadTriCollision(), spec.side1TriCollision(), spec.side2TriCollision(),
+                spec.nodeMaterial(), spec.group(),
+                spec.brakeTorque(), spec.parkingTorque(), spec.brakeSpring(),
+                spec.enableBrakeThermals(), spec.brakeDiameter(), spec.brakeMass(),
+                spec.brakeType(), spec.rotorMaterial(), spec.brakeVentingCoef(), spec.padMaterial(),
+                spec.brakeInputSplit(), spec.brakeSplitCoef(),
+                spec.squealCoefNatural(), spec.squealCoefLowSpeed(), spec.squealCoefGlazing(),
+                spec.enableABS(), spec.absSlipRatioTarget(), spec.absHz(),
+                spec.brakePressureInDelay(), spec.brakePressureOutDelay()
+        );
+    }
+
+    private void generateTire(
             // --- 基础标识与连接 ---
             String wheelName, int n1, int n2, int wheelDir, int rays,
             // --- 几何尺寸 ---

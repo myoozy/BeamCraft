@@ -206,7 +206,7 @@ public class JBeamPressureWheelsParser {
                 // 简化车辆专用
                 double hubRadiusSimple = getVal(activeConfig, "hubRadiusSimple", -1, entry.variables);
 
-                vehicle.wheels.generateHub(
+                vehicle.wheels.generateHub(new PhysicsSpecs.WheelHubSpec(
                         wheelName, n1, n2, nodeS, nodeArm, wheelDir, numRays,
                         hubRadius, hubWidth, wheelOffset,
                         hubNodeWeight, hubFrictionCoef,
@@ -225,10 +225,10 @@ public class JBeamPressureWheelsParser {
                         hubcapSupportBeamDeform, hubcapSupportBeamStrength,
                         hubcapNodeWeight, hubcapCenterNodeWeight, hubcapNodeMaterial, hubcapFrictionCoef,
                         hubRadiusSimple
-                );
+                ));
 
                 if (hasTire) {
-                    vehicle.wheels.generateTire(
+                    vehicle.wheels.generateTire(new PhysicsSpecs.WheelTireSpec(
                             wheelName, n1, n2, wheelDir, numRays,
                             radius, tireWidth, wheelOffset,
                             tireNodeWeight, tireFrictionCoef, pressurePSI,
@@ -257,7 +257,7 @@ public class JBeamPressureWheelsParser {
                             squealCoefNatural, squealCoefLowSpeed, squealCoefGlazing,
                             enableABS, absSlipRatioTarget, absHz,
                             brakePressureInDelay, brakePressureOutDelay
-                    );
+                    ));
                 }
             }
         }
