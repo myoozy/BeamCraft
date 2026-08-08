@@ -2,8 +2,10 @@ package me.mzy.beamcraft.client.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import net.minecraft.client.gl.VertexBuffer;
+import net.minecraft.client.util.BufferAllocator;
 import net.minecraft.client.render.BufferBuilder;
 import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.Tessellator;
@@ -224,6 +226,11 @@ public class ComputeSkinningPipeline {
     }
 
     private void createMinecraftVertexBuffer(FlexbodyContainer flex) {
+        int[] indices = buildCombinedIndices(flex);
+        if (indices.length < totalVertices) {
+            throw new IllegalStateException("Indexed vehicle mesh contains unused render vertices");
+        }
+
         mcVbo = new VertexBuffer(VertexBuffer.Usage.STATIC);
         Tessellator tessellator = Tessellator.getInstance();
         BufferBuilder builder = tessellator.begin(
@@ -239,6 +246,17 @@ public class ComputeSkinningPipeline {
                     .light(0)
                     .normal(0, 1, 0);
         }
+        // BufferBuilder controls VertexBuffer's private draw parameters. Pad
+        // with unreferenced vertices so its index count equals our real EBO
+        // count; only the compact vertices above are addressed by that EBO.
+        for (int i = totalVertices; i < indices.length; i++) {
+            builder.vertex(0, 0, 0)
+                    .color(255, 255, 255, 255)
+                    .texture(0, 0)
+                    .overlay(OverlayTexture.DEFAULT_UV)
+                    .light(0)
+                    .normal(0, 1, 0);
+        }
 
         var meshData = builder.end();
         if (meshData == null) {
@@ -247,7 +265,75 @@ public class ComputeSkinningPipeline {
 
         mcVbo.bind();
         mcVbo.upload(meshData);
+        uploadIndexBuffer(indices, VertexFormat.IndexType.smallestFor(indices.length));
         VertexBuffer.unbind();
+    }
+
+    private int[] buildCombinedIndices(FlexbodyContainer flex) {
+        int totalIndexCount = 0;
+        for (int mesh = 0; mesh < flex.meshCount; mesh++) {
+            DaeMeshLoader.RawGeometry geometry = findGeometry(flex, mesh);
+            if (geometry != null) {
+                totalIndexCount += geometry.indexCount;
+            }
+        }
+
+        int[] combined = new int[totalIndexCount];
+        int indexOffset = 0;
+        int vertexOffset = 0;
+        for (int mesh = 0; mesh < flex.meshCount; mesh++) {
+            DaeMeshLoader.RawGeometry geometry = findGeometry(flex, mesh);
+            if (geometry == null) {
+                continue;
+            }
+            for (int index = 0; index < geometry.indexCount; index++) {
+                combined[indexOffset++] = vertexOffset + geometry.indices[index];
+            }
+            vertexOffset += geometry.vertexCount;
+        }
+
+        if (vertexOffset != totalVertices || indexOffset != combined.length) {
+            throw new IllegalStateException("DAE geometry changed while the GPU skinning pipeline was initialized");
+        }
+        return combined;
+    }
+
+    private DaeMeshLoader.RawGeometry findGeometry(FlexbodyContainer flex, int mesh) {
+        if (flex.meshName[mesh].isEmpty()) {
+            return null;
+        }
+        String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[mesh];
+        DaeMeshLoader.RawGeometry geometry = DaeMeshLoader.MESH_CACHE.get(scopedKey);
+        return geometry != null
+                ? geometry
+                : DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[mesh]);
+    }
+
+    private void uploadIndexBuffer(int[] indices, VertexFormat.IndexType indexType) {
+        int bytesPerIndex = indexType == VertexFormat.IndexType.SHORT
+                ? Short.BYTES
+                : Integer.BYTES;
+        int byteCount = indices.length * bytesPerIndex;
+
+        try (BufferAllocator allocator = new BufferAllocator(byteCount)) {
+            long address = allocator.allocate(byteCount);
+            ByteBuffer indexData = MemoryUtil.memByteBuffer(address, byteCount);
+            if (indexType == VertexFormat.IndexType.SHORT) {
+                for (int index : indices) {
+                    indexData.putShort((short) index);
+                }
+            } else {
+                for (int index : indices) {
+                    indexData.putInt(index);
+                }
+            }
+
+            BufferAllocator.CloseableBuffer allocated = allocator.getAllocated();
+            if (allocated == null) {
+                throw new IllegalStateException("Failed to allocate the vehicle index buffer");
+            }
+            mcVbo.uploadIndexBuffer(allocated);
+        }
     }
 
     private void createOutputBufferAndConfigureVertexArray() {

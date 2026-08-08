@@ -19,13 +19,13 @@ public class DaeMeshLoader {
 
     public static class SubMesh {
         public String materialName;
-        public int startVertex;
-        public int vertexCount;
+        public int startIndex;
+        public int indexCount;
 
-        public SubMesh(String materialName, int startVertex, int vertexCount) {
+        public SubMesh(String materialName, int startIndex, int indexCount) {
             this.materialName = materialName;
-            this.startVertex = startVertex;
-            this.vertexCount = vertexCount;
+            this.startIndex = startIndex;
+            this.indexCount = indexCount;
         }
     }
 
@@ -33,7 +33,9 @@ public class DaeMeshLoader {
         public float[] positions;
         public float[] normals;
         public float[] uvs;
+        public int[] indices;
         public int vertexCount;
+        public int indexCount;
         public List<SubMesh> subMeshes;
 
         // 引用计数器
@@ -248,20 +250,25 @@ public class DaeMeshLoader {
             }
 
             if (totalTriangleFaces > 0) {
-                int totalRenderVertices = totalTriangleFaces * 3;
+                int totalRenderVertices = 0;
+                for (AIMesh mesh : attachedMeshSlices) {
+                    totalRenderVertices += mesh.mNumVertices();
+                }
+                int totalRenderIndices = totalTriangleFaces * 3;
                 float[] mergedPositions = new float[totalRenderVertices * 3];
                 float[] mergedNormals   = new float[totalRenderVertices * 3];
                 float[] mergedUvs       = new float[totalRenderVertices * 2];
+                int[] mergedIndices     = new int[totalRenderIndices];
                 List<SubMesh> subMeshes = new ArrayList<>();
 
                 int currentMergedVertPtr = 0;
+                int currentMergedIndexPtr = 0;
                 // 复用临时向量对象，避免高频创建销毁产生内存垃圾
                 Vector3f tempPos = new Vector3f();
                 Vector3f tempNorm = new Vector3f();
 
                 for (AIMesh aiMesh : attachedMeshSlices) {
-                    int subMeshStartVertex = currentMergedVertPtr;
-                    int subMeshAddedVertices = 0;
+                    int subMeshStartIndex = currentMergedIndexPtr;
 
                     String materialNameStr = "default";
                     int matIdx = aiMesh.mMaterialIndex();
@@ -278,57 +285,71 @@ public class DaeMeshLoader {
                     AIVector3D.Buffer posBuffer = aiMesh.mVertices();
                     AIVector3D.Buffer normBuffer = aiMesh.mNormals();
                     AIVector3D.Buffer uvBuffer = aiMesh.mTextureCoords(0);
-
                     int faceCount = aiMesh.mNumFaces();
-                    for (int f = 0; f < faceCount; f++) {
-                        AIFace face = facesBuffer.get(f);
-                        if (face.mNumIndices() != 3) continue;
-
-                        IntBuffer indices = face.mIndices();
-                        int[] targetIndices = new int[] { indices.get(0), indices.get(1), indices.get(2) };
-
-                        for (int vIdx : targetIndices) {
-                            // 读取原生顶点并注入绝对变换矩阵
-                            AIVector3D pos = posBuffer.get(vIdx);
-                            tempPos.set(pos.x(), pos.y(), pos.z());
-                            globalTransform.transformPosition(tempPos);
-
-                            mergedPositions[currentMergedVertPtr * 3]     = tempPos.x;
-                            mergedPositions[currentMergedVertPtr * 3 + 1] = tempPos.y;
-                            mergedPositions[currentMergedVertPtr * 3 + 2] = tempPos.z;
-
-                            // 同步变换法线向量方向 (仅受旋转影响)
-                            if (normBuffer != null) {
-                                AIVector3D norm = normBuffer.get(vIdx);
-                                tempNorm.set(norm.x(), norm.y(), norm.z());
-                                globalTransform.transformDirection(tempNorm);
-                                tempNorm.normalize(); // 确保法线单位化
-
-                                mergedNormals[currentMergedVertPtr * 3]     = tempNorm.x;
-                                mergedNormals[currentMergedVertPtr * 3 + 1] = tempNorm.y;
-                                mergedNormals[currentMergedVertPtr * 3 + 2] = tempNorm.z;
-                            } else {
-                                mergedNormals[currentMergedVertPtr * 3]     = 0f;
-                                mergedNormals[currentMergedVertPtr * 3 + 1] = 0f;
-                                mergedNormals[currentMergedVertPtr * 3 + 2] = 1f;
-                            }
-
-                            if (uvBuffer != null) {
-                                AIVector3D uv = uvBuffer.get(vIdx);
-                                mergedUvs[currentMergedVertPtr * 2]     = uv.x();
-                                mergedUvs[currentMergedVertPtr * 2 + 1] = 1.0f - uv.y(); // 对齐 MC 纹理坐标
-                            } else {
-                                mergedUvs[currentMergedVertPtr * 2]     = 0f;
-                                mergedUvs[currentMergedVertPtr * 2 + 1] = 0f;
-                            }
-
-                            currentMergedVertPtr++;
-                            subMeshAddedVertices++;
+                    boolean[] usedVertices = new boolean[aiMesh.mNumVertices()];
+                    for (int faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+                        AIFace face = facesBuffer.get(faceIndex);
+                        if (face.mNumIndices() != 3) {
+                            continue;
                         }
+                        IntBuffer faceIndices = face.mIndices();
+                        usedVertices[faceIndices.get(0)] = true;
+                        usedVertices[faceIndices.get(1)] = true;
+                        usedVertices[faceIndices.get(2)] = true;
                     }
 
-                    if (subMeshAddedVertices > 0) {
-                        subMeshes.add(new SubMesh(materialNameStr, subMeshStartVertex, subMeshAddedVertices));
+                    int[] localToMergedVertex = new int[aiMesh.mNumVertices()];
+                    Arrays.fill(localToMergedVertex, -1);
+                    for (int vertex = 0; vertex < aiMesh.mNumVertices(); vertex++) {
+                        if (!usedVertices[vertex]) {
+                            continue;
+                        }
+                        localToMergedVertex[vertex] = currentMergedVertPtr;
+                        AIVector3D pos = posBuffer.get(vertex);
+                        tempPos.set(pos.x(), pos.y(), pos.z());
+                        globalTransform.transformPosition(tempPos);
+
+                        mergedPositions[currentMergedVertPtr * 3] = tempPos.x;
+                        mergedPositions[currentMergedVertPtr * 3 + 1] = tempPos.y;
+                        mergedPositions[currentMergedVertPtr * 3 + 2] = tempPos.z;
+
+                        if (normBuffer != null) {
+                            AIVector3D norm = normBuffer.get(vertex);
+                            tempNorm.set(norm.x(), norm.y(), norm.z());
+                            globalTransform.transformDirection(tempNorm);
+                            tempNorm.normalize();
+                            mergedNormals[currentMergedVertPtr * 3] = tempNorm.x;
+                            mergedNormals[currentMergedVertPtr * 3 + 1] = tempNorm.y;
+                            mergedNormals[currentMergedVertPtr * 3 + 2] = tempNorm.z;
+                        } else {
+                            mergedNormals[currentMergedVertPtr * 3] = 0.0f;
+                            mergedNormals[currentMergedVertPtr * 3 + 1] = 0.0f;
+                            mergedNormals[currentMergedVertPtr * 3 + 2] = 1.0f;
+                        }
+
+                        if (uvBuffer != null) {
+                            AIVector3D uv = uvBuffer.get(vertex);
+                            mergedUvs[currentMergedVertPtr * 2] = uv.x();
+                            mergedUvs[currentMergedVertPtr * 2 + 1] = 1.0f - uv.y();
+                        }
+
+                        currentMergedVertPtr++;
+                    }
+
+                    for (int faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+                        AIFace face = facesBuffer.get(faceIndex);
+                        if (face.mNumIndices() != 3) {
+                            continue;
+                        }
+                        IntBuffer faceIndices = face.mIndices();
+                        mergedIndices[currentMergedIndexPtr++] = localToMergedVertex[faceIndices.get(0)];
+                        mergedIndices[currentMergedIndexPtr++] = localToMergedVertex[faceIndices.get(1)];
+                        mergedIndices[currentMergedIndexPtr++] = localToMergedVertex[faceIndices.get(2)];
+                    }
+
+                    int subMeshIndexCount = currentMergedIndexPtr - subMeshStartIndex;
+                    if (subMeshIndexCount > 0) {
+                        subMeshes.add(new SubMesh(materialNameStr, subMeshStartIndex, subMeshIndexCount));
                     }
                 }
 
@@ -336,7 +357,9 @@ public class DaeMeshLoader {
                 unifiedGeometry.positions   = mergedPositions;
                 unifiedGeometry.normals     = mergedNormals;
                 unifiedGeometry.uvs         = mergedUvs;
-                unifiedGeometry.vertexCount = totalRenderVertices;
+                unifiedGeometry.indices     = mergedIndices;
+                unifiedGeometry.vertexCount = currentMergedVertPtr;
+                unifiedGeometry.indexCount  = currentMergedIndexPtr;
                 unifiedGeometry.subMeshes   = subMeshes;
 
                 // 完美映射：基于原生节点名与切片名进行双重全域覆盖
