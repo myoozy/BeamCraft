@@ -23,6 +23,8 @@ import org.lwjgl.glfw.GLFW;
 import java.io.File;
 
 public class BeamCraftClient implements ClientModInitializer {
+	private static final boolean DEBUG_DRAW = false;
+	private static final boolean DEBUG_SHOW_BEAMS = true;
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
 	public static final double DELTA_TIME = 0.05;
@@ -122,7 +124,6 @@ public class BeamCraftClient implements ClientModInitializer {
 		// 3. 渲染循环 (遍历所有车，并将局部坐标叠加上实体坐标)
 		WorldRenderEvents.AFTER_ENTITIES.register(context -> {
 			PhysicsWorld world = PHYSICS_WORLD;
-			boolean DEBUG_DRAW = true;
 			if (!DEBUG_DRAW) return;
 			if (world == null || world.vehicles.isEmpty()) return;
 
@@ -143,8 +144,6 @@ public class BeamCraftClient implements ClientModInitializer {
 				double eX = vehicle.parentEntity.getX();
 				double eY = vehicle.parentEntity.getY();
 				double eZ = vehicle.parentEntity.getZ();
-
-				boolean DEBUG_SHOW_BEAMS = true;
 
 				// === 1. 渲染梁/骨架 ===
 				if (DEBUG_SHOW_BEAMS) {

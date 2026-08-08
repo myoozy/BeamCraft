@@ -4,6 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.VertexBuffer;
 import net.minecraft.client.util.BufferAllocator;
 import net.minecraft.client.render.BufferBuilder;
@@ -20,6 +21,7 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.system.MemoryUtil;
+import org.joml.Matrix4f;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -49,8 +51,8 @@ public class ComputeSkinningPipeline {
     private static final int TEXTURE_UNIT_OFFSETS = 2;
     private static final int TEXTURE_UNIT_NODES = 3;
 
-    public VertexBuffer mcVbo;
-    public int customPosNormVbo = -1;
+    private VertexBuffer mcVbo;
+    private int customPosNormVbo = -1;
 
     private final int[] rigBuffers = {-1, -1, -1};
     private final int[] rigTextures = {-1, -1, -1};
@@ -92,6 +94,13 @@ public class ComputeSkinningPipeline {
             createOutputBufferAndConfigureVertexArray();
             transformVao = GL30.glGenVertexArrays();
             state = State.READY;
+            BeamCraft.LOGGER.info(
+                    "Initialized OpenGL 3.2 GPU skinning for {} vertices on {} / {} ({})",
+                    totalVertices,
+                    GL11.glGetString(GL11.GL_VENDOR),
+                    GL11.glGetString(GL11.GL_RENDERER),
+                    GL11.glGetString(GL11.GL_VERSION)
+            );
             return true;
         } catch (RuntimeException | IOException exception) {
             BeamCraft.LOGGER.error("Failed to initialize GPU-only soft-body skinning", exception);
@@ -107,10 +116,6 @@ public class ComputeSkinningPipeline {
 
     public boolean hasValidOutput() {
         return state == State.READY && hasValidOutput;
-    }
-
-    public int getLightAttributeIndex() {
-        return lightAttributeIndex;
     }
 
     private void validateCapabilities() {
@@ -145,12 +150,15 @@ public class ComputeSkinningPipeline {
 
     private void configureSamplerUnits() {
         int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-        GL20.glUseProgram(transformProgramId);
-        setSampler("uRigWeights", TEXTURE_UNIT_WEIGHTS);
-        setSampler("uRigNormals", TEXTURE_UNIT_NORMALS);
-        setSampler("uRigOffsets", TEXTURE_UNIT_OFFSETS);
-        setSampler("uPhysicsNodes", TEXTURE_UNIT_NODES);
-        GL20.glUseProgram(previousProgram);
+        try {
+            GL20.glUseProgram(transformProgramId);
+            setSampler("uRigWeights", TEXTURE_UNIT_WEIGHTS);
+            setSampler("uRigNormals", TEXTURE_UNIT_NORMALS);
+            setSampler("uRigOffsets", TEXTURE_UNIT_OFFSETS);
+            setSampler("uPhysicsNodes", TEXTURE_UNIT_NODES);
+        } finally {
+            GL20.glUseProgram(previousProgram);
+        }
     }
 
     private void setSampler(String name, int textureUnit) {
@@ -442,6 +450,7 @@ public class ComputeSkinningPipeline {
                 GL30.GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 0
         );
         boolean rasterizerDiscardWasEnabled = GL11.glIsEnabled(GL30.GL_RASTERIZER_DISCARD);
+        boolean transformFeedbackActive = false;
         int[] previousTextureBindings = new int[4];
 
         try {
@@ -455,9 +464,14 @@ public class ComputeSkinningPipeline {
             GL30.glBindBufferBase(GL30.GL_TRANSFORM_FEEDBACK_BUFFER, 0, customPosNormVbo);
             GL11.glEnable(GL30.GL_RASTERIZER_DISCARD);
             GL30.glBeginTransformFeedback(GL11.GL_POINTS);
+            transformFeedbackActive = true;
             GL11.glDrawArrays(GL11.GL_POINTS, 0, totalVertices);
             GL30.glEndTransformFeedback();
+            transformFeedbackActive = false;
         } finally {
+            if (transformFeedbackActive) {
+                GL30.glEndTransformFeedback();
+            }
             if (!rasterizerDiscardWasEnabled) {
                 GL11.glDisable(GL30.GL_RASTERIZER_DISCARD);
             }
@@ -474,6 +488,28 @@ public class ComputeSkinningPipeline {
                 GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, previousTextureBindings[unit]);
             }
             GL13.glActiveTexture(previousActiveTexture);
+        }
+    }
+
+    /**
+     * Draws the latest skinned output. Keeping the raw OpenGL vertex attribute
+     * operation here gives a future non-OpenGL backend a single replacement
+     * boundary instead of leaking GL details into the entity renderer.
+     */
+    public void draw(Matrix4f modelView, Matrix4f projection, ShaderProgram shader, int packedLight) {
+        RenderSystem.assertOnRenderThread();
+        if (!hasValidOutput()) {
+            return;
+        }
+
+        mcVbo.bind();
+        try {
+            int blockLight = packedLight & 0xFFFF;
+            int skyLight = packedLight >>> 16 & 0xFFFF;
+            GL30.glVertexAttribI2i(lightAttributeIndex, blockLight, skyLight);
+            mcVbo.draw(modelView, projection, shader);
+        } finally {
+            VertexBuffer.unbind();
         }
     }
 
