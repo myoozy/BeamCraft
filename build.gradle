@@ -43,6 +43,8 @@ dependencies {
 
 	// 引入 LWJGL 3 的 Assimp 绑定与当前平台的本地库
 	implementation "org.lwjgl:lwjgl-assimp:3.3.3"
+	include "org.lwjgl:lwjgl-assimp:3.3.3"
+	include "org.lwjgl:lwjgl-assimp:3.3.3:natives-windows"
 	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-windows"
 	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-linux"
 	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-macos"
