@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client;
 
+import me.mzy.beamcraft.client.material.MaterialLibrary;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
@@ -79,6 +80,7 @@ public final class ClientVehicleManager {
         );
 
         DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
+        MaterialLibrary.requireMaterials(BeamCraftClient.VEHICLES_DIR, rootPart);
         boolean assembled = new JBeamAssembler().assembleVehicle(
                 rootPart,
                 localConfig,
@@ -87,6 +89,7 @@ public final class ClientVehicleManager {
         );
         if (!assembled) {
             DaeMeshLoader.releaseVehicleModels(rootPart);
+            MaterialLibrary.releaseMaterials(rootPart);
             System.err.println("Vehicle assembly failed for entity " + vehicleEntity.getId());
             return;
         }
@@ -148,6 +151,7 @@ public final class ClientVehicleManager {
 
     private static void releaseVehicle(SoftBodyVehicle vehicle) {
         DaeMeshLoader.releaseVehicleModels(vehicle.flexbodies.vehicleNamespace);
+        MaterialLibrary.releaseMaterials(vehicle.flexbodies.vehicleNamespace);
         // PhysicsWorld.removeVehicle() clears the vehicle and therefore closes
         // its GPU skinning pipeline exactly once.
         BeamCraftClient.PHYSICS_WORLD.removeVehicle(vehicle);
