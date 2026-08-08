@@ -110,7 +110,11 @@ public class FlexbodyBindingUtil {
 
                 double nOrigX = 0, nOrigY = 0, nOrigZ = 1;
                 if (norms != null && v * 3 + 2 < norms.length) {
-                    double rawNx = norms[v * 3], rawNy = norms[v * 3 + 1], rawNz = norms[v * 3 + 2];
+                    // A normal is transformed by the inverse transpose of the
+                    // position scale, not by the position scale itself.
+                    double rawNx = inverseScaleNormal(norms[v * 3], sX);
+                    double rawNy = inverseScaleNormal(norms[v * 3 + 1], sY);
+                    double rawNz = inverseScaleNormal(norms[v * 3 + 2], sZ);
                     double nx1 = rawNx * cosZ - rawNy * sinZ, ny1 = rawNx * sinZ + rawNy * cosZ, nz1 = rawNz;
                     double nx2 = nx1, ny2 = ny1 * cosX - nz1 * sinX, nz2 = ny1 * sinX + nz1 * cosX;
                     double nx3 = nx2 * cosY + nz2 * sinY, ny3 = ny2, nz3 = -nx2 * sinY + nz2 * cosY;
@@ -140,6 +144,10 @@ public class FlexbodyBindingUtil {
         }
         flex.isSkinningBound = true;
         System.out.println("🎨 工业级平滑蒙皮出厂绑定完美闭环！总渲染点数: " + flex.totalVertexCount);
+    }
+
+    private static double inverseScaleNormal(double component, double scale) {
+        return Math.abs(scale) > 1.0e-12 ? component / scale : 0.0;
     }
 
     private static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,

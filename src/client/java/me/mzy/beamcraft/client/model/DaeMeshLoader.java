@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.model;
 
+import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.assimp.*;
@@ -222,6 +223,14 @@ public class DaeMeshLoader {
 
         // 2. 累乘计算出当前节点的全局绝对变换矩阵：Global = Parent * Local
         Matrix4f globalTransform = new Matrix4f(parentTransform).mul(localTransform);
+        Matrix3f normalTransform = new Matrix3f(globalTransform);
+        if (Math.abs(normalTransform.determinant()) > 1.0e-8f) {
+            normalTransform.invert().transpose();
+        } else {
+            // Keep malformed singular DAE transforms from injecting NaNs into
+            // every subsequent GPU skinning update.
+            normalTransform.identity();
+        }
 
         String rawNodeName = node.mName().dataString();
         String cleanNodeName = cleanIdentifier(rawNodeName);
@@ -316,8 +325,12 @@ public class DaeMeshLoader {
                         if (normBuffer != null) {
                             AIVector3D norm = normBuffer.get(vertex);
                             tempNorm.set(norm.x(), norm.y(), norm.z());
-                            globalTransform.transformDirection(tempNorm);
-                            tempNorm.normalize();
+                            normalTransform.transform(tempNorm);
+                            if (tempNorm.lengthSquared() > 1.0e-12f) {
+                                tempNorm.normalize();
+                            } else {
+                                tempNorm.set(0.0f, 0.0f, 1.0f);
+                            }
                             mergedNormals[currentMergedVertPtr * 3] = tempNorm.x;
                             mergedNormals[currentMergedVertPtr * 3 + 1] = tempNorm.y;
                             mergedNormals[currentMergedVertPtr * 3 + 2] = tempNorm.z;
