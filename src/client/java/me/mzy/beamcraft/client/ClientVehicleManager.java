@@ -1,8 +1,12 @@
 package me.mzy.beamcraft.client;
 
-import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
-import me.mzy.beamcraft.client.physics.*;
+import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
+import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import me.mzy.beamcraft.client.physics.JBeamAssembler;
+import me.mzy.beamcraft.client.physics.JBeamLoader;
+import me.mzy.beamcraft.client.physics.NodeContainer;
+import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.utility.Utility;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
@@ -13,102 +17,140 @@ import net.minecraft.util.math.Box;
 import java.util.HashMap;
 import java.util.Map;
 
-public class ClientVehicleManager {
-    // 实体 ID 映射物理载具实例
+public final class ClientVehicleManager {
+
     private static final Map<Integer, SoftBodyVehicle> VEHICLE_MAP = new HashMap<>();
 
-    // 全局共享的插值数组（所有车轮流用，消灭内存分配）
+    // Reused for every vehicle because each upload is completed before the next
+    // vehicle overwrites these interpolation arrays.
     private static float[] sharedInterpX = new float[NodeContainer.INIT_NODE_CAP];
     private static float[] sharedInterpY = new float[NodeContainer.INIT_NODE_CAP];
     private static float[] sharedInterpZ = new float[NodeContainer.INIT_NODE_CAP];
 
-    // 防光影重复计算的时间戳
-    private static long lastComputedFrameTime = 0;
+    private ClientVehicleManager() {
+    }
 
     public static void update(MinecraftClient client) {
         if (client.world == null) {
-            if (!VEHICLE_MAP.isEmpty()) {
-                VEHICLE_MAP.values().forEach(BeamCraftClient.PHYSICS_WORLD::removeVehicle);
-                VEHICLE_MAP.clear();
-            }
+            clearVehicles();
             return;
         }
 
-        // 1. 扫描存活的实体
         for (Entity entity : client.world.getEntities()) {
-            if (entity instanceof PhysicsVehicleEntity vehicleEntity) {
-                int id = vehicleEntity.getId();
+            if (!(entity instanceof PhysicsVehicleEntity vehicleEntity)) {
+                continue;
+            }
 
-                // 2. 发现新实体且尚未组装物理模型
-                if (!VEHICLE_MAP.containsKey(id)) {
-                    String rootPart = vehicleEntity.getRootPartName();
-                    String pcFile = vehicleEntity.getPcFileName();
-
-                    if (!rootPart.isEmpty()) {
-                        SoftBodyVehicle softBody = new SoftBodyVehicle(vehicleEntity);
-
-                        // 在客户端独立完成数据加载与组装
-                        Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
-                        Map<String, String> localConfig = new HashMap<>();
-                        JBeamLoader.loadVehicle(BeamCraftClient.VEHICLES_DIR, rootPart, pcFile, localRegistry, localConfig);
-
-                        DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
-
-                        JBeamAssembler assembler = new JBeamAssembler();
-                        boolean success = assembler.assembleVehicle(rootPart, localConfig, localRegistry, softBody);
-
-                        if (!success) {
-                            System.err.println("⚠️ 车辆组装出现错误，实体 ID: " + id);
-                        }
-
-                        softBody.nodes.rotateNodes(client.player.getYaw(), 0, 0);
-
-                        // 直接调用现有的 PhysicsWorld 接口安全添加
-                        BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
-                        VEHICLE_MAP.put(id, softBody);
-                    }
-                }
-                else {
-                    SoftBodyVehicle softBody = VEHICLE_MAP.get(id);
-
-                    double minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
-                    double maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
-
-                    for (int n = 0; n < softBody.nodes.count; n++) {
-                        double nx = softBody.nodes.renderSnapCurrX[n];
-                        double ny = softBody.nodes.renderSnapCurrY[n];
-                        double nz = softBody.nodes.renderSnapCurrZ[n];
-
-                        minX = Math.min(minX, nx); maxX = Math.max(maxX, nx);
-                        minY = Math.min(minY, ny); maxY = Math.max(maxY, ny);
-                        minZ = Math.min(minZ, nz); maxZ = Math.max(maxZ, nz);
-                    }
-
-                    minX += softBody.parentEntity.getX(); maxX += softBody.parentEntity.getX();
-                    minY += softBody.parentEntity.getY(); maxY += softBody.parentEntity.getY();
-                    minZ += softBody.parentEntity.getZ(); maxZ += softBody.parentEntity.getZ();
-
-                    softBody.parentEntity.setBoundingBox(new Box(minX, minY, minZ, maxX, maxY, maxZ));
-                }
+            int entityId = vehicleEntity.getId();
+            SoftBodyVehicle existing = VEHICLE_MAP.get(entityId);
+            if (existing == null) {
+                createVehicle(client, vehicleEntity);
+            } else {
+                updateEntityBounds(existing);
             }
         }
 
-        // 3. 回收已被移除的实体物理资源
         VEHICLE_MAP.entrySet().removeIf(entry -> {
             SoftBodyVehicle vehicle = entry.getValue();
-            if (vehicle.parentEntity == null || vehicle.parentEntity.isRemoved()) {
-                // 在删除车辆前删除它的mesh
-                DaeMeshLoader.releaseVehicleModels(vehicle.flexbodies.vehicleNamespace);
-                // 直接调用现有的 PhysicsWorld 接口安全移除车辆
-                BeamCraftClient.PHYSICS_WORLD.removeVehicle(vehicle);
-                // 释放显存
-                if (vehicle.flexbodies.skinningPipeline != null) {
-                    vehicle.flexbodies.skinningPipeline.free();
-                }
-                return true;
+            if (vehicle.parentEntity != null && !vehicle.parentEntity.isRemoved()) {
+                return false;
             }
-            return false;
+
+            releaseVehicle(vehicle);
+            return true;
         });
+    }
+
+    private static void createVehicle(MinecraftClient client, PhysicsVehicleEntity vehicleEntity) {
+        String rootPart = vehicleEntity.getRootPartName();
+        if (rootPart.isEmpty()) {
+            return;
+        }
+
+        SoftBodyVehicle softBody = new SoftBodyVehicle(vehicleEntity);
+        Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
+        Map<String, String> localConfig = new HashMap<>();
+        JBeamLoader.loadVehicle(
+                BeamCraftClient.VEHICLES_DIR,
+                rootPart,
+                vehicleEntity.getPcFileName(),
+                localRegistry,
+                localConfig
+        );
+
+        DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
+        boolean assembled = new JBeamAssembler().assembleVehicle(
+                rootPart,
+                localConfig,
+                localRegistry,
+                softBody
+        );
+        if (!assembled) {
+            DaeMeshLoader.releaseVehicleModels(rootPart);
+            System.err.println("Vehicle assembly failed for entity " + vehicleEntity.getId());
+            return;
+        }
+
+        float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
+        softBody.nodes.rotateNodes(playerYaw, 0, 0);
+        BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
+        VEHICLE_MAP.put(vehicleEntity.getId(), softBody);
+    }
+
+    private static void updateEntityBounds(SoftBodyVehicle vehicle) {
+        NodeContainer nodes = vehicle.nodes;
+        if (nodes.count == 0 || vehicle.parentEntity == null) {
+            return;
+        }
+
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double minZ = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        double maxZ = Double.NEGATIVE_INFINITY;
+
+        for (int node = 0; node < nodes.count; node++) {
+            double x = nodes.renderSnapCurrX[node];
+            double y = nodes.renderSnapCurrY[node];
+            double z = nodes.renderSnapCurrZ[node];
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            minZ = Math.min(minZ, z);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            maxZ = Math.max(maxZ, z);
+        }
+
+        double entityX = vehicle.parentEntity.getX();
+        double entityY = vehicle.parentEntity.getY();
+        double entityZ = vehicle.parentEntity.getZ();
+        vehicle.parentEntity.setBoundingBox(new Box(
+                minX + entityX,
+                minY + entityY,
+                minZ + entityZ,
+                maxX + entityX,
+                maxY + entityY,
+                maxZ + entityZ
+        ));
+    }
+
+    private static void clearVehicles() {
+        if (VEHICLE_MAP.isEmpty()) {
+            return;
+        }
+
+        for (SoftBodyVehicle vehicle : VEHICLE_MAP.values()) {
+            releaseVehicle(vehicle);
+        }
+        VEHICLE_MAP.clear();
+    }
+
+    private static void releaseVehicle(SoftBodyVehicle vehicle) {
+        DaeMeshLoader.releaseVehicleModels(vehicle.flexbodies.vehicleNamespace);
+        // PhysicsWorld.removeVehicle() clears the vehicle and therefore closes
+        // its GPU skinning pipeline exactly once.
+        BeamCraftClient.PHYSICS_WORLD.removeVehicle(vehicle);
     }
 
     public static SoftBodyVehicle getVehicle(int entityId) {
@@ -116,48 +158,71 @@ public class ClientVehicleManager {
     }
 
     public static void initRenderHooks() {
-        // 注册在 Minecraft 开始绘制所有实体之前
         WorldRenderEvents.BEFORE_ENTITIES.register(context -> {
-            // 光影模组（如 Iris）一帧可能会调用这里多次（比如为了画阴影）
-            // 我们利用系统时间戳拦截，保证一物理帧/渲染帧只做一次 Compute
-            long currentTime = System.currentTimeMillis();
-            // 如果距离上次计算小于 2 毫秒（通常一帧是 16ms），说明是光影在反复横跳，直接跳过
-            if (currentTime - lastComputedFrameTime < 2) return;
-            lastComputedFrameTime = currentTime;
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.world == null || VEHICLE_MAP.isEmpty()) {
+                return;
+            }
 
-            float partialTicks = context.tickCounter().getTickDelta(true);
+            float tickDelta = context.tickCounter().getTickDelta(true);
+            long renderMoment = client.world.getTime() << 32
+                    ^ Integer.toUnsignedLong(Float.floatToRawIntBits(tickDelta));
 
-            // 遍历所有活着的车
             for (SoftBodyVehicle vehicle : VEHICLE_MAP.values()) {
                 FlexbodyContainer flex = vehicle.flexbodies;
                 NodeContainer nodes = vehicle.nodes;
 
-                // 确保它准备好了
-                if (flex == null || flex.skinningPipeline.customPosNormVbo == -1) continue;
-
-                int nodeCount = nodes.count;
-                if (nodeCount == 0) continue;
-
-                // 动态扩容共享数组 (如果这辆车节点特别多)
-                if (nodeCount > sharedInterpX.length) {
-                    sharedInterpX = Utility.expand(sharedInterpX, nodeCount);
-                    sharedInterpY = Utility.expand(sharedInterpY, nodeCount);
-                    sharedInterpZ = Utility.expand(sharedInterpZ, nodeCount);
+                if (!flex.isSkinningBound) {
+                    FlexbodyBindingUtil.performBinding(flex, vehicle);
+                }
+                if (flex.totalVertexCount == 0 || nodes.count == 0) {
+                    continue;
+                }
+                if (!flex.skinningPipeline.isReady()
+                        && !flex.skinningPipeline.init(flex, nodes.count)) {
+                    continue;
                 }
 
-                // 插值逻辑
-                for (int n = 0; n < nodeCount; n++) {
-                    sharedInterpX[n] = (float) (nodes.renderSnapPrevX[n] + (nodes.renderSnapCurrX[n] - nodes.renderSnapPrevX[n]) * partialTicks);
-                    sharedInterpY[n] = (float) (nodes.renderSnapPrevY[n] + (nodes.renderSnapCurrY[n] - nodes.renderSnapPrevY[n]) * partialTicks);
-                    sharedInterpZ[n] = (float) (nodes.renderSnapPrevZ[n] + (nodes.renderSnapCurrZ[n] - nodes.renderSnapPrevZ[n]) * partialTicks);
+                ensureInterpolationCapacity(nodes.count);
+                for (int node = 0; node < nodes.count; node++) {
+                    sharedInterpX[node] = interpolate(
+                            nodes.renderSnapPrevX[node],
+                            nodes.renderSnapCurrX[node],
+                            tickDelta
+                    );
+                    sharedInterpY[node] = interpolate(
+                            nodes.renderSnapPrevY[node],
+                            nodes.renderSnapCurrY[node],
+                            tickDelta
+                    );
+                    sharedInterpZ[node] = interpolate(
+                            nodes.renderSnapPrevZ[node],
+                            nodes.renderSnapCurrZ[node],
+                            tickDelta
+                    );
                 }
 
-                // 派发 Compute Shader（CPU 会把数组里的数据传给显存，然后立刻返回，无需等待 GPU）
-                flex.skinningPipeline.dispatchCompute(sharedInterpX, sharedInterpY, sharedInterpZ, nodeCount);
+                flex.skinningPipeline.updateGpuSkinning(
+                        sharedInterpX,
+                        sharedInterpY,
+                        sharedInterpZ,
+                        nodes.count,
+                        renderMoment
+                );
             }
-
-            // 有车都派发完了，放一个全局屏障！
-            // 告诉显卡：等上面那一堆蒙皮全都算完，才准往下画画面！
         });
+    }
+
+    private static float interpolate(double previous, double current, float tickDelta) {
+        return (float) (previous + (current - previous) * tickDelta);
+    }
+
+    private static void ensureInterpolationCapacity(int nodeCount) {
+        if (nodeCount <= sharedInterpX.length) {
+            return;
+        }
+        sharedInterpX = Utility.expand(sharedInterpX, nodeCount);
+        sharedInterpY = Utility.expand(sharedInterpY, nodeCount);
+        sharedInterpZ = Utility.expand(sharedInterpZ, nodeCount);
     }
 }

@@ -65,6 +65,7 @@ public class ComputeSkinningPipeline {
 
     private State state = State.NEW;
     private boolean hasValidOutput;
+    private long lastRenderMoment = Long.MIN_VALUE;
 
     public boolean init(FlexbodyContainer flex, int requestedNodeCapacity) {
         RenderSystem.assertOnRenderThread();
@@ -281,10 +282,19 @@ public class ComputeSkinningPipeline {
         return index;
     }
 
-    public boolean dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes) {
+    public boolean updateGpuSkinning(
+            float[] interpX,
+            float[] interpY,
+            float[] interpZ,
+            int activeNodes,
+            long renderMoment
+    ) {
         RenderSystem.assertOnRenderThread();
         if (state != State.READY || activeNodes <= 0) {
             return false;
+        }
+        if (hasValidOutput && lastRenderMoment == renderMoment) {
+            return true;
         }
 
         try {
@@ -292,6 +302,7 @@ public class ComputeSkinningPipeline {
             uploadNodes(interpX, interpY, interpZ, activeNodes);
             runTransformFeedback();
             hasValidOutput = true;
+            lastRenderMoment = renderMoment;
             return true;
         } catch (RuntimeException exception) {
             BeamCraft.LOGGER.error("GPU soft-body skinning failed; this vehicle will no longer be rendered", exception);
@@ -387,10 +398,16 @@ public class ComputeSkinningPipeline {
     }
 
     public void free() {
-        RenderSystem.assertOnRenderThread();
-        releaseGlResources();
+        if (state == State.CLOSED) {
+            return;
+        }
         state = State.CLOSED;
         hasValidOutput = false;
+        if (RenderSystem.isOnRenderThread()) {
+            releaseGlResources();
+        } else {
+            RenderSystem.recordRenderCall(this::releaseGlResources);
+        }
     }
 
     private void releaseGlResources() {

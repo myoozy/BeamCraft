@@ -54,10 +54,6 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             return;
         }
 
-        if (!flex.skinningPipeline.isReady()
-                && !flex.skinningPipeline.init(flex, vehicle.nodes.count)) {
-            return;
-        }
         if (!flex.skinningPipeline.hasValidOutput()) {
             return;
         }
