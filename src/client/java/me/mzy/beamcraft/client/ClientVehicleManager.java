@@ -9,7 +9,6 @@ import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.Box;
-import org.lwjgl.opengl.GL43;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -127,7 +126,6 @@ public class ClientVehicleManager {
             lastComputedFrameTime = currentTime;
 
             float partialTicks = context.tickCounter().getTickDelta(true);
-            boolean dispatchedAny = false;
 
             // 遍历所有活着的车
             for (SoftBodyVehicle vehicle : VEHICLE_MAP.values()) {
@@ -156,14 +154,10 @@ public class ClientVehicleManager {
 
                 // 派发 Compute Shader（CPU 会把数组里的数据传给显存，然后立刻返回，无需等待 GPU）
                 flex.skinningPipeline.dispatchCompute(sharedInterpX, sharedInterpY, sharedInterpZ, nodeCount);
-                dispatchedAny = true;
             }
 
             // 有车都派发完了，放一个全局屏障！
             // 告诉显卡：等上面那一堆蒙皮全都算完，才准往下画画面！
-            if (dispatchedAny) {
-                GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-            }
         });
     }
 }
