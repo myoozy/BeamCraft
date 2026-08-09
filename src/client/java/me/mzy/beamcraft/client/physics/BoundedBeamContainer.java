@@ -56,34 +56,20 @@ public class BoundedBeamContainer extends BeamContainer {
      * @param inDampRebound     回弹阻尼，<0 时回退至普通阻尼
      * @param inDampReboundFast 高速回弹阻尼，<0 时回退至 inDampRebound
      */
-    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
-                        int node1Idx, int node2Idx, double nodeDist,
-                        double beamSpring, double beamDamp,
-                        double beamDeform, double beamStrength,
-                        double precomp, double precompRange, double precompTime,
-                        double beamShortBound, double beamLongBound,
-                        double beamShortBoundRange, double beamLongBoundRange,
-                        double beamLimitSpring, double beamLimitDamp,
-                        double inDampVelSplit, double inDampFast,
-                        double inDampRebound, double inDampReboundFast) {
-        // 复杂阻尼默认值处理
-        float finalVelSplit = (float) ((inDampVelSplit < 0) ? KINDA_BIG_NUMBER : inDampVelSplit);
-        float finalFast = (float) ((inDampFast < 0) ? beamDamp : inDampFast);
-        float finalRebound = (float) ((inDampRebound < 0) ? beamDamp : inDampRebound);
-        float finalReboundFast = (float) ((inDampReboundFast < 0) ? finalRebound : inDampReboundFast);
+    public int addBeam(PhysicsSpecs.BeamSpec spec, int node1Idx, int node2Idx, float nodeDist) {
+        float finalVelSplit = spec.dampVelSplit() < 0.0f ? KINDA_BIG_NUMBER : spec.dampVelSplit();
+        float finalFast = spec.dampFast() < 0.0f ? spec.damp() : spec.dampFast();
+        float finalRebound = spec.dampRebound() < 0.0f ? spec.damp() : spec.dampRebound();
+        float finalReboundFast = spec.dampReboundFast() < 0.0f ? finalRebound : spec.dampReboundFast();
 
-        // 复用父类公共属性的添加
-        int idx = addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist,
-                beamSpring, beamDamp, beamDeform, beamStrength,
-                precomp, precompRange, precompTime);
+        int idx = addBeamInternal(spec, node1Idx, node2Idx, nodeDist);
 
-        shortBoundRange[idx] = (float) beamShortBoundRange;
-        longBoundRange[idx] = (float) beamLongBoundRange;
-        shortBound[idx] = (float) beamShortBound;
-        longBound[idx] = (float) beamLongBound;
-        
-        limitSpring[idx] = (float) beamLimitSpring;
-        limitDamp[idx] = (float) beamLimitDamp;
+        shortBoundRange[idx] = spec.shortBoundRange();
+        longBoundRange[idx] = spec.longBoundRange();
+        shortBound[idx] = spec.shortBound();
+        longBound[idx] = spec.longBound();
+        limitSpring[idx] = spec.limitSpring();
+        limitDamp[idx] = spec.limitDamp();
         dampVelocitySplit[idx] = finalVelSplit;
         dampFast[idx] = finalFast;
         dampRebound[idx] = finalRebound;

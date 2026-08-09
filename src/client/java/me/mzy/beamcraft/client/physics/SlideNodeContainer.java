@@ -26,14 +26,14 @@ public class SlideNodeContainer {
         }
     }
 
-    public void addSlideNode(int nId, int railAId, int railBId, double slideSpring, double slideDamp, double slideRestDist) {
+    public void addSlideNode(PhysicsSpecs.SlideNodeSpec spec, int nId, int railAId, int railBId, float slideRestDist) {
         ensureCapacity();
         nodeId[count] = nId;
         railA[count] = railAId;
         railB[count] = railBId;
-        spring[count] = (float) slideSpring;
-        damp[count] = (float) slideDamp;
-        restDist[count] = (float) slideRestDist;
+        spring[count] = spec.spring();
+        damp[count] = spec.damp();
+        restDist[count] = slideRestDist;
         count++;
     }
 

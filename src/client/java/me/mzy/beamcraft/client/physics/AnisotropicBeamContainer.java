@@ -21,17 +21,11 @@ public class AnisotropicBeamContainer extends BeamContainer {
         transitionZone = Utility.expand(transitionZone, newSize);
     }
 
-    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
-                        int node1Idx, int node2Idx, double nodeDist,
-                        double beamSpring, double beamDamp,
-                        double beamDeform, double beamStrength,
-                        double precomp, double precompRange, double precompTime,
-                        double beamSpringExpansion, double beamDampExpansion, double beamTransitionZone) {
-        int idx = addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist, beamSpring, beamDamp,
-                beamDeform, beamStrength, precomp, precompRange, precompTime);
-        springExpansion[idx] = (float) beamSpringExpansion;
-        dampExpansion[idx] = (float) beamDampExpansion;
-        transitionZone[idx] = (float) beamTransitionZone;
+    public int addBeam(PhysicsSpecs.BeamSpec spec, int node1Idx, int node2Idx, float nodeDist) {
+        int idx = addBeamInternal(spec, node1Idx, node2Idx, nodeDist);
+        springExpansion[idx] = spec.springExpansion();
+        dampExpansion[idx] = spec.dampExpansion();
+        transitionZone[idx] = spec.transitionZone();
         return idx;
     }
 }

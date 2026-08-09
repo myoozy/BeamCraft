@@ -126,32 +126,8 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(PhysicsSpecs.BeamSpec spec) {
-        int type = spec.type();
         String name1 = spec.name1();
         String name2 = spec.name2();
-        String name3 = spec.name3();
-        java.util.List<String> breakGroups = spec.breakGroups();
-        int breakGroupType = spec.breakGroupType();
-        float spring = spec.spring();
-        float damp = spec.damp();
-        float deform = spec.deform();
-        float strength = spec.strength();
-        float precomp = spec.precomp();
-        float precompRange = spec.precompRange();
-        float precompTime = spec.precompTime();
-        float shortBound = spec.shortBound();
-        float longBound = spec.longBound();
-        float shortBoundRange = spec.shortBoundRange();
-        float longBoundRange = spec.longBoundRange();
-        float limitSpring = spec.limitSpring();
-        float limitDamp = spec.limitDamp();
-        float dampVelSplit = spec.dampVelSplit();
-        float dampFast = spec.dampFast();
-        float dampRebound = spec.dampRebound();
-        float dampReboundFast = spec.dampReboundFast();
-        float springExpansion = spec.springExpansion();
-        float dampExpansion = spec.dampExpansion();
-        float transitionZone = spec.transitionZone();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
             int n1 = nodes.nameToIndex.get(name1);
             int n2 = nodes.nameToIndex.get(name2);
@@ -166,29 +142,19 @@ public class SoftBodyVehicle {
             BeamContainer container;
             int beamIdx;
 
-            if (type == BeamContainer.BEAM_SUPPORT) {
+            if (spec.type() == BeamContainer.BEAM_SUPPORT) {
 
-                beamIdx = supportBeams.addBeam(breakGroups, breakGroupType,
-                        n1, n2, dist, spring, damp,
-                        deform, strength, precomp, precompRange, precompTime);
+                beamIdx = supportBeams.addBeam(spec, n1, n2, (float) dist);
                 container = supportBeams;
 
-            } else if (type == BeamContainer.BEAM_BOUNDED) {
+            } else if (spec.type() == BeamContainer.BEAM_BOUNDED) {
 
-                beamIdx = boundedBeams.addBeam(breakGroups, breakGroupType,
-                        n1, n2, dist,
-                        spring, damp, deform, strength,
-                        precomp, precompRange, precompTime,
-                        shortBound, longBound,
-                        shortBoundRange, longBoundRange,
-                        limitSpring, limitDamp,
-                        dampVelSplit, dampFast,
-                        dampRebound, dampReboundFast);
+                beamIdx = boundedBeams.addBeam(spec, n1, n2, (float) dist);
                 container = boundedBeams;
 
-            } else if (type == BeamContainer.BEAM_LBEAM && nodes.nameToIndex.containsKey(name3)) {
+            } else if (spec.type() == BeamContainer.BEAM_LBEAM && nodes.nameToIndex.containsKey(spec.name3())) {
 
-                int n3 = nodes.nameToIndex.get(name3);
+                int n3 = nodes.nameToIndex.get(spec.name3());
                 nodes.degree[n3]++;
                 double node12Dist = dist;
                 dx = nodes.posX[n3] - nodes.posX[n1];
@@ -199,29 +165,24 @@ public class SoftBodyVehicle {
                 dy = nodes.posY[n3] - nodes.posY[n2];
                 dz = nodes.posZ[n3] - nodes.posZ[n2];
                 double node23Dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                beamIdx = lBeams.addBeam(breakGroups, breakGroupType,
-                        n1, n2, n3, node12Dist, node13Dist, node23Dist,
-                        spring, damp, deform, strength, precomp, precompRange, precompTime);
+                beamIdx = lBeams.addBeam(spec, n1, n2, n3,
+                        (float) node12Dist, (float) node13Dist, (float) node23Dist);
                 container = lBeams;
 
-            } else if (type == BeamContainer.BEAM_ANISOTROPIC) {
+            } else if (spec.type() == BeamContainer.BEAM_ANISOTROPIC) {
 
-                beamIdx = anisotropicBeams.addBeam(breakGroups, breakGroupType,
-                        n1, n2, dist, spring, damp,
-                        deform, strength, precomp, precompRange, precompTime,
-                        springExpansion, dampExpansion, transitionZone);
+                beamIdx = anisotropicBeams.addBeam(spec, n1, n2, (float) dist);
                 container = anisotropicBeams;
 
             } else {
 
-                beamIdx = normalBeams.addBeam(breakGroups, breakGroupType, n1, n2, dist, spring, damp,
-                        deform, strength, precomp, precompRange, precompTime);
+                beamIdx = normalBeams.addBeam(spec, n1, n2, (float) dist);
                 container = normalBeams;
 
             }
 
-            if (breakGroups != null && !breakGroups.isEmpty()) {
-                for (String bg : breakGroups) {
+            if (spec.breakGroups() != null && !spec.breakGroups().isEmpty()) {
+                for (String bg : spec.breakGroups()) {
                     this.breakGroupMap
                             .computeIfAbsent(bg, k -> new java.util.ArrayList<>())
                             .add(new BeamPointer(container, beamIdx));
@@ -242,7 +203,7 @@ public class SoftBodyVehicle {
             int n2 = nodes.nameToIndex.get(name2);
             int n3 = nodes.nameToIndex.get(name3);
 
-            triangles.addTriangle(n1, n2, n3, spec.partId(), spec.collision());
+            triangles.addTriangle(spec, n1, n2, n3);
         }
     }
 
@@ -264,16 +225,7 @@ public class SoftBodyVehicle {
             int n3 = nodes.nameToIndex.get(name3);
             int n4 = nodes.nameToIndex.get(name4);
 
-            double px1 = nodes.posX[n1]; double py1 = nodes.posY[n1]; double pz1 = nodes.posZ[n1];
-            double px2 = nodes.posX[n2]; double py2 = nodes.posY[n2]; double pz2 = nodes.posZ[n2];
-            double px3 = nodes.posX[n3]; double py3 = nodes.posY[n3]; double pz3 = nodes.posZ[n3];
-            double px4 = nodes.posX[n4]; double py4 = nodes.posY[n4]; double pz4 = nodes.posZ[n4];
-
-            torsionbars.addTorsionBar(n1, n2, n3, n4,
-                    px1, px2, px3, px4,
-                    py1, py2, py3, py4,
-                    pz1, pz2, pz3, pz4,
-                    spec.spring(), spec.damp(), spec.deform(), spec.strength());
+            torsionbars.addTorsionBar(spec, n1, n2, n3, n4, nodes);
         }
     }
 
@@ -329,7 +281,7 @@ public class SoftBodyVehicle {
 
         // Pass calculated index data to slide node container
         if (bestA != -1 && bestB != -1) {
-            slidenodes.addSlideNode(nId, bestA, bestB, spec.spring(), spec.damp(), bestRestDist);
+            slidenodes.addSlideNode(spec, nId, bestA, bestB, (float) bestRestDist);
         }
     }
 

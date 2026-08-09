@@ -64,55 +64,30 @@ public class WheelContainer {
      * 生成轮毂 (Hub)
      */
     public void generateHub(PhysicsSpecs.WheelHubSpec spec) {
-        generateHub(
-                spec.wheelName(), spec.node1(), spec.node2(), spec.nodeS(), spec.nodeArm(), spec.wheelDir(), spec.rays(),
-                spec.radius(), spec.width(), spec.offset(),
-                spec.nodeWeight(), spec.frictionCoef(),
-                spec.hubBeamSpring(), spec.hubBeamDamp(), spec.hubBeamDeform(), spec.hubBeamStrength(),
-                spec.hubTreadSpring(), spec.hubTreadDamp(),
-                spec.hubPeriphSpring(), spec.hubPeriphDamp(),
-                spec.hubSideSpring(), spec.hubSideDamp(),
-                spec.hubReinfSpring(), spec.hubReinfDamp(),
-                spec.hubTriCollision(), spec.hubSide1TriCollision(), spec.hubSide2TriCollision(),
-                spec.hubNodeMaterial(), spec.hubGroup(),
-                spec.enableHubcaps(), spec.hubcapBreakGroup(), spec.hubcapGroup(),
-                spec.hubcapCollision(), spec.hubcapSelfCollision(), spec.enableExtraHubcapBeams(),
-                spec.hubcapOffset(), spec.hubcapWidth(), spec.hubcapRadius(),
-                spec.hubcapBeamSpring(), spec.hubcapBeamDamp(), spec.hubcapBeamDeform(), spec.hubcapBeamStrength(),
-                spec.hubcapAttachSpring(), spec.hubcapAttachDamp(), spec.hubcapAttachDeform(), spec.hubcapAttachStrength(),
-                spec.hubcapSupportDeform(), spec.hubcapSupportStrength(),
-                spec.hubcapNodeWeight(), spec.hubcapCenterWeight(), spec.hubcapMaterial(), spec.hubcapFriction(),
-                spec.simpleRadius()
-        );
+        buildHub(spec);
     }
 
-    private void generateHub(
-            // --- 基础标识与连接 ---
-            String wheelName, int n1, int n2, Integer nodeS, Integer nodeArm, int wheelDir, int rays,
-            // --- 轮毂几何 ---
-            double radius, double width, double offset,
-            // --- 轮毂物理属性 ---
-            double nodeWeight, double frictionCoef,
-            // --- 轮毂梁参数 (前缀 Hub) ---
-            double hubBeamSpring, double hubBeamDamp, double hubBeamDeform, double hubBeamStrength,
-            double hubTreadSpring, double hubTreadDamp,
-            double hubPeriphSpring, double hubPeriphDamp,
-            double hubSideSpring, double hubSideDamp,
-            double hubReinfSpring, double hubReinfDamp,
-            // --- 碰撞与材质 ---
-            boolean hubTriCollision, boolean hubSide1TriCollision, boolean hubSide2TriCollision,
-            String hubNodeMaterial, String hubGroup,
-            // --- 轮毂盖参数 (带 Hubcap 前缀) ---
-            boolean enableHubcaps, String hubcapBreakGroup, String hubcapGroup,
-            boolean hubcapCollision, boolean hubcapSelfCollision, boolean enableExtraHubcapBeams,
-            double hubcapOffset, double hubcapWidth, double hubcapRadius,
-            double hubcapBeamSpring, double hubcapBeamDamp, double hubcapBeamDeform, double hubcapBeamStrength,
-            double hubcapAttachSpring, double hubcapAttachDamp, double hubcapAttachDeform, double hubcapAttachStrength,
-            double hubcapSupportDeform, double hubcapSupportStrength,
-            double hubcapNodeWeight, double hubcapCenterWeight, String hubcapMaterial, double hubcapFriction,
-            // --- 简化专用 ---
-            double simpleRadius
-    ) {
+    private void buildHub(PhysicsSpecs.WheelHubSpec spec) {
+        String wheelName = spec.wheelName();
+        int n1 = spec.node1();
+        int n2 = spec.node2();
+        Integer nodeS = spec.nodeS();
+        int wheelDir = spec.wheelDir();
+        int rays = spec.rays();
+        double radius = spec.radius();
+        double width = spec.width();
+        double offset = spec.offset();
+        double nodeWeight = spec.nodeWeight();
+        double frictionCoef = spec.frictionCoef();
+        double hubBeamDeform = spec.hubBeamDeform();
+        double hubBeamStrength = spec.hubBeamStrength();
+        double hubTreadSpring = spec.hubTreadSpring();
+        double hubTreadDamp = spec.hubTreadDamp();
+        double hubPeriphSpring = spec.hubPeriphSpring();
+        double hubPeriphDamp = spec.hubPeriphDamp();
+        double hubSideSpring = spec.hubSideSpring();
+        double hubSideDamp = spec.hubSideDamp();
+        String hubGroup = spec.hubGroup();
         ensureWheelCapacity();
         int wIdx = count;
         nameToIndex.put(wheelName, wIdx);
@@ -163,15 +138,15 @@ public class WheelContainer {
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
             // 生成物理节点
-            hubInnerNodes[baseOffset + i] = vehicle.nodes.addNode(
-                    wheelName + "_hub_in_" + i, inX, inY, inZ, nodeWeight,
-                    frictionCoef, 0.0, partId,
-                    true, false, List.of(hubGroup));
+            hubInnerNodes[baseOffset + i] = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
+                    wheelName + "_hub_in_" + i, (float) inX, (float) inY, (float) inZ, (float) nodeWeight,
+                    (float) frictionCoef, 0.0f, partId,
+                    true, false, List.of(hubGroup)));
 
-            hubOuterNodes[baseOffset + i]  = vehicle.nodes.addNode(
-                    wheelName + "_hub_out_" + i, outX, outY, outZ, nodeWeight,
-                    frictionCoef, 0.0, partId,
-                    true, false, List.of(hubGroup));
+            hubOuterNodes[baseOffset + i]  = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
+                    wheelName + "_hub_out_" + i, (float) outX, (float) outY, (float) outZ, (float) nodeWeight,
+                    (float) frictionCoef, 0.0f, partId,
+                    true, false, List.of(hubGroup)));
         }
 
         // 3. 生成物理拓扑 (Beams)
@@ -216,79 +191,63 @@ public class WheelContainer {
      * 生成轮胎 (Tire)
      */
     public void generateTire(PhysicsSpecs.WheelTireSpec spec) {
-        generateTire(
-                spec.wheelName(), spec.node1(), spec.node2(), spec.wheelDir(), spec.rays(),
-                spec.radius(), spec.width(), spec.offset(),
-                spec.nodeWeight(), spec.frictionCoef(), spec.pressurePSI(),
-                spec.slidingFrictionCoef(), spec.stribeckVelMult(), spec.stribeckExponent(),
-                spec.treadCoef(), spec.noLoadCoef(), spec.loadSensitivitySlope(), spec.fullLoadCoef(),
-                spec.softnessCoef(), spec.maxPressurePSI(),
-                spec.dragCoef(), spec.skinDragCoef(),
-                spec.treadSpring(), spec.treadDamp(), spec.treadDeform(), spec.treadStrength(),
-                spec.periSpring(), spec.periDamp(), spec.periDeform(), spec.periStrength(),
-                spec.sideSpring(), spec.sideDamp(),
-                spec.sideSpringExp(), spec.sideDampExp(), spec.sideTransZone(),
-                spec.sideDeform(), spec.sideStrength(),
-                spec.reinfSpring(), spec.reinfDamp(), spec.reinfDeform(), spec.reinfStrength(),
-                spec.treadReinfSpring(), spec.treadReinfDamp(),
-                spec.periReinfSpring(), spec.periReinfDamp(),
-                spec.sideReinfSpring(), spec.sideReinfDamp(),
-                spec.sideReinfSpringExp(), spec.sideReinfDampExp(),
-                spec.enableTireLBeams(), spec.enableTireReinfBeams(), spec.enableTireSideReinfBeams(),
-                spec.enableTreadReinfBeams(), spec.enableTirePeripheryReinfBeams(), spec.enableTireSupportBeams(),
-                spec.supportBeamSpring(), spec.supportBeamDamp(),
-                spec.triCollision(), spec.treadTriCollision(), spec.side1TriCollision(), spec.side2TriCollision(),
-                spec.nodeMaterial(), spec.group(),
-                spec.brakeTorque(), spec.parkingTorque(), spec.brakeSpring(),
-                spec.enableBrakeThermals(), spec.brakeDiameter(), spec.brakeMass(),
-                spec.brakeType(), spec.rotorMaterial(), spec.brakeVentingCoef(), spec.padMaterial(),
-                spec.brakeInputSplit(), spec.brakeSplitCoef(),
-                spec.squealCoefNatural(), spec.squealCoefLowSpeed(), spec.squealCoefGlazing(),
-                spec.enableABS(), spec.absSlipRatioTarget(), spec.absHz(),
-                spec.brakePressureInDelay(), spec.brakePressureOutDelay()
-        );
+        buildTire(spec);
     }
 
-    private void generateTire(
-            // --- 基础标识与连接 ---
-            String wheelName, int n1, int n2, int wheelDir, int rays,
-            // --- 几何尺寸 ---
-            double radius, double width, double offset,
-            // --- 基本物理属性 ---
-            double nodeWeight, double frictionCoef, double pressurePSI,
-            // --- 轮胎专用摩擦/形变系数 ---
-            double slidingFrictionCoef, double stribeckVelMult, double stribeckExponent,
-            double treadCoef, double noLoadCoef, double loadSensitivitySlope, double fullLoadCoef,
-            double softnessCoef, double maxPressurePSI,
-            // --- 空气阻力 ---
-            double dragCoef, double skinDragCoef,
-            // --- 各向异性梁参数 (前缀 Tread / Periph / Side / Reinf) ---
-            double treadSpring, double treadDamp, double treadDeform, double treadStrength,
-            double periSpring, double periDamp, double periDeform, double periStrength,
-            double sideSpring, double sideDamp,
-            double sideSpringExp, double sideDampExp, double sideTransZone,
-            double sideDeform, double sideStrength,
-            double reinfSpring, double reinfDamp, double reinfDeform, double reinfStrength,
-            double treadReinfSpring, double treadReinfDamp,
-            double periReinfSpring, double periReinfDamp,
-            double sideReinfSpring, double sideReinfDamp,
-            double sideReinfSpringExp, double sideReinfDampExp,
-            // --- 功能开关 (enableXxx) ---
-            boolean enableTireLBeams, boolean enableTireReinfBeams, boolean enableTireSideReinfBeams,
-            boolean enableTreadReinfBeams, boolean enableTirePeripheryReinfBeams, boolean enableTireSupportBeams,
-            double supportBeamSpring, double supportBeamDamp,
-            // --- 碰撞与材质 ---
-            boolean triCollision, boolean treadTriCollision, boolean side1TriCollision, boolean side2TriCollision,
-            String nodeMaterial, String group,
-            // --- 刹车参数 (全部带 brake 前缀) ---
-            double brakeTorque, double parkingTorque, double brakeSpring,
-            boolean enableBrakeThermals, double brakeDiameter, double brakeMass,
-            String brakeType, String rotorMaterial, double brakeVentingCoef, String padMaterial,
-            double brakeInputSplit, double brakeSplitCoef,
-            double squealCoefNatural, double squealCoefLowSpeed, double squealCoefGlazing,
-            boolean enableABS, double absSlipRatioTarget, double absHz,
-            double brakePressureInDelay, double brakePressureOutDelay
-    ) {
+    private void buildTire(PhysicsSpecs.WheelTireSpec spec) {
+        String wheelName = spec.wheelName();
+        int n1 = spec.node1();
+        int n2 = spec.node2();
+        int wheelDir = spec.wheelDir();
+        int rays = spec.rays();
+        double radius = spec.radius();
+        double width = spec.width();
+        double offset = spec.offset();
+        double nodeWeight = spec.nodeWeight();
+        double frictionCoef = spec.frictionCoef();
+        double pressurePSI = spec.pressurePSI();
+        double slidingFrictionCoef = spec.slidingFrictionCoef();
+        double stribeckVelMult = spec.stribeckVelMult();
+        double stribeckExponent = spec.stribeckExponent();
+        double treadCoef = spec.treadCoef();
+        double noLoadCoef = spec.noLoadCoef();
+        double loadSensitivitySlope = spec.loadSensitivitySlope();
+        double fullLoadCoef = spec.fullLoadCoef();
+        double softnessCoef = spec.softnessCoef();
+        double treadSpring = spec.treadSpring();
+        double treadDamp = spec.treadDamp();
+        double treadDeform = spec.treadDeform();
+        double treadStrength = spec.treadStrength();
+        double periSpring = spec.periSpring();
+        double periDamp = spec.periDamp();
+        double periDeform = spec.periDeform();
+        double periStrength = spec.periStrength();
+        double sideSpring = spec.sideSpring();
+        double sideDamp = spec.sideDamp();
+        double sideSpringExp = spec.sideSpringExp();
+        double sideDampExp = spec.sideDampExp();
+        double sideTransZone = spec.sideTransZone();
+        double sideDeform = spec.sideDeform();
+        double sideStrength = spec.sideStrength();
+        double reinfSpring = spec.reinfSpring();
+        double reinfDamp = spec.reinfDamp();
+        double reinfDeform = spec.reinfDeform();
+        double reinfStrength = spec.reinfStrength();
+        double treadReinfSpring = spec.treadReinfSpring();
+        double treadReinfDamp = spec.treadReinfDamp();
+        double periReinfSpring = spec.periReinfSpring();
+        double periReinfDamp = spec.periReinfDamp();
+        double sideReinfSpring = spec.sideReinfSpring();
+        double sideReinfDamp = spec.sideReinfDamp();
+        double sideReinfSpringExp = spec.sideReinfSpringExp();
+        double sideReinfDampExp = spec.sideReinfDampExp();
+        boolean enableTireLBeams = spec.enableTireLBeams();
+        boolean enableTireReinfBeams = spec.enableTireReinfBeams();
+        boolean enableTireSideReinfBeams = spec.enableTireSideReinfBeams();
+        boolean enableTreadReinfBeams = spec.enableTreadReinfBeams();
+        boolean enableTirePeripheryReinfBeams = spec.enableTirePeripheryReinfBeams();
+        boolean enableTireSupportBeams = spec.enableTireSupportBeams();
+        String group = spec.group();
 
         if (!nameToIndex.containsKey(wheelName)) return;
 
@@ -346,15 +305,17 @@ public class WheelContainer {
             double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
             double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
 
-            int idxIn = vehicle.nodes.addNode(wheelName + "_tire_in_" + i, inX, inY, inZ, nodeWeight,
-                    frictionCoef, slidingFrictionCoef, partId,
-                    true, false, List.of(group));
+            int idxIn = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
+                    wheelName + "_tire_in_" + i, (float) inX, (float) inY, (float) inZ, (float) nodeWeight,
+                    (float) frictionCoef, (float) slidingFrictionCoef, partId,
+                    true, false, List.of(group)));
             tireInnerNodes[baseOffset + i] = idxIn;
             vehicle.nodes.bindToTire(idxIn, wIdx);
 
-            int idxOut = vehicle.nodes.addNode(wheelName + "_tire_out_" + i, outX, outY, outZ, nodeWeight,
-                    frictionCoef, slidingFrictionCoef, partId,
-                    true, false, List.of(group));
+            int idxOut = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
+                    wheelName + "_tire_out_" + i, (float) outX, (float) outY, (float) outZ, (float) nodeWeight,
+                    (float) frictionCoef, (float) slidingFrictionCoef, partId,
+                    true, false, List.of(group)));
             tireOuterNodes[baseOffset + i] = idxOut;
             vehicle.nodes.bindToTire(idxOut, wIdx);
         }
@@ -372,20 +333,20 @@ public class WheelContainer {
             int tOutCur = tireOuterNodes[baseOffset + i], tOutNext = tireOuterNodes[baseOffset + next];
 
             // 侧壁面：内侧环带 (Hub Inner -> Tire Inner)
-            vehicle.triangles.addTriangle(hInCur, hInNext, tInNext, partId, COLLISION);
-            vehicle.triangles.addTriangle(hInCur, tInNext, tInCur, partId, COLLISION);
+            addTriangle(hInCur, hInNext, tInNext, partId, COLLISION);
+            addTriangle(hInCur, tInNext, tInCur, partId, COLLISION);
 
             // 侧壁面：外侧环带 (Hub Outer -> Tire Outer)
-            vehicle.triangles.addTriangle(hOutCur, tOutCur, tOutNext, partId, COLLISION);
-            vehicle.triangles.addTriangle(hOutCur, tOutNext, hOutNext, partId, COLLISION);
+            addTriangle(hOutCur, tOutCur, tOutNext, partId, COLLISION);
+            addTriangle(hOutCur, tOutNext, hOutNext, partId, COLLISION);
 
             // 胎面 (Tire Inner -> Tire Outer)
-            vehicle.triangles.addTriangle(tInCur, tInNext, tOutNext, partId, COLLISION);
-            vehicle.triangles.addTriangle(tInCur, tOutNext, tOutCur, partId, COLLISION);
+            addTriangle(tInCur, tInNext, tOutNext, partId, COLLISION);
+            addTriangle(tInCur, tOutNext, tOutCur, partId, COLLISION);
 
             // 轮胎与轮辋接触面（纯粹用于闭合散度体积，绝对关闭碰撞）
-            vehicle.triangles.addTriangle(hInCur, hOutNext, hInNext, partId, false);
-            vehicle.triangles.addTriangle(hInCur, hOutCur, hOutNext, partId, false);
+            addTriangle(hInCur, hOutNext, hInNext, partId, false);
+            addTriangle(hInCur, hOutCur, hOutNext, partId, false);
 
             // 胎面 加强筋 (i 连 i+2)
             int next2 = (i + 2) % rays;
@@ -498,8 +459,10 @@ public class WheelContainer {
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        return vehicle.normalBeams.addBeam(null, 0, id1, id2, dist, spring, damp, deform, strength,
-                1.0, 0.0, 0.0);
+        return vehicle.normalBeams.addBeam(
+                beamSpec(BeamContainer.BEAM_NORMAL, spring, damp, deform, strength),
+                id1, id2, (float) dist
+        );
     }
 
     private int addFastLBeam(int id1, int id2, int id3, double spring, double damp, double deform, double strength) {
@@ -518,8 +481,10 @@ public class WheelContainer {
         dy = vehicle.nodes.posY[id3] - vehicle.nodes.posY[id2];
         dz = vehicle.nodes.posZ[id3] - vehicle.nodes.posZ[id2];
         double dist23 = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        return vehicle.lBeams.addBeam(null, 0, id1, id2, id3, dist12, dist13, dist23, spring, damp, deform, strength,
-                1.0, 0.0, 0.0);
+        return vehicle.lBeams.addBeam(
+                beamSpec(BeamContainer.BEAM_LBEAM, spring, damp, deform, strength),
+                id1, id2, id3, (float) dist12, (float) dist13, (float) dist23
+        );
     }
 
     private int addFastAnisotropicBeam(int id1, int id2, double spring, double damp, double deform, double strength, double springExp, double dampExp, double transitionZone) {
@@ -527,9 +492,33 @@ public class WheelContainer {
         double dy = vehicle.nodes.posY[id2] - vehicle.nodes.posY[id1];
         double dz = vehicle.nodes.posZ[id2] - vehicle.nodes.posZ[id1];
         double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        return vehicle.anisotropicBeams.addBeam(null, 0, id1, id2, dist, spring, damp, deform, strength,
-                1.0, 0.0, 0.0,
-                springExp, dampExp, transitionZone);
+        return vehicle.anisotropicBeams.addBeam(
+                beamSpec(BeamContainer.BEAM_ANISOTROPIC, spring, damp, deform, strength,
+                        springExp, dampExp, transitionZone),
+                id1, id2, (float) dist
+        );
+    }
+
+    private PhysicsSpecs.BeamSpec beamSpec(int type, double spring, double damp, double deform, double strength) {
+        return beamSpec(type, spring, damp, deform, strength, spring, damp, 0.0);
+    }
+
+    private PhysicsSpecs.BeamSpec beamSpec(int type, double spring, double damp, double deform, double strength,
+                                           double springExpansion, double dampExpansion, double transitionZone) {
+        return new PhysicsSpecs.BeamSpec(
+                type, null, null, null,
+                null, 0,
+                (float) spring, (float) damp, (float) deform, (float) strength,
+                1.0f, 0.0f, 0.0f,
+                1.0f, 1.0f, -1.0f, -1.0f,
+                (float) spring, (float) damp,
+                -1.0f, -1.0f, -1.0f, -1.0f,
+                (float) springExpansion, (float) dampExpansion, (float) transitionZone
+        );
+    }
+
+    private void addTriangle(int n1, int n2, int n3, int partId, boolean collision) {
+        vehicle.triangles.addTriangle(new PhysicsSpecs.TriangleSpec(null, null, null, partId, collision), n1, n2, n3);
     }
 
     private void calculateWheelBasis(int n1, int n2, int wheelDir, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
