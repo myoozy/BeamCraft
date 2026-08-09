@@ -1,6 +1,5 @@
 package me.mzy.beamcraft.client.render;
 
-import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.material.MaterialRenderPlan;
@@ -8,7 +7,6 @@ import me.mzy.beamcraft.client.material.RgbaColor;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.GlUniform;
 import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.VertexBuffer;
 import net.minecraft.client.util.BufferAllocator;
@@ -597,21 +595,30 @@ public class ComputeSkinningPipeline {
     }
 
     /**
-     * Draws one sub-mesh range with its material's diffuse texture. Replicates
-     * {@code mcVbo.draw}'s uniform setup and shader bind, then issues a
-     * {@code glDrawElements} over the range's byte-sliced index offset. The
-     * range is validated defensively; invalid ranges are skipped rather than
-     * drawn.
+     * Draws one sub-mesh range with its material's diffuse texture through the
+     * vanilla Minecraft entity cutout shader. Replicates {@code mcVbo.draw}'s
+     * uniform setup and shader bind, then issues a {@code glDrawElements} over
+     * the range's byte-sliced index offset. The range is validated defensively;
+     * invalid ranges are skipped rather than drawn.
      *
-     * <p>ShaderProgram assigns each sampler its actual GL unit from the loaded
-     * (post-optimisation) sampler list during {@code bind()}, so the diffuse
-     * sampler's unit is framework-owned, never a fixed constant. Around
-     * bind/draw/unbind this method preserves and restores the active texture
-     * unit and the {@code GL_TEXTURE_2D} binding on every unit the program can
-     * touch (conservatively units 0..3, covering its three samplers). Reads use
-     * raw GL (they never desync GlStateManager); writes use the
-     * RenderSystem/GlStateManager tracked wrappers so Minecraft's per-unit
-     * GL_TEXTURE_2D tracking stays consistent with the real GL state.
+     * <p>This deliberately uses the standard vanilla entity-shader conventions
+     * (no custom uniforms or samplers) so Iris and other shader pipelines can
+     * substitute and manage the entity shader in both the normal and shadow
+     * passes. The diffuse texture is bound as vanilla {@code Sampler0} through
+     * {@link RenderSystem#setShaderTexture(int, int)}, and the material's RGBA
+     * factor is applied as the shader's {@code ColorModulator} through
+     * {@link RenderSystem#setShaderColor(float, float, float, float)} before the
+     * uniform set is initialised. Both are read back and restored afterwards, so
+     * this draw never leaks a per-material colour or texture into the next draw.
+     *
+     * <p>The caller must have the overlay and lightmap textures bound as vanilla
+     * {@code Sampler1}/{@code Sampler2} (e.g. via
+     * {@link net.minecraft.client.render.OverlayTexture} {@code setupOverlayColor}
+     * and {@code LightmapTextureManager#enable}), exactly as the vanilla entity
+     * cutout render layer does. {@code ShaderProgram#bind()} assigns each sampler
+     * its actual GL unit from the loaded sampler list and binds the tracked
+     * texture there; {@code unbind()} restores the post-draw state, leaving the
+     * same GL state as {@code mcVbo.draw} does.
      */
     public void drawRange(SubMeshRange range, int diffuseTextureId, MaterialRenderPlan plan,
                           Matrix4f modelView, Matrix4f projection, ShaderProgram shader, int packedLight) {
@@ -630,17 +637,17 @@ public class ComputeSkinningPipeline {
             int skyLight = packedLight >>> 16 & 0xFFFF;
             GL30.glVertexAttribI2i(lightAttributeIndex, blockLight, skyLight);
 
-            int previousActiveTexture = GlStateManager._getActiveTexture();
-            int[] previousBindings = new int[4];
-            for (int unit = 0; unit < previousBindings.length; unit++) {
-                RenderSystem.activeTexture(GL13.GL_TEXTURE0 + unit);
-                previousBindings[unit] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-            }
+            float[] previousColor = RenderSystem.getShaderColor();
+            float prevR = previousColor[0], prevG = previousColor[1];
+            float prevB = previousColor[2], prevA = previousColor[3];
+            int previousTexture0 = RenderSystem.getShaderTexture(0);
+            RgbaColor factor = plan.colorFactor();
 
             try {
+                RenderSystem.setShaderTexture(0, diffuseTextureId);
+                RenderSystem.setShaderColor(factor.r(), factor.g(), factor.b(), factor.a());
                 shader.initializeUniforms(VertexFormat.DrawMode.TRIANGLES, modelView, projection,
                         MinecraftClient.getInstance().getWindow());
-                setDiffuseUniforms(shader, plan, diffuseTextureId);
                 boolean bound = false;
                 try {
                     shader.bind();
@@ -654,28 +661,12 @@ public class ComputeSkinningPipeline {
                     }
                 }
             } finally {
-                for (int unit = 0; unit < previousBindings.length; unit++) {
-                    RenderSystem.activeTexture(GL13.GL_TEXTURE0 + unit);
-                    RenderSystem.bindTexture(previousBindings[unit]);
-                }
-                RenderSystem.activeTexture(previousActiveTexture);
+                RenderSystem.setShaderColor(prevR, prevG, prevB, prevA);
+                RenderSystem.setShaderTexture(0, previousTexture0);
             }
         } finally {
             VertexBuffer.unbind();
         }
-    }
-
-    private void setDiffuseUniforms(ShaderProgram shader, MaterialRenderPlan plan, int diffuseTextureId) {
-        GlUniform useTexture = shader.getUniform("BeamcraftUseTexture");
-        if (useTexture != null) {
-            useTexture.set(plan.hasTexture() ? 1 : 0);
-        }
-        RgbaColor factor = plan.colorFactor();
-        GlUniform diffuseColor = shader.getUniform("BeamcraftDiffuseColor");
-        if (diffuseColor != null) {
-            diffuseColor.set(factor.r(), factor.g(), factor.b(), factor.a());
-        }
-        shader.addSampler("BeamcraftDiffuse", diffuseTextureId);
     }
 
     private void bindTextureBuffer(int unit, int texture, int[] previousBindings) {

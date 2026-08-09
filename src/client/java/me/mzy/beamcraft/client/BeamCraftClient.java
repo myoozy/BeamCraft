@@ -10,7 +10,6 @@ import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.CoreShaderRegistrationCallback;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
@@ -18,10 +17,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.VertexFormats;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -55,17 +52,6 @@ public class BeamCraftClient implements ClientModInitializer {
 
 		ClientVehicleManager.initRenderHooks(); // 初始化渲染
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
-
-		// Register the BeamCraft opaque diffuse core shader (loaded from
-		// assets/beamcraft/shaders/core). Fabric owns the program lifecycle:
-		// on resource reload it replaces and closes the previous program, so the
-		// renderer only reads the currently registered instance and never closes
-		// it. The renderer falls back to the vanilla entity cutout while the
-		// program is unavailable.
-		CoreShaderRegistrationCallback.EVENT.register(context -> context.register(
-				Identifier.of("beamcraft", "rendertype_beamcraft_entity"),
-				VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL,
-				PhysicsVehicleRenderer::setDiffuseProgram));
 
 		// Close render-thread GL-owned vehicle textures on client shutdown.
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client ->

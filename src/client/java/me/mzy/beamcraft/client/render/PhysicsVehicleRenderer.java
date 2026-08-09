@@ -14,7 +14,6 @@ import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.client.render.ComputeSkinningPipeline.SubMeshRange;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.entity.EntityRenderer;
@@ -24,29 +23,14 @@ import net.minecraft.util.Identifier;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.IntSupplier;
 
 public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity> {
 
     private static final Identifier DEFAULT_TEXTURE = Identifier.of(
-            "beamcraft",
-            "textures/entity/vehicle_default.png"
+            "minecraft",
+            "textures/block/white_concrete.png"
     );
-
-    /**
-     * The currently registered BeamCraft opaque diffuse program. Registered via
-     * {@code CoreShaderRegistrationCallback} from {@code BeamCraftClient}; Fabric
-     * owns the program lifecycle (resource reload replaces and closes the
-     * previous instance), so the renderer only reads the latest registered
-     * program and never closes it. Null until the first (re)load finishes, in
-     * which case the renderer falls back to the vanilla entity cutout whole-mesh
-     * draw, so the vehicle still renders.
-     */
-    private static volatile ShaderProgram diffuseProgram;
-
-    /** Called by the core-shader registration callback with each freshly loaded program. */
-    public static void setDiffuseProgram(ShaderProgram program) {
-        diffuseProgram = program;
-    }
 
     // Rate-limited (once per key) diagnostics; never per-frame.
     private static final Set<String> WARNED_MISSING_MATERIALS = new HashSet<>();
@@ -88,26 +72,39 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         }
 
         RenderSystem.setShader(GameRenderer::getRenderTypeEntityCutoutProgram);
-        RenderSystem.setShaderTexture(0, getTexture(entity));
         RenderSystem.enableDepthTest();
         RenderSystem.depthFunc(515);
         RenderSystem.enableCull();
-        var lightmap = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager();
+        var gameRenderer = MinecraftClient.getInstance().gameRenderer;
+        var lightmap = gameRenderer.getLightmapTextureManager();
+        var overlay = gameRenderer.getOverlayTexture();
         lightmap.enable();
+        overlay.setupOverlayColor();
         try {
             org.joml.Matrix4f modelView = new org.joml.Matrix4f(RenderSystem.getModelViewMatrix());
             modelView.mul(matrixStack.peek().getPositionMatrix());
             org.joml.Matrix4f projection = RenderSystem.getProjectionMatrix();
 
-            ShaderProgram shader = getRegisteredDiffuseProgram();
-            if (shader != null && !flex.skinningPipeline.getSubMeshRanges().isEmpty()) {
-                renderSubMeshes(flex, modelView, projection, shader, packedLight);
+            if (!flex.skinningPipeline.getSubMeshRanges().isEmpty()) {
+                renderSubMeshes(flex, modelView, projection, packedLight);
             } else {
-                // Vanilla fallback: single whole-mesh draw, unchanged behaviour
-                // (also used when no sub-mesh ranges were computed).
-                flex.skinningPipeline.draw(modelView, projection, RenderSystem.getShader(), packedLight);
+                // No per-material ranges computed: draw the whole mesh against the
+                // shared white fallback texture, which is always a valid Sampler0.
+                int previousTexture0 = RenderSystem.getShaderTexture(0);
+                float[] previousColor = RenderSystem.getShaderColor();
+                float prevR = previousColor[0], prevG = previousColor[1];
+                float prevB = previousColor[2], prevA = previousColor[3];
+                try {
+                    RenderSystem.setShaderTexture(0, VehicleTextureUploader.INSTANCE.getWhiteTexture());
+                    RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+                    flex.skinningPipeline.draw(modelView, projection, RenderSystem.getShader(), packedLight);
+                } finally {
+                    RenderSystem.setShaderColor(prevR, prevG, prevB, prevA);
+                    RenderSystem.setShaderTexture(0, previousTexture0);
+                }
             }
         } finally {
+            overlay.teardownOverlayColor();
             lightmap.disable();
             RenderSystem.disableCull();
         }
@@ -116,7 +113,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
     }
 
     private void renderSubMeshes(FlexbodyContainer flex, org.joml.Matrix4f modelView,
-                                 org.joml.Matrix4f projection, ShaderProgram shader, int packedLight) {
+                                 org.joml.Matrix4f projection, int packedLight) {
         for (SubMeshRange range : flex.skinningPipeline.getSubMeshRanges()) {
             String namespace = flex.vehicleNamespace;
             MaterialDefinition material = MaterialLibrary.getMaterial(namespace, range.materialName);
@@ -125,25 +122,36 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             }
             MaterialRenderPlan plan = MaterialRenderPlanner.plan(material);
 
-            int textureId;
-            if (plan.hasTexture()) {
-                TextureResource resource = MaterialLibrary.resolveTexture(plan.diffusePath());
-                if (resource == null) {
-                    warnOnceUnresolvedTexture(namespace, range.materialName, plan.diffusePath());
-                    textureId = VehicleTextureUploader.INSTANCE.getWhiteTexture();
-                } else {
-                    textureId = VehicleTextureUploader.INSTANCE.getOrUpload(resource, namespace);
-                }
-            } else {
-                textureId = VehicleTextureUploader.INSTANCE.getWhiteTexture();
+            TextureResource resource = plan.hasTexture()
+                    ? MaterialLibrary.resolveTexture(plan.diffusePath())
+                    : null;
+            if (plan.hasTexture() && resource == null) {
+                warnOnceUnresolvedTexture(namespace, range.materialName, plan.diffusePath());
             }
 
-            flex.skinningPipeline.drawRange(range, textureId, plan, modelView, projection, shader, packedLight);
+            int textureId = resolveDiffuseTexture(plan, resource != null,
+                    () -> VehicleTextureUploader.INSTANCE.getOrUpload(resource, namespace),
+                    VehicleTextureUploader.INSTANCE::getWhiteTexture);
+
+            flex.skinningPipeline.drawRange(range, textureId, plan, modelView, projection,
+                    RenderSystem.getShader(), packedLight);
         }
     }
 
-    private static ShaderProgram getRegisteredDiffuseProgram() {
-        return diffuseProgram;
+    /**
+     * Pure per-sub-mesh decision for which GL texture to bind as vanilla
+     * {@code Sampler0}. A textured plan whose texture resolved is uploaded; every
+     * other case (no texture, or a texture that failed to resolve) binds the
+     * uploader's shared white 1x1 fallback. This pins the Iris-fix contract: the
+     * renderer never binds a missing/unregistered texture (the removed
+     * {@code vehicle_default} placeholder) for any sub-mesh.
+     */
+    static int resolveDiffuseTexture(MaterialRenderPlan plan, boolean resolved,
+                                     IntSupplier upload, IntSupplier white) {
+        if (plan.hasTexture() && resolved) {
+            return upload.getAsInt();
+        }
+        return white.getAsInt();
     }
 
     private static void warnOnceMissingMaterial(String namespace, String materialName) {
