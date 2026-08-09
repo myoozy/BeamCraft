@@ -36,6 +36,12 @@ public class JBeamParser {
 
         String equation = expr.substring(2);
 
+        // 顶层 case(condition, trueVal, falseVal)：BeamNG 常用的条件表达式定制支持（== / nil）
+        String trimmedEquation = equation.trim();
+        if (trimmedEquation.startsWith("case(")) {
+            return evaluateCaseExpression(trimmedEquation, variables);
+        }
+
         // 递归替换所有 $variable (最长匹配)
         boolean changed;
         do {
@@ -98,6 +104,103 @@ public class JBeamParser {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * 处理 BeamNG 顶层 case(condition, trueVal, falseVal) 表达式。
+     * 仅支持由 "==" 与 "nil" 组成的条件；nil 表示未定义变量。
+     * 其余形式（嵌套、残余内容、非 == 条件）返回 null，保持既有的"不应用该变换"行为。
+     */
+    private static Float evaluateCaseExpression(String equation, Map<String, Double> variables) {
+        int start = 5; // "case(" 的长度
+        int depth = 0;
+        int end = -1;
+        for (int i = start; i < equation.length(); i++) {
+            char c = equation.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') {
+                if (depth == 0) { end = i; break; }
+                depth--;
+            }
+        }
+        if (end < 0) return null;
+        // 不解析 case(...) 之后的残余内容
+        if (!equation.substring(end + 1).trim().isEmpty()) return null;
+
+        java.util.List<String> args = splitTopLevel(equation.substring(start, end), ',');
+        if (args.size() != 3) return null;
+
+        Boolean cond = evaluateCondition(args.get(0), variables);
+        if (cond == null) return null;
+        String chosen = (cond ? args.get(1) : args.get(2)).trim();
+        return evaluateBeamNGExpression("$=" + chosen, variables);
+    }
+
+    /**
+     * 求值 "A == B" 条件。条件上下文中未定义变量按 nil 处理。
+     * 无 "==" 或两侧无法解析时返回 null（表示该形式超出最小支持范围）。
+     */
+    private static Boolean evaluateCondition(String cond, Map<String, Double> variables) {
+        String substituted = substituteNilAware(cond, variables);
+        int eq = substituted.indexOf("==");
+        if (eq < 0) return null;
+        String left = substituted.substring(0, eq).trim();
+        String right = substituted.substring(eq + 2).trim();
+        boolean leftNil = left.equalsIgnoreCase("nil");
+        boolean rightNil = right.equalsIgnoreCase("nil");
+        if (leftNil && rightNil) return true;
+        if (leftNil || rightNil) return false;
+        try {
+            return Double.parseDouble(left) == Double.parseDouble(right);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 条件专用变量替换：已定义变量 → 数值，未定义变量 → 字面量 nil。
+     * 与普通算术替换（未定义 → 0.0）区分开，以便 "var == nil" 能识别未定义变量。
+     */
+    private static String substituteNilAware(String s, Map<String, Double> variables) {
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < s.length()) {
+            char c = s.charAt(i);
+            if (c == '$') {
+                int j = i + 1;
+                while (j < s.length() && (Character.isLetterOrDigit(s.charAt(j)) || s.charAt(j) == '_')) j++;
+                String varName = s.substring(i + 1, j);
+                if (variables != null && variables.containsKey(varName)) {
+                    sb.append(variables.get(varName));
+                } else {
+                    sb.append("nil");
+                }
+                i = j;
+            } else {
+                sb.append(c);
+                i++;
+            }
+        }
+        return sb.toString();
+    }
+
+    private static java.util.List<String> splitTopLevel(String s, char sep) {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        int depth = 0;
+        StringBuilder cur = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            if (c == sep && depth == 0) {
+                result.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(c);
+            }
+        }
+        result.add(cur.toString());
+        return result;
     }
 
     public static int getIntSafe(JsonObject obj, String key, int defaultValue) {
