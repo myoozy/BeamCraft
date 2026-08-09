@@ -15,8 +15,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
-import java.util.Enumeration;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -44,6 +45,20 @@ import java.util.zip.ZipFile;
  * {@link MaterialDefinition} for diagnostics. Vehicle definitions override
  * common definitions for the same {@code mapTo}.
  *
+ * <p><b>Static material aliases</b>: alongside the {@code *.materials.json}
+ * files, every {@code *.jbeam} file in the same scan is parsed (via the shared
+ * {@link RelaxedJson} cleaner) for {@code glowMap} sections and each entry's
+ * {@code off} material is indexed as a namespace-scoped static alias
+ * {@code glowMap-key -> off-target} (see {@link GlowMapAliasExtractor}). The
+ * DAE only knows raw mesh material names (e.g. {@code pickup_lowbeamglass}),
+ * which usually have no {@code mapTo} of their own; the alias redirects them to
+ * the real lights-off material ({@code pickup_lightglass}). Alias resolution is
+ * scoped to the requesting namespace and can never leak across vehicles. This
+ * is static only: live emissive switching ({@code on}/{@code on_intense}) and
+ * deformation switching ({@code deformMaterialBase}/{@code deformMaterialDamaged})
+ * are out of scope — the latter would need a second JBeam field and is the
+ * documented gap that keeps the parser from being fully generic.
+ *
  * <p><b>Lifecycle</b>: {@link #requireMaterials} / {@link #releaseMaterials}
  * follow the same reference-counting scheme as
  * {@code DaeMeshLoader.requireVehicleModels}. Concurrent instances of the same
@@ -67,6 +82,13 @@ public final class MaterialLibrary {
 
     /** namespace (lowercase) -> mapTo (lowercase) -> definition, per loaded vehicle. */
     private static final Map<String, Map<String, MaterialDefinition>> VEHICLE_INDEXES = new LinkedHashMap<>();
+
+    /**
+     * namespace (lowercase) -> aliasKey (lowercase) -> glowMap {@code off}
+     * target (lowercase), per loaded vehicle (and for the common namespace).
+     * Static lights-off material redirection only; see {@link GlowMapAliasExtractor}.
+     */
+    private static final Map<String, Map<String, String>> ALIAS_INDEXES = new LinkedHashMap<>();
 
     /** namespace -> live instance count. */
     private static final Map<String, Integer> REF_COUNTS = new HashMap<>();
@@ -151,6 +173,7 @@ public final class MaterialLibrary {
         if (count <= 0) {
             REF_COUNTS.remove(ns);
             VEHICLE_INDEXES.remove(ns);
+            ALIAS_INDEXES.remove(ns);
             NAMESPACE_SOURCE_IDS.remove(ns);
             if (!ns.equals(COMMON_NS)) {
                 DECODED_TEXTURES.releaseNamespace(ns);
@@ -174,34 +197,65 @@ public final class MaterialLibrary {
     }
 
     /**
-     * Scoped lookup: the vehicle's own definitions first, then common.
-     * Case-insensitive on {@code mapTo}.
+     * Scoped lookup with static-alias resolution. Resolution order is: the
+     * vehicle's own {@code mapTo} first, then the namespace's static glowMap
+     * alias target (itself resolved in the vehicle index, then common), then the
+     * existing common fallback for the original key. Case-insensitive
+     * throughout. Alias resolution is scoped to {@code namespace} and can never
+     * leak across vehicle namespaces.
      *
-     * @param namespace vehicle namespace, or null to skip the vehicle tier
+     * @param namespace vehicle namespace, or null to skip the vehicle and alias tiers
      */
     public static MaterialDefinition getMaterial(String namespace, String mapTo) {
         if (mapTo == null || mapTo.isEmpty()) {
             return null;
         }
         String key = mapTo.toLowerCase(Locale.ROOT);
-        if (namespace != null) {
-            Map<String, MaterialDefinition> vehicleIndex =
-                    VEHICLE_INDEXES.get(namespace.toLowerCase(Locale.ROOT));
-            if (vehicleIndex != null) {
-                MaterialDefinition def = vehicleIndex.get(key);
-                if (def != null) {
-                    return def;
-                }
+        String ns = namespace == null ? null : namespace.toLowerCase(Locale.ROOT);
+        if (ns == null) {
+            return COMMON_INDEX.get(key);
+        }
+        return resolveMaterial(VEHICLE_INDEXES.get(ns), ALIAS_INDEXES.get(ns), COMMON_INDEX, key);
+    }
+
+    /**
+     * Pure, unit-tested material resolution. Order: the vehicle's own
+     * {@code mapTo} first, then the namespace's static glowMap alias target
+     * (resolved in the vehicle index, then common), then the existing common
+     * fallback for the original key. {@code aliasIndex} is the requesting
+     * namespace's alias map only, so aliases can never leak across vehicle
+     * namespaces. Any of the maps may be null.
+     */
+    static MaterialDefinition resolveMaterial(Map<String, MaterialDefinition> vehicleIndex,
+                                              Map<String, String> aliasIndex,
+                                              Map<String, MaterialDefinition> commonIndex,
+                                              String key) {
+        MaterialDefinition def = vehicleIndex == null ? null : vehicleIndex.get(key);
+        if (def != null) {
+            return def; // 1. direct mapTo in the vehicle namespace
+        }
+        String aliasTarget = aliasIndex == null ? null : aliasIndex.get(key);
+        if (aliasTarget != null) {
+            def = vehicleIndex == null ? null : vehicleIndex.get(aliasTarget);
+            if (def != null) {
+                return def; // 2a. alias target in the vehicle namespace
+            }
+            def = commonIndex == null ? null : commonIndex.get(aliasTarget);
+            if (def != null) {
+                return def; // 2b. alias target in common
             }
         }
-        return COMMON_INDEX.get(key);
+        return commonIndex == null ? null : commonIndex.get(key); // 3. common fallback for the direct key
     }
 
     /**
      * Unqualified lookup across all loaded vehicles in require order, then
      * common. With several vehicles loaded at once a {@code mapTo} may collide
      * across namespaces; prefer the scoped
-     * {@link #getMaterial(String, String)} when the vehicle is known.
+     * {@link #getMaterial(String, String)} when the vehicle is known. Static
+     * glowMap aliases are deliberately <em>not</em> resolved here: the caller
+     * has no namespace context, so applying aliases could leak one vehicle's
+     * aliases into another. Use the scoped lookup for alias resolution.
      */
     public static MaterialDefinition getMaterial(String mapTo) {
         if (mapTo == null || mapTo.isEmpty()) {
@@ -224,6 +278,20 @@ public final class MaterialLibrary {
             total += index.size();
         }
         return total;
+    }
+
+    /** Total registered static glowMap aliases across all namespaces (diagnostic). */
+    public static int getAliasCount() {
+        int total = 0;
+        for (Map<String, String> index : ALIAS_INDEXES.values()) {
+            total += index.size();
+        }
+        return total;
+    }
+
+    /** Namespaces currently holding a static alias index (unmodifiable). */
+    public static Set<String> getAliasNamespaces() {
+        return Collections.unmodifiableSet(ALIAS_INDEXES.keySet());
     }
 
     /** Namespaces currently holding a live vehicle index (unmodifiable). */
@@ -388,6 +456,10 @@ public final class MaterialLibrary {
         if (files == null) {
             return;
         }
+        // Sort so material/alias collision resolution is deterministic: when two
+        // scanned files define the same mapTo or glowMap key, the later file in
+        // this (now sorted) order wins.
+        Arrays.sort(files, Comparator.comparing(File::getName));
         List<File> ownedSources = new ArrayList<>();
         Set<String> ownedSourceIds = new HashSet<>();
         for (File file : files) {
@@ -441,20 +513,21 @@ public final class MaterialLibrary {
 
     private static void scanZipForMaterials(File zipFile, String namespace, boolean isCommon) {
         try (ZipFile zf = new ZipFile(zipFile)) {
-            Enumeration<? extends ZipEntry> entries = zf.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry entry = entries.nextElement();
+            List<? extends ZipEntry> entries = Collections.list(zf.entries());
+            entries.sort(Comparator.comparing(ZipEntry::getName));
+            for (ZipEntry entry : entries) {
                 String entryName = entry.getName();
                 if (entry.isDirectory() || entryName.contains("__MACOSX")) {
                     continue;
                 }
                 boolean isTarget = isCommon || underVehiclesNamespace(entryName, namespace);
-                if (!isTarget || !entryName.toLowerCase(Locale.ROOT).endsWith(".materials.json")) {
+                String lower = entryName.toLowerCase(Locale.ROOT);
+                if (!isTarget || !isIndexedFile(lower)) {
                     continue;
                 }
                 String source = zipFile.getAbsolutePath() + "!" + entryName;
                 try (InputStream in = zf.getInputStream(entry)) {
-                    parseMaterialsFile(in, source, namespace, isCommon);
+                    processIndexedFile(in, source, lower, namespace, isCommon);
                 } catch (Exception e) {
                     System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
                 }
@@ -466,15 +539,18 @@ public final class MaterialLibrary {
 
     private static void scanFolderForMaterials(File folder, String namespace, boolean isCommon) {
         try (Stream<Path> paths = Files.walk(folder.toPath())) {
-            paths.filter(Files::isRegularFile).forEach(path -> {
+            // Sort so material/alias collision resolution is deterministic across
+            // filesystems; see scanVehicle.
+            paths.sorted().filter(Files::isRegularFile).forEach(path -> {
                 String filePath = path.toString().replace('\\', '/');
                 boolean isTarget = isCommon || underVehiclesNamespace(filePath, namespace);
-                if (!isTarget || !filePath.toLowerCase(Locale.ROOT).endsWith(".materials.json")) {
+                String lower = filePath.toLowerCase(Locale.ROOT);
+                if (!isTarget || !isIndexedFile(lower)) {
                     return;
                 }
                 String source = path.toAbsolutePath().toString();
                 try (InputStream in = Files.newInputStream(path)) {
-                    parseMaterialsFile(in, source, namespace, isCommon);
+                    processIndexedFile(in, source, lower, namespace, isCommon);
                 } catch (Exception e) {
                     System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
                 }
@@ -482,6 +558,32 @@ public final class MaterialLibrary {
         } catch (Exception e) {
             System.err.println("⚠️ [Materials] Failed to walk folder " + folder.getName() + ": " + e.getMessage());
         }
+    }
+
+    /** A file that feeds the material index: materials JSON or JBeam (for glowMap aliases). */
+    private static boolean isIndexedFile(String lowerName) {
+        return lowerName.endsWith(".materials.json") || lowerName.endsWith(".jbeam");
+    }
+
+    private static void processIndexedFile(InputStream in, String source, String lowerName,
+                                           String namespace, boolean isCommon) throws IOException {
+        if (lowerName.endsWith(".jbeam")) {
+            registerJBeamAliases(in, namespace);
+        } else {
+            parseMaterialsFile(in, source, namespace, isCommon);
+        }
+    }
+
+    /**
+     * Reads one JBeam file and registers its {@code glowMap} {@code off} aliases
+     * into the namespace's static alias index. Malformed content contributes
+     * nothing and never aborts the scan (see {@link GlowMapAliasExtractor}).
+     */
+    private static void registerJBeamAliases(InputStream in, String namespace) throws IOException {
+        String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        Map<String, String> index = ALIAS_INDEXES.computeIfAbsent(
+                namespace.toLowerCase(Locale.ROOT), k -> new HashMap<>());
+        GlowMapAliasExtractor.collectFromJBeam(content, index);
     }
 
     private static void parseMaterialsFile(InputStream in, String source, String namespace, boolean isCommon)

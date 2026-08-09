@@ -24,10 +24,21 @@ public final class MaterialStage {
      */
     public final RgbaColor baseColorFactor;
 
-    public MaterialStage(int index, String baseColorMap, String opacityMap, RgbaColor baseColorFactor) {
+    /**
+     * Stage-level {@code opacityFactor} (a scalar multiplier for the diffuse
+     * alpha), or null when absent. An explicit 0 is preserved (never folded into
+     * null), so callers can distinguish "not declared" from "declared fully
+     * transparent". The planner treats a non-null stage value as authoritative
+     * for the selected stage, ahead of the material-level value.
+     */
+    public final Float opacityFactor;
+
+    public MaterialStage(int index, String baseColorMap, String opacityMap, RgbaColor baseColorFactor,
+                         Float opacityFactor) {
         this.index = index;
         this.baseColorMap = baseColorMap;
         this.opacityMap = opacityMap;
         this.baseColorFactor = baseColorFactor;
+        this.opacityFactor = opacityFactor;
     }
 }

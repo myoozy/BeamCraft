@@ -48,6 +48,14 @@ public final class MaterialDefinition {
     /** {@code translucent}; defaults to false when absent. */
     public final boolean translucent;
 
+    /**
+     * Material-level {@code opacityFactor} (a scalar multiplier for the diffuse
+     * alpha), or null when absent. An explicit 0 is preserved (never folded into
+     * null). The stage-level value takes precedence for the selected stage; see
+     * {@link MaterialStage#opacityFactor} and {@link MaterialRenderPlanner}.
+     */
+    public final Float opacityFactor;
+
     /** {@code translucentBlendOp} (e.g. "None", "Additive"); may be null. */
     public final String translucentBlendOp;
 
@@ -59,8 +67,8 @@ public final class MaterialDefinition {
 
     MaterialDefinition(String name, String mapTo, int activeLayers,
                        List<MaterialStage> stages, RgbaColor baseColorFactor,
-                       float alphaRef, boolean translucent, String translucentBlendOp,
-                       float version, String source) {
+                       float alphaRef, boolean translucent, Float opacityFactor,
+                       String translucentBlendOp, float version, String source) {
         this.name = name;
         this.mapTo = mapTo;
         this.activeLayers = activeLayers;
@@ -68,6 +76,7 @@ public final class MaterialDefinition {
         this.baseColorFactor = baseColorFactor;
         this.alphaRef = alphaRef;
         this.translucent = translucent;
+        this.opacityFactor = opacityFactor;
         this.translucentBlendOp = translucentBlendOp;
         this.version = version;
         this.source = source;
@@ -96,6 +105,7 @@ public final class MaterialDefinition {
                 parseColorFactor(json),
                 number(json, "alphaRef", 0f),
                 bool(json, "translucent", false),
+                parseOpacityFactor(json),
                 string(json, "translucentBlendOp"),
                 number(json, "version", 0f),
                 source
@@ -121,7 +131,7 @@ public final class MaterialDefinition {
             }
             String opacityMap = string(stageObject, "opacityMap");
             RgbaColor colorFactor = parseColorFactor(stageObject);
-            out.add(new MaterialStage(i, baseColorMap, opacityMap, colorFactor));
+            out.add(new MaterialStage(i, baseColorMap, opacityMap, colorFactor, parseOpacityFactor(stageObject)));
         }
         return Collections.unmodifiableList(out);
     }
@@ -163,6 +173,29 @@ public final class MaterialDefinition {
                 rgba[3] = 1f; // default alpha
             }
             return new RgbaColor(rgba[0], rgba[1], rgba[2], rgba[3]);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * {@code opacityFactor} as a nullable scalar, or null when absent or
+     * malformed. Only genuine JSON numbers are accepted (a stray boolean or
+     * array is malformed and must be skipped, not coerced); an explicit 0 is
+     * preserved and returned as {@code 0f}, keeping it distinct from absent.
+     */
+    private static Float parseOpacityFactor(JsonObject object) {
+        if (object == null || !object.has("opacityFactor")) {
+            return null;
+        }
+        JsonElement element = object.get("opacityFactor");
+        if (element == null || element.isJsonNull() || !element.isJsonPrimitive()
+                || !element.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            float value = element.getAsFloat();
+            return Float.isFinite(value) ? value : null;
         } catch (Exception e) {
             return null;
         }

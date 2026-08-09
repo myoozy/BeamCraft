@@ -57,11 +57,22 @@ public class ComputeSkinningPipeline {
      * (already rebased to absolute render-vertex indices, so no base vertex is
      * needed), {@link #indexCount} the number of indices, and
      * {@link #materialName} the DAE material name for scoped material lookup.
+     *
+     * <p>{@link #centerX}/{@link #centerY}/{@link #centerZ} is the model-space
+     * centroid of the range's vertices, computed during the index build from the
+     * rest-pose skinned positions (see {@link #computeRangeCentroids}); it is
+     * only meaningful when {@link #hasCentroid} is true. The centroid backs the
+     * back-to-front sort of translucent sub-meshes: transforming it by the
+     * vehicle's model-view matrix yields a view-space depth without touching the
+     * GPU buffers.
      */
     public static final class SubMeshRange {
         public final String materialName;
         public final int combinedStartIndex;
         public final int indexCount;
+        /** Model-space centroid of the range's vertices; valid when {@link #hasCentroid}. */
+        public float centerX, centerY, centerZ;
+        public boolean hasCentroid;
 
         public SubMeshRange(String materialName, int combinedStartIndex, int indexCount) {
             this.materialName = materialName;
@@ -71,7 +82,9 @@ public class ComputeSkinningPipeline {
 
         @Override
         public String toString() {
-            return "SubMeshRange[" + materialName + ", " + combinedStartIndex + "+" + indexCount + ']';
+            return "SubMeshRange[" + materialName + ", " + combinedStartIndex + "+" + indexCount
+                    + (hasCentroid ? ", centroid=(" + centerX + ", " + centerY + ", " + centerZ + ")" : "")
+                    + ']';
         }
     }
 
@@ -106,6 +119,37 @@ public class ComputeSkinningPipeline {
             out.add(new SubMeshRange(sm.materialName, (int) combinedStart, sm.indexCount));
         }
         return out;
+    }
+
+    /**
+     * Pure, unit-tested: returns a new list of translucent ranges sorted
+     * back-to-front for alpha blending, using each range's model-space centroid
+     * (see {@link SubMeshRange#hasCentroid}) transformed into view space by
+     * {@code modelView}. The OpenGL camera looks down -Z, so the most-negative
+     * view-space depth is the farthest range and is drawn first; ascending sort
+     * therefore yields far-to-near order.
+     *
+     * <p>Ranges without a centroid (should not occur after the index build)
+     * sort to the front of the list and are drawn first, treated as farthest.
+     * The sort is stable, and the input list is not modified. When
+     * {@code modelView} is null the input order is preserved.
+     */
+    public static List<SubMeshRange> sortTranslucentBackToFront(List<SubMeshRange> ranges, Matrix4f modelView) {
+        List<SubMeshRange> out = new ArrayList<>(ranges);
+        if (modelView == null) {
+            return out;
+        }
+        out.sort((a, b) -> Float.compare(viewSpaceDepth(modelView, a), viewSpaceDepth(modelView, b)));
+        return out;
+    }
+
+    private static float viewSpaceDepth(Matrix4f modelView, SubMeshRange range) {
+        if (!range.hasCentroid) {
+            return Float.NEGATIVE_INFINITY;
+        }
+        org.joml.Vector4f viewPos = new org.joml.Vector4f(range.centerX, range.centerY, range.centerZ, 1f);
+        modelView.transform(viewPos);
+        return viewPos.z;
     }
 
     private static final int RIG_STREAM_COUNT = 3;
@@ -384,7 +428,39 @@ public class ComputeSkinningPipeline {
             throw new IllegalStateException("DAE geometry changed while the GPU skinning pipeline was initialized");
         }
         this.totalIndexCount = combined.length;
+        computeRangeCentroids(flex, combined);
         return combined;
+    }
+
+    /**
+     * Fills each {@link SubMeshRange}'s model-space centroid from the rest-pose
+     * skinned positions. The centroid is the mean position of the range's
+     * vertices; it is used only for the translucent back-to-front sort, so it is
+     * computed once at init time and never updated as the vehicle deforms (glass
+     * panels move with the body, so the rest-pose ordering stays defensible).
+     */
+    private void computeRangeCentroids(FlexbodyContainer flex, int[] combined) {
+        for (SubMeshRange range : subMeshRanges) {
+            float sx = 0f, sy = 0f, sz = 0f;
+            int count = 0;
+            int end = range.combinedStartIndex + range.indexCount;
+            for (int i = range.combinedStartIndex; i < end; i++) {
+                int v = combined[i];
+                if (v < 0 || v >= totalVertices) {
+                    continue;
+                }
+                sx += flex.skinnedPosX[v];
+                sy += flex.skinnedPosY[v];
+                sz += flex.skinnedPosZ[v];
+                count++;
+            }
+            if (count > 0) {
+                range.centerX = sx / count;
+                range.centerY = sy / count;
+                range.centerZ = sz / count;
+                range.hasCentroid = true;
+            }
+        }
     }
 
     private DaeMeshLoader.RawGeometry findGeometry(FlexbodyContainer flex, int mesh) {
