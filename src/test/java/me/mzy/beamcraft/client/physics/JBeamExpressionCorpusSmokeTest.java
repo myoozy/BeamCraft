@@ -34,12 +34,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * result distribution (OK / syntax / eval-error / unsupported / internal) is printed
  * as a report. Unexpected internal errors fail the test because they are evaluator bugs.
  *
- * <p>Enable with {@code -Dbeamcraft.jbeam.corpus=/path/to/content/vehicles}.
- * The test skips when the property is absent or does not identify a directory.
+ * <p>Enable with the {@code BEAMCRAFT_JBEAM_CORPUS} environment variable, or
+ * the {@code beamcraft.jbeam.corpus} system property when the test JVM is configured
+ * to receive it. The test skips when neither value identifies a directory.
  */
 class JBeamExpressionCorpusSmokeTest {
 
     private static final String CORPUS_PROPERTY = "beamcraft.jbeam.corpus";
+    private static final String CORPUS_ENV = "BEAMCRAFT_JBEAM_CORPUS";
 
     private static String readIS(InputStream is) throws Exception {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
@@ -138,8 +140,11 @@ class JBeamExpressionCorpusSmokeTest {
     @Test
     void allCorpusExpressionsNeverCrashAndAreClassified() throws Exception {
         String configuredRoot = System.getProperty(CORPUS_PROPERTY);
+        if (configuredRoot == null || configuredRoot.isBlank()) {
+            configuredRoot = System.getenv(CORPUS_ENV);
+        }
         Assumptions.assumeTrue(configuredRoot != null && !configuredRoot.isBlank(),
-                "JBeam corpus path not configured; set -D" + CORPUS_PROPERTY);
+                "JBeam corpus path not configured; set " + CORPUS_ENV);
         Path corpusRoot = Path.of(configuredRoot);
         Assumptions.assumeTrue(Files.isDirectory(corpusRoot),
                 "Configured JBeam corpus path is not a directory: " + corpusRoot);
