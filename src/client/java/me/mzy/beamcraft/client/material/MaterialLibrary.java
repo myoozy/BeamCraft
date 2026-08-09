@@ -2,6 +2,11 @@ package me.mzy.beamcraft.client.material;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.mzy.beamcraft.texture.DecodedImage;
+import me.mzy.beamcraft.texture.DecodedTextureCache;
+import me.mzy.beamcraft.texture.DdsDecoder;
+import me.mzy.beamcraft.texture.TextureCompositor;
+import me.mzy.beamcraft.texture.TextureOwnership;
 
 import java.io.File;
 import java.io.IOException;
@@ -13,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -68,6 +74,20 @@ public final class MaterialLibrary {
     /** namespace (lowercase) -> texture sources owned by that vehicle, to unregister on release. */
     private static final Map<String, List<File>> NAMESPACE_SOURCES = new HashMap<>();
 
+    /** canonical source ids of the shared common sources (never namespace-released). */
+    private static final Set<String> COMMON_SOURCE_IDS = new HashSet<>();
+
+    /** namespace (lowercase) -> canonical source ids owned by that vehicle. */
+    private static final Map<String, Set<String>> NAMESPACE_SOURCE_IDS = new HashMap<>();
+
+    /**
+     * Decoded-texture cache keyed by {@link TextureResource}. Acquired images
+     * are pinned until released; vehicle-only entries are evicted when their
+     * namespace's last reference releases, while common/shared entries stay.
+     * See {@link DecodedTextureCache} for the exact contract.
+     */
+    private static final DecodedTextureCache<TextureResource> DECODED_TEXTURES = new DecodedTextureCache<>(1024);
+
     private static final TextureResourceLocator LOCATOR = new TextureResourceLocator();
 
     private static boolean isCommonLoaded = false;
@@ -91,6 +111,9 @@ public final class MaterialLibrary {
             return; // Already indexed for a live instance.
         }
 
+        if (!ns.equals(COMMON_NS)) {
+            DECODED_TEXTURES.retainNamespace(ns);
+        }
         if (!isCommonLoaded) {
             scanCommon(vehiclesRootDir);
             isCommonLoaded = true;
@@ -111,6 +134,10 @@ public final class MaterialLibrary {
         if (count <= 0) {
             REF_COUNTS.remove(ns);
             VEHICLE_INDEXES.remove(ns);
+            NAMESPACE_SOURCE_IDS.remove(ns);
+            if (!ns.equals(COMMON_NS)) {
+                DECODED_TEXTURES.releaseNamespace(ns);
+            }
             List<File> sources = NAMESPACE_SOURCES.remove(ns);
             if (sources != null) {
                 for (File source : sources) {
@@ -216,6 +243,83 @@ public final class MaterialLibrary {
     }
 
     // ------------------------------------------------------------------
+    // Decoded textures (cache + composition)
+    // ------------------------------------------------------------------
+
+    /**
+     * Decodes a resolved texture to an RGBA8 image via the backend-neutral DDS
+     * decoder and retains it in the decoded-texture cache. The returned image
+     * is pinned; call {@link #releaseDecodedTexture} when done. The image is
+     * owned by the cache (or by a later renderer uploader) and must not be
+     * mutated.
+     *
+     * @param resource  an opaque handle from {@link #resolveTexture}
+     * @param namespace the vehicle namespace acquiring the texture (used to
+     *                  decide lifecycle ownership); may be null
+     * @return the decoded image, never null
+     * @throws IOException if the texture cannot be read or decoded; nothing is
+     *                     cached on failure
+     */
+    public static DecodedImage acquireDecodedTexture(TextureResource resource, String namespace) throws IOException {
+        if (resource == null) {
+            throw new IOException("cannot decode a null texture resource");
+        }
+        String ns = namespace == null ? null : namespace.toLowerCase(Locale.ROOT);
+        String ownership = TextureOwnership.resolve(resource.sourceId(), COMMON_SOURCE_IDS, ns,
+                ns == null ? null : NAMESPACE_SOURCE_IDS.get(ns));
+        return DECODED_TEXTURES.acquire(resource, ownership, key -> DdsDecoder.decode(LOCATOR.readBytes(key)));
+    }
+
+    /**
+     * Releases one prior {@link #acquireDecodedTexture} of {@code resource}.
+     * Idempotent; safe to call for textures never acquired.
+     */
+    public static void releaseDecodedTexture(TextureResource resource) {
+        DECODED_TEXTURES.release(resource);
+    }
+
+    /**
+     * Convenience: acquires the diffuse and opacity textures, composes them
+     * (opacity multiplies the diffuse alpha, see {@link TextureCompositor}),
+     * releases both acquires and returns the composed image. The result is a
+     * fresh image that is <em>not</em> cached and is owned by the caller.
+     *
+     * @param diffuse   base-colour texture handle
+     * @param opacity   single-channel opacity texture handle
+     * @param namespace vehicle namespace for lifecycle ownership
+     * @return the composed RGBA image (caller-owned, not cached)
+     * @throws IOException if either texture cannot be decoded, or the
+     *                     dimensions mismatch (as {@link IllegalArgumentException})
+     */
+    public static DecodedImage composeDiffuseAndOpacity(TextureResource diffuse, TextureResource opacity,
+                                                        String namespace) throws IOException {
+        DecodedImage base = acquireDecodedTexture(diffuse, namespace);
+        DecodedImage opacityImage;
+        try {
+            opacityImage = acquireDecodedTexture(opacity, namespace);
+        } catch (IOException | RuntimeException e) {
+            releaseDecodedTexture(diffuse);
+            throw e;
+        }
+        try {
+            return TextureCompositor.composeBaseWithOpacity(base, opacityImage);
+        } finally {
+            releaseDecodedTexture(opacity);
+            releaseDecodedTexture(diffuse);
+        }
+    }
+
+    /** Decoded textures currently retained by the cache (diagnostic). */
+    public static int getDecodedTextureCount() {
+        return DECODED_TEXTURES.size();
+    }
+
+    /** Decoded textures still pinned by an acquire (diagnostic). */
+    public static int getDecodedTexturePinnedCount() {
+        return DECODED_TEXTURES.pinnedCount();
+    }
+
+    // ------------------------------------------------------------------
     // Scanning
     // ------------------------------------------------------------------
 
@@ -224,10 +328,12 @@ public final class MaterialLibrary {
         File commonDir = new File(vehiclesRootDir, COMMON_NS);
         if (commonZip.exists()) {
             LOCATOR.registerSource(commonZip);
+            COMMON_SOURCE_IDS.add(canonicalPath(commonZip));
             scanZipForMaterials(commonZip, COMMON_NS, true);
         }
         if (commonDir.isDirectory()) {
             LOCATOR.registerSource(commonDir);
+            COMMON_SOURCE_IDS.add(canonicalPath(commonDir));
             scanFolderForMaterials(commonDir, COMMON_NS, true);
         }
     }
@@ -238,6 +344,7 @@ public final class MaterialLibrary {
             return;
         }
         List<File> ownedSources = new ArrayList<>();
+        Set<String> ownedSourceIds = new HashSet<>();
         for (File file : files) {
             String name = file.getName();
             if (name.equals(COMMON_NS + ".zip") || name.equals(COMMON_NS)) {
@@ -249,14 +356,26 @@ public final class MaterialLibrary {
             if (file.isDirectory()) {
                 LOCATOR.registerSource(file);
                 ownedSources.add(file);
+                ownedSourceIds.add(canonicalPath(file));
                 scanFolderForMaterials(file, targetVehicleName, false);
             } else if (name.toLowerCase(Locale.ROOT).endsWith(".zip")) {
                 LOCATOR.registerSource(file);
                 ownedSources.add(file);
+                ownedSourceIds.add(canonicalPath(file));
                 scanZipForMaterials(file, targetVehicleName, false);
             }
         }
         NAMESPACE_SOURCES.put(targetVehicleName.toLowerCase(Locale.ROOT), ownedSources);
+        NAMESPACE_SOURCE_IDS.put(targetVehicleName.toLowerCase(Locale.ROOT), ownedSourceIds);
+    }
+
+    /** Canonical absolute path, or null when not resolvable. */
+    private static String canonicalPath(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException e) {
+            return file.getAbsolutePath();
+        }
     }
 
     /**
