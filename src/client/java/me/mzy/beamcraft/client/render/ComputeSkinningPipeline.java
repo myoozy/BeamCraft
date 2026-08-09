@@ -1,9 +1,14 @@
 package me.mzy.beamcraft.client.render;
 
+import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.material.MaterialRenderPlan;
+import me.mzy.beamcraft.client.material.RgbaColor;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gl.GlUniform;
 import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.VertexBuffer;
 import net.minecraft.client.util.BufferAllocator;
@@ -27,6 +32,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * GPU-only soft-body skinning for Minecraft's OpenGL renderer.
@@ -43,6 +51,63 @@ public class ComputeSkinningPipeline {
         READY,
         FAILED,
         CLOSED
+    }
+
+    /**
+     * One drawable sub-mesh: a contiguous range of the combined index buffer.
+     * {@link #combinedStartIndex} is the index offset into the combined EBO
+     * (already rebased to absolute render-vertex indices, so no base vertex is
+     * needed), {@link #indexCount} the number of indices, and
+     * {@link #materialName} the DAE material name for scoped material lookup.
+     */
+    public static final class SubMeshRange {
+        public final String materialName;
+        public final int combinedStartIndex;
+        public final int indexCount;
+
+        public SubMeshRange(String materialName, int combinedStartIndex, int indexCount) {
+            this.materialName = materialName;
+            this.combinedStartIndex = combinedStartIndex;
+            this.indexCount = indexCount;
+        }
+
+        @Override
+        public String toString() {
+            return "SubMeshRange[" + materialName + ", " + combinedStartIndex + "+" + indexCount + ']';
+        }
+    }
+
+    /**
+     * Pure, unit-tested: rebases a geometry's relative {@code SubMesh} ranges
+     * (startIndex/indexCount relative to that geometry's own index array) into
+     * the combined index buffer space by adding {@code combinedIndexStart}.
+     * Invalid/empty ranges are skipped, and ranges that would overflow an int or
+     * run past the geometry's own {@code geometryIndexCount} (into a neighbouring
+     * geometry's slice of the combined buffer) are rejected, all checked with
+     * {@code long} arithmetic so the guards themselves cannot overflow.
+     */
+    public static List<SubMeshRange> rebaseSubMeshRanges(
+            List<DaeMeshLoader.SubMesh> subMeshes, int combinedIndexStart, int geometryIndexCount) {
+        List<SubMeshRange> out = new ArrayList<>();
+        if (subMeshes == null) {
+            return out;
+        }
+        for (DaeMeshLoader.SubMesh sm : subMeshes) {
+            if (sm == null || sm.indexCount <= 0 || sm.startIndex < 0) {
+                continue;
+            }
+            long relativeEnd = (long) sm.startIndex + sm.indexCount;
+            if (relativeEnd > geometryIndexCount) {
+                continue; // cross-geometry range
+            }
+            long combinedStart = (long) combinedIndexStart + sm.startIndex;
+            long combinedEnd = combinedStart + sm.indexCount;
+            if (combinedStart > Integer.MAX_VALUE || combinedEnd > Integer.MAX_VALUE) {
+                continue; // int overflow in the rebased range
+            }
+            out.add(new SubMeshRange(sm.materialName, (int) combinedStart, sm.indexCount));
+        }
+        return out;
     }
 
     private static final int RIG_STREAM_COUNT = 3;
@@ -63,8 +128,12 @@ public class ComputeSkinningPipeline {
     private int transformVao = -1;
 
     private int totalVertices;
+    private int totalIndexCount;
+    private VertexFormat.IndexType indexType;
+    private int indexSizeBytes;
     private int maxNodeCount;
     private int lightAttributeIndex = -1;
+    private final List<SubMeshRange> subMeshRanges = new ArrayList<>();
     private ByteBuffer nodeUploadBuffer;
 
     private State state = State.NEW;
@@ -116,6 +185,14 @@ public class ComputeSkinningPipeline {
 
     public boolean hasValidOutput() {
         return state == State.READY && hasValidOutput;
+    }
+
+    /**
+     * Per-material drawable index ranges, in combined index-buffer order.
+     * Unmodifiable view: callers may iterate but never mutate the internal list.
+     */
+    public List<SubMeshRange> getSubMeshRanges() {
+        return Collections.unmodifiableList(subMeshRanges);
     }
 
     private void validateCapabilities() {
@@ -273,11 +350,14 @@ public class ComputeSkinningPipeline {
 
         mcVbo.bind();
         mcVbo.upload(meshData);
-        uploadIndexBuffer(indices, VertexFormat.IndexType.smallestFor(indices.length));
+        indexType = VertexFormat.IndexType.smallestFor(indices.length);
+        indexSizeBytes = indexType.size;
+        uploadIndexBuffer(indices, indexType);
         VertexBuffer.unbind();
     }
 
     private int[] buildCombinedIndices(FlexbodyContainer flex) {
+        subMeshRanges.clear();
         int totalIndexCount = 0;
         for (int mesh = 0; mesh < flex.meshCount; mesh++) {
             DaeMeshLoader.RawGeometry geometry = findGeometry(flex, mesh);
@@ -294,15 +374,18 @@ public class ComputeSkinningPipeline {
             if (geometry == null) {
                 continue;
             }
+            int geometryIndexStart = indexOffset;
             for (int index = 0; index < geometry.indexCount; index++) {
                 combined[indexOffset++] = vertexOffset + geometry.indices[index];
             }
+            subMeshRanges.addAll(rebaseSubMeshRanges(geometry.subMeshes, geometryIndexStart, geometry.indexCount));
             vertexOffset += geometry.vertexCount;
         }
 
         if (vertexOffset != totalVertices || indexOffset != combined.length) {
             throw new IllegalStateException("DAE geometry changed while the GPU skinning pipeline was initialized");
         }
+        this.totalIndexCount = combined.length;
         return combined;
     }
 
@@ -511,6 +594,88 @@ public class ComputeSkinningPipeline {
         } finally {
             VertexBuffer.unbind();
         }
+    }
+
+    /**
+     * Draws one sub-mesh range with its material's diffuse texture. Replicates
+     * {@code mcVbo.draw}'s uniform setup and shader bind, then issues a
+     * {@code glDrawElements} over the range's byte-sliced index offset. The
+     * range is validated defensively; invalid ranges are skipped rather than
+     * drawn.
+     *
+     * <p>ShaderProgram assigns each sampler its actual GL unit from the loaded
+     * (post-optimisation) sampler list during {@code bind()}, so the diffuse
+     * sampler's unit is framework-owned, never a fixed constant. Around
+     * bind/draw/unbind this method preserves and restores the active texture
+     * unit and the {@code GL_TEXTURE_2D} binding on every unit the program can
+     * touch (conservatively units 0..3, covering its three samplers). Reads use
+     * raw GL (they never desync GlStateManager); writes use the
+     * RenderSystem/GlStateManager tracked wrappers so Minecraft's per-unit
+     * GL_TEXTURE_2D tracking stays consistent with the real GL state.
+     */
+    public void drawRange(SubMeshRange range, int diffuseTextureId, MaterialRenderPlan plan,
+                          Matrix4f modelView, Matrix4f projection, ShaderProgram shader, int packedLight) {
+        RenderSystem.assertOnRenderThread();
+        if (!hasValidOutput() || shader == null || range == null) {
+            return;
+        }
+        if (range.indexCount <= 0 || range.combinedStartIndex < 0
+                || (long) range.combinedStartIndex + range.indexCount > totalIndexCount) {
+            return; // defensive: never draw an out-of-range slice
+        }
+
+        mcVbo.bind();
+        try {
+            int blockLight = packedLight & 0xFFFF;
+            int skyLight = packedLight >>> 16 & 0xFFFF;
+            GL30.glVertexAttribI2i(lightAttributeIndex, blockLight, skyLight);
+
+            int previousActiveTexture = GlStateManager._getActiveTexture();
+            int[] previousBindings = new int[4];
+            for (int unit = 0; unit < previousBindings.length; unit++) {
+                RenderSystem.activeTexture(GL13.GL_TEXTURE0 + unit);
+                previousBindings[unit] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            }
+
+            try {
+                shader.initializeUniforms(VertexFormat.DrawMode.TRIANGLES, modelView, projection,
+                        MinecraftClient.getInstance().getWindow());
+                setDiffuseUniforms(shader, plan, diffuseTextureId);
+                boolean bound = false;
+                try {
+                    shader.bind();
+                    bound = true;
+                    long byteOffset = (long) range.combinedStartIndex * indexSizeBytes;
+                    GL11.glDrawElements(VertexFormat.DrawMode.TRIANGLES.glMode,
+                            range.indexCount, indexType.glType, byteOffset);
+                } finally {
+                    if (bound) {
+                        shader.unbind(); // also runs if the draw throws
+                    }
+                }
+            } finally {
+                for (int unit = 0; unit < previousBindings.length; unit++) {
+                    RenderSystem.activeTexture(GL13.GL_TEXTURE0 + unit);
+                    RenderSystem.bindTexture(previousBindings[unit]);
+                }
+                RenderSystem.activeTexture(previousActiveTexture);
+            }
+        } finally {
+            VertexBuffer.unbind();
+        }
+    }
+
+    private void setDiffuseUniforms(ShaderProgram shader, MaterialRenderPlan plan, int diffuseTextureId) {
+        GlUniform useTexture = shader.getUniform("BeamcraftUseTexture");
+        if (useTexture != null) {
+            useTexture.set(plan.hasTexture() ? 1 : 0);
+        }
+        RgbaColor factor = plan.colorFactor();
+        GlUniform diffuseColor = shader.getUniform("BeamcraftDiffuseColor");
+        if (diffuseColor != null) {
+            diffuseColor.set(factor.r(), factor.g(), factor.b(), factor.a());
+        }
+        shader.addSampler("BeamcraftDiffuse", diffuseTextureId);
     }
 
     private void bindTextureBuffer(int unit, int texture, int[] previousBindings) {

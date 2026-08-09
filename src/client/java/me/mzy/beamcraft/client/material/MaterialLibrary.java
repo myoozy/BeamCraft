@@ -81,6 +81,23 @@ public final class MaterialLibrary {
     private static final Map<String, Set<String>> NAMESPACE_SOURCE_IDS = new HashMap<>();
 
     /**
+     * Backend-neutral lifecycle observers notified when a vehicle namespace is
+     * actually released (reference count reached zero), after its vehicle-only
+     * index, decoded textures and sources are reclaimed. A renderer backend
+     * (e.g. the GL texture uploader) registers here to free its own
+     * vehicle-only resources; the hook stays free of any GL/Vulkan type so the
+     * material model remains backend-neutral.
+     */
+    private static final List<java.util.function.Consumer<String>> NAMESPACE_RELEASE_LISTENERS = new ArrayList<>();
+
+    /** Registers a namespace-release observer; never called with a null namespace. */
+    public static void addNamespaceReleaseListener(java.util.function.Consumer<String> listener) {
+        if (listener != null) {
+            NAMESPACE_RELEASE_LISTENERS.add(listener);
+        }
+    }
+
+    /**
      * Decoded-texture cache keyed by {@link TextureResource}. Acquired images
      * are pinned until released; vehicle-only entries are evicted when their
      * namespace's last reference releases, while common/shared entries stay.
@@ -142,6 +159,13 @@ public final class MaterialLibrary {
             if (sources != null) {
                 for (File source : sources) {
                     LOCATOR.unregisterSource(source);
+                }
+            }
+            for (java.util.function.Consumer<String> listener : NAMESPACE_RELEASE_LISTENERS) {
+                try {
+                    listener.accept(ns);
+                } catch (RuntimeException e) {
+                    System.err.println("⚠️ [Materials] Namespace release listener failed for " + ns + ": " + e.getMessage());
                 }
             }
         } else {
@@ -276,6 +300,27 @@ public final class MaterialLibrary {
      */
     public static void releaseDecodedTexture(TextureResource resource) {
         DECODED_TEXTURES.release(resource);
+    }
+
+    /**
+     * Resolves the lifecycle ownership of {@code resource} for the given
+     * requesting namespace, mirroring the ownership used internally by
+     * {@link #acquireDecodedTexture}: the requesting namespace for that
+     * namespace's own sources, otherwise {@code null} (shared/common, durable).
+     * A renderer backend uses this to know whether its cached upload of a
+     * texture should be reclaimed when the namespace is released.
+     *
+     * @param resource  an opaque handle from {@link #resolveTexture}
+     * @param namespace the namespace acquiring the texture (may be null)
+     * @return the owning namespace, or null for shared/common/unknown sources
+     */
+    public static String resolveTextureOwnership(TextureResource resource, String namespace) {
+        if (resource == null) {
+            return null;
+        }
+        String ns = namespace == null ? null : namespace.toLowerCase(Locale.ROOT);
+        return TextureOwnership.resolve(resource.sourceId(), COMMON_SOURCE_IDS, ns,
+                ns == null ? null : NAMESPACE_SOURCE_IDS.get(ns));
     }
 
     /**
