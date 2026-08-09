@@ -4,6 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.physics.JBeamExpressionEvaluator.EvalOutcome;
+import me.mzy.beamcraft.client.physics.JBeamExpressionEvaluator.EvalStatus;
 
 import java.util.Map;
 
@@ -14,193 +16,103 @@ import java.util.Map;
 public class JBeamParser {
 
     /**
-     * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"
-     * 支持 + - * / 和变量替换（变量以 $ 开头，未定义变量 → 0.0）
+     * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"。
+     * 内部委托给 {@link JBeamExpressionEvaluator}（真正的 tokenizer + 优先级 parser）。
+     * 兼容语义保持不变：裸 "$var"（未定义 → 0.0f）；非 $= 的非数字串 → null。
      */
     public static Float evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
+        if (expr == null) return null;
         expr = expr.trim();
+        if (expr.isEmpty()) return null;
 
-        // 处理 BeamNG 的直接变量引用 (例如 "$trackoffset_F")
-        if (expr.startsWith("$") && !expr.startsWith("$=")) {
-            String varName = expr.substring(1); // 砍掉前面的 '$'
-            if (variables != null && variables.containsKey(varName)) {
-                return variables.get(varName).floatValue();
-            }
-            return 0.0f; // Undefined BeamNG variables default to zero.
+        // 纯数字字面量快速路径
+        if (!expr.startsWith("$")) {
+            try { return Float.parseFloat(expr); } catch (NumberFormatException e) { return null; }
         }
 
-        // 如果既不是 $= 也不是纯变量，尝试按普通数字解析
+        // 兼容路径：仅当整个字符串就是裸 "$var"（无 $=、无运算符）时才走"未定义→0.0f"逻辑；
+        // "$var + 1" 这类即使没有 $= 也按完整表达式求值。
         if (!expr.startsWith("$=")) {
-            try { return Float.parseFloat(expr); } catch (Exception e) { return null; }
-        }
-
-        String equation = expr.substring(2);
-
-        // 顶层 case(condition, trueVal, falseVal)：BeamNG 常用的条件表达式定制支持（== / nil）
-        String trimmedEquation = equation.trim();
-        if (trimmedEquation.startsWith("case(")) {
-            return evaluateCaseExpression(trimmedEquation, variables);
-        }
-
-        // 递归替换所有 $variable (最长匹配)
-        boolean changed;
-        do {
-            changed = false;
-            StringBuilder sb = new StringBuilder();
-            int i = 0;
-            while (i < equation.length()) {
-                if (equation.charAt(i) == '$') {
-                    int j = i + 1;
-                    while (j < equation.length() && (Character.isLetterOrDigit(equation.charAt(j)) || equation.charAt(j) == '_')) j++;
-                    String varName = equation.substring(i + 1, j);
-                    float val = variables != null ? variables.getOrDefault(varName, 0.0).floatValue() : 0.0f;
-                    sb.append(val);
-                    i = j;
-                    changed = true;
-                } else {
-                    sb.append(equation.charAt(i));
-                    i++;
+            if (isBareVariable(expr)) {
+                String varName = expr.substring(1);
+                if (variables != null && variables.containsKey(varName)) {
+                    return variables.get(varName).floatValue();
                 }
+                return 0.0f; // Undefined BeamNG variables default to zero.
             }
-            equation = sb.toString();
-        } while (changed);
-
-        // 简单四则运算 (支持 + - * /，按顺序从左到右，无优先级)
-        try {
-            equation = equation.replaceAll("\\s+", "");
-            // 先计算乘除
-            while (equation.contains("*") || equation.contains("/")) {
-                int idxMul = equation.indexOf('*');
-                int idxDiv = equation.indexOf('/');
-                int opIdx = (idxMul >= 0 && (idxDiv < 0 || idxMul < idxDiv)) ? idxMul : idxDiv;
-                if (opIdx < 0) break;
-                int leftStart = opIdx - 1;
-                while (leftStart >= 0 && (Character.isDigit(equation.charAt(leftStart)) || equation.charAt(leftStart) == '.')) leftStart--;
-                leftStart++;
-                int rightEnd = opIdx + 1;
-                while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                float left = Float.parseFloat(equation.substring(leftStart, opIdx));
-                float right = Float.parseFloat(equation.substring(opIdx + 1, rightEnd));
-                float res = (equation.charAt(opIdx) == '*') ? left * right : left / right;
-                equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
-            }
-            // 再计算加减
-            while (equation.contains("+") || (equation.contains("-") && equation.lastIndexOf('-') > 0)) {
-                int idxAdd = equation.indexOf('+');
-                int idxSub = equation.lastIndexOf('-');
-                int opIdx = (idxAdd >= 0 && (idxSub < 0 || idxAdd < idxSub)) ? idxAdd : idxSub;
-                if (opIdx < 0) break;
-                int leftStart = opIdx - 1;
-                while (leftStart >= 0 && (Character.isDigit(equation.charAt(leftStart)) || equation.charAt(leftStart) == '.')) leftStart--;
-                leftStart++;
-                int rightEnd = opIdx + 1;
-                while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                float left = Float.parseFloat(equation.substring(leftStart, opIdx));
-                float right = Float.parseFloat(equation.substring(opIdx + 1, rightEnd));
-                float res = (equation.charAt(opIdx) == '+') ? left + right : left - right;
-                equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
-            }
-            return Float.parseFloat(equation);
-        } catch (Exception e) {
+            // 形如 "$a+1" / "$components.foo"（dotted）的表达式交给 evaluator
+            EvalOutcome out = JBeamExpressionEvaluator.evaluate(expr, JBeamExpressionEvaluator.contextOf(variables));
+            if (out.status() == EvalStatus.OK && out.value() instanceof Number n) return n.floatValue();
+            if (out.status() != EvalStatus.OK) ExpressionDiagnostics.warn(expr, out.reason());
             return null;
         }
-    }
 
-    /**
-     * 处理 BeamNG 顶层 case(condition, trueVal, falseVal) 表达式。
-     * 仅支持由 "==" 与 "nil" 组成的条件；nil 表示未定义变量。
-     * 其余形式（嵌套、残余内容、非 == 条件）返回 null，保持既有的"不应用该变换"行为。
-     */
-    private static Float evaluateCaseExpression(String equation, Map<String, Double> variables) {
-        int start = 5; // "case(" 的长度
-        int depth = 0;
-        int end = -1;
-        for (int i = start; i < equation.length(); i++) {
-            char c = equation.charAt(i);
-            if (c == '(') depth++;
-            else if (c == ')') {
-                if (depth == 0) { end = i; break; }
-                depth--;
-            }
+        EvalOutcome out = JBeamExpressionEvaluator.evaluate(expr, JBeamExpressionEvaluator.contextOf(variables));
+        if (out.status() == EvalStatus.OK && out.value() instanceof Number n) {
+            return n.floatValue();
         }
-        if (end < 0) return null;
-        // 不解析 case(...) 之后的残余内容
-        if (!equation.substring(end + 1).trim().isEmpty()) return null;
-
-        java.util.List<String> args = splitTopLevel(equation.substring(start, end), ',');
-        if (args.size() != 3) return null;
-
-        Boolean cond = evaluateCondition(args.get(0), variables);
-        if (cond == null) return null;
-        String chosen = (cond ? args.get(1) : args.get(2)).trim();
-        return evaluateBeamNGExpression("$=" + chosen, variables);
+        if (out.status() != EvalStatus.OK) {
+            ExpressionDiagnostics.warn(expr, out.reason());
+        }
+        return null;
     }
 
     /**
-     * 求值 "A == B" 条件。条件上下文中未定义变量按 nil 处理。
-     * 无 "==" 或两侧无法解析时返回 null（表示该形式超出最小支持范围）。
+     * 字符串字段安全读取：仅在值确实包含 "$=" 前缀时才求值，其余情况原样返回。
+     * 求值结果为 String 时返回该字符串；nil/数值/布尔等非字符串结果视为"未设置"返回 null。
      */
-    private static Boolean evaluateCondition(String cond, Map<String, Double> variables) {
-        String substituted = substituteNilAware(cond, variables);
-        int eq = substituted.indexOf("==");
-        if (eq < 0) return null;
-        String left = substituted.substring(0, eq).trim();
-        String right = substituted.substring(eq + 2).trim();
-        boolean leftNil = left.equalsIgnoreCase("nil");
-        boolean rightNil = right.equalsIgnoreCase("nil");
-        if (leftNil && rightNil) return true;
-        if (leftNil || rightNil) return false;
+    public static String getStringEvalSafe(JsonObject obj, String key, String defaultValue, Map<String, Double> vars) {
+        String raw = getStringSafe(obj, key, defaultValue);
+        return evalStringValue(raw, vars);
+    }
+
+    /**
+     * 对可能为 "$=..." 的原始字符串求值。无 "$=" 前缀时原样返回；
+     * 有前缀时返回求值得到的字符串（非字符串结果 / 求值失败 → null）。
+     */
+    static String evalStringValue(String raw, Map<String, Double> vars) {
+        if (raw == null || !raw.startsWith("$=")) return raw;
+        EvalOutcome out = JBeamExpressionEvaluator.evaluate(raw, JBeamExpressionEvaluator.contextOf(vars));
+        if (out.status() == EvalStatus.OK) {
+            Object v = out.value();
+            if (v instanceof String s) return s;
+            return null; // nil / 数值 / 布尔 在字符串上下文中不可用
+        }
+        ExpressionDiagnostics.warn(raw, out.reason());
+        return null;
+    }
+
+    /**
+     * 判断是否为裸 "$var" 引用（无 $=、无运算符），用于兼容路径：未定义 → 0.0f。
+     */
+    static boolean isBareVariable(String expr) {
+        if (expr == null || expr.length() < 2 || expr.charAt(0) != '$') return false;
+        for (int i = 1; i < expr.length(); i++) {
+            char c = expr.charAt(i);
+            if (!(Character.isLetterOrDigit(c) || c == '_' || c == '.')) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 解析节点坐标单元格。数值/纯数字字符串直接解析；"$=..." 交给 evaluator；
+     * 无法解析时返回 null（调用方跳过该节点）。
+     */
+    static Double parseNodeCoordinate(JsonElement cell, Map<String, Double> vars) {
+        if (cell == null || !cell.isJsonPrimitive()) return null;
+        com.google.gson.JsonPrimitive p = cell.getAsJsonPrimitive();
+        if (p.isNumber()) return p.getAsDouble();
+        String s = p.getAsString().trim();
+        if (s.isEmpty()) return null;
+        if (s.startsWith("$")) {
+            Float f = evaluateBeamNGExpression(s, vars);
+            return f != null ? f.doubleValue() : null;
+        }
         try {
-            return Double.parseDouble(left) == Double.parseDouble(right);
+            return Double.parseDouble(s);
         } catch (NumberFormatException e) {
             return null;
         }
-    }
-
-    /**
-     * 条件专用变量替换：已定义变量 → 数值，未定义变量 → 字面量 nil。
-     * 与普通算术替换（未定义 → 0.0）区分开，以便 "var == nil" 能识别未定义变量。
-     */
-    private static String substituteNilAware(String s, Map<String, Double> variables) {
-        StringBuilder sb = new StringBuilder();
-        int i = 0;
-        while (i < s.length()) {
-            char c = s.charAt(i);
-            if (c == '$') {
-                int j = i + 1;
-                while (j < s.length() && (Character.isLetterOrDigit(s.charAt(j)) || s.charAt(j) == '_')) j++;
-                String varName = s.substring(i + 1, j);
-                if (variables != null && variables.containsKey(varName)) {
-                    sb.append(variables.get(varName));
-                } else {
-                    sb.append("nil");
-                }
-                i = j;
-            } else {
-                sb.append(c);
-                i++;
-            }
-        }
-        return sb.toString();
-    }
-
-    private static java.util.List<String> splitTopLevel(String s, char sep) {
-        java.util.List<String> result = new java.util.ArrayList<>();
-        int depth = 0;
-        StringBuilder cur = new StringBuilder();
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '(') depth++;
-            else if (c == ')') depth--;
-            if (c == sep && depth == 0) {
-                result.add(cur.toString());
-                cur.setLength(0);
-            } else {
-                cur.append(c);
-            }
-        }
-        result.add(cur.toString());
-        return result;
     }
 
     public static int getIntSafe(JsonObject obj, String key, int defaultValue) {
@@ -266,48 +178,65 @@ public class JBeamParser {
     }
 
     public static java.util.List<String> parseGroups(JsonElement el) {
+        return parseGroups(el, null);
+    }
+
+    /**
+     * 解析 group 字段。条目若以 "$=" 开头则先求值（支持字符串拼接等表达式），
+     * 求值得到非空字符串才作为 group 加入；nil/布尔/数值结果被丢弃。
+     */
+    public static java.util.List<String> parseGroups(JsonElement el, Map<String, Double> vars) {
         java.util.List<String> list = new java.util.ArrayList<>();
         if (el == null || el.isJsonNull()) return list;
 
         if (el.isJsonPrimitive()) {
-            String g = el.getAsString().trim();
-            if (!g.isEmpty()) {
-                list.add(g);
-            }
+            addGroup(list, el.getAsString(), vars);
         } else if (el.isJsonArray()) {
             for (JsonElement item : el.getAsJsonArray()) {
                 if (item.isJsonPrimitive()) {
-                    String g = item.getAsString().trim();
-                    if (!g.isEmpty()) list.add(g);
+                    addGroup(list, item.getAsString(), vars);
                 }
             }
         }
         return list;
     }
 
+    private static void addGroup(java.util.List<String> list, String raw, Map<String, Double> vars) {
+        String g = raw.trim();
+        if (g.isEmpty()) return;
+        String evaluated = evalStringValue(g, vars);
+        if (evaluated != null && !evaluated.isEmpty()) {
+            list.add(evaluated);
+        }
+    }
+
     // --- 1. Node Parsing ---
+
+    /** 可变的行内默认状态，随 nodes 数组中的修饰符对象 {} 逐步更新。 */
+    static final class NodeRowState {
+        float weight = 50.0f;
+        float friction = 0.5f;
+        float slidingFriction = -1.0f;
+        boolean collision = true;
+        boolean selfCollision = false;
+        java.util.List<String> groups = new java.util.ArrayList<>();
+    }
+
     public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry, CouplerRegistry couplerRegistry) {
         boolean isHeader = true;
-
-        float currentWeight = 50.0f;
-        float currentFriction = 0.5f;
-        float currentSlidingFriction = -1;
-        boolean currentCollision = true;
-        boolean currentSelfCollision = false;
-
-        java.util.List<String> currentGroups = new java.util.ArrayList<>();
+        NodeRowState state = new NodeRowState();
 
         for (JsonElement element : nodes) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentWeight = getFloatSafe(modifier, "nodeWeight", currentWeight, entry.variables);
-                currentFriction = getFloatSafe(modifier, "frictionCoef", currentFriction, entry.variables);
-                currentSlidingFriction = getFloatSafe(modifier, "slidingFrictionCoef", currentSlidingFriction, entry.variables);
-                currentCollision = getBooleanSafe(modifier, "collision", currentCollision);
-                currentSelfCollision = getBooleanSafe(modifier, "selfCollision", currentSelfCollision);
+                state.weight = getFloatSafe(modifier, "nodeWeight", state.weight, entry.variables);
+                state.friction = getFloatSafe(modifier, "frictionCoef", state.friction, entry.variables);
+                state.slidingFriction = getFloatSafe(modifier, "slidingFrictionCoef", state.slidingFriction, entry.variables);
+                state.collision = getBooleanSafe(modifier, "collision", state.collision);
+                state.selfCollision = getBooleanSafe(modifier, "selfCollision", state.selfCollision);
 
                 if (modifier.has("group")) {
-                    currentGroups = parseGroups(modifier.get("group"));
+                    state.groups = parseGroups(modifier.get("group"), entry.variables);
                 }
                 continue;
             }
@@ -317,78 +246,85 @@ public class JBeamParser {
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() < 4) continue;
 
-                float inlineWeight = currentWeight;
-                float inlineFriction = currentFriction;
-                float inlineSlidingFriction = currentSlidingFriction;
-                boolean inlineCollision = currentCollision;
-                boolean inlineSelfCollision = currentSelfCollision;
-
-                java.util.List<String> inlineGroups = currentGroups;
-
-                String inlineTag = "";
-                String inlineCouplerTag = "";
-                float inlineStartRadius = 0.25f;
-                float inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
-                boolean inlineCouplerWeld = false;
-                float inlineCouplerLatchSpeed = 0.3f;
-                float inlineCouplerLockRadius = 0.025f;
-
-                if (row.get(row.size() - 1).isJsonObject()) {
-                    JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
-                    inlineWeight = getFloatSafe(inline, "nodeWeight", inlineWeight, entry.variables);
-                    inlineFriction = getFloatSafe(inline, "frictionCoef", inlineFriction, entry.variables);
-                    inlineSlidingFriction = getFloatSafe(inline, "slidingFrictionCoef", inlineSlidingFriction, entry.variables);
-                    inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
-                    inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
-
-                    if (inline.has("group")) {
-                        inlineGroups = parseGroups(inline.get("group"));
-                    }
-
-                    inlineTag = getStringSafe(inline, "tag", inlineTag);
-                    inlineCouplerTag = getStringSafe(inline, "couplerTag", inlineCouplerTag);
-                    inlineStartRadius = getFloatSafe(inline, "couplerStartRadius", inlineStartRadius, entry.variables);
-                    inlineCouplerStrength = getFloatSafe(inline, "couplerStrength", inlineCouplerStrength, entry.variables);
-                    if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
-                    else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
-                    inlineCouplerLatchSpeed = getFloatSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed, entry.variables);
-                    inlineCouplerLockRadius = getFloatSafe(inline, "couplerLockRadius", inlineCouplerLockRadius, entry.variables);
+                PhysicsSpecs.NodeSpec spec = buildNodeSpec(row, state, entry, couplerRegistry);
+                if (spec != null) {
+                    vehicle.addNode(spec);
                 }
-
-                String id = row.get(0).getAsString();
-                float x = 0.0f;
-                float y = 0.0f;
-                float z = 0.0f;
-
-                try {
-                    // 提取原始 BeamNG 空间位置
-                    float rawX = row.get(1).getAsFloat();
-                    float rawY = row.get(2).getAsFloat();
-                    float rawZ = row.get(3).getAsFloat();
-
-                    // 应用插槽级联变换处理逻辑 (包含对称镜像平移、欧拉角旋转、绝对位移)
-                    double[] transformed = entry.transform.transformNode(rawX, rawY, rawZ);
-
-                    // 最终引擎空间转换: flip X, swap Y and Z
-                    x = (float) transformed[0];
-                    y = (float) transformed[2];
-                    z = (float) -transformed[1];
-                } catch (Exception e) {
-                    System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
-                    continue;
-                }
-
-                if (!inlineTag.isEmpty() || !inlineCouplerTag.isEmpty()) {
-                    couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
-                }
-
-                vehicle.addNode(new PhysicsSpecs.NodeSpec(
-                        id, x, y, z,
-                        inlineWeight, inlineFriction, inlineSlidingFriction,
-                        entry.partId, inlineCollision, inlineSelfCollision, inlineGroups
-                ));
             }
         }
+    }
+
+    /**
+     * 将单个节点数据行解析为 NodeSpec。坐标单元格可能是 "$=..." 表达式
+     * （求值后得到数值，确保表达式坐标不会导致节点被跳过）；坐标无法解析时返回 null。
+     */
+    static PhysicsSpecs.NodeSpec buildNodeSpec(JsonArray row, NodeRowState state, JBeamAssembler.PartEntry entry, CouplerRegistry couplerRegistry) {
+        float inlineWeight = state.weight;
+        float inlineFriction = state.friction;
+        float inlineSlidingFriction = state.slidingFriction;
+        boolean inlineCollision = state.collision;
+        boolean inlineSelfCollision = state.selfCollision;
+
+        java.util.List<String> inlineGroups = state.groups;
+
+        String inlineTag = "";
+        String inlineCouplerTag = "";
+        float inlineStartRadius = 0.25f;
+        float inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        boolean inlineCouplerWeld = false;
+        float inlineCouplerLatchSpeed = 0.3f;
+        float inlineCouplerLockRadius = 0.025f;
+
+        if (row.get(row.size() - 1).isJsonObject()) {
+            JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
+            inlineWeight = getFloatSafe(inline, "nodeWeight", inlineWeight, entry.variables);
+            inlineFriction = getFloatSafe(inline, "frictionCoef", inlineFriction, entry.variables);
+            inlineSlidingFriction = getFloatSafe(inline, "slidingFrictionCoef", inlineSlidingFriction, entry.variables);
+            inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
+            inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
+
+            if (inline.has("group")) {
+                inlineGroups = parseGroups(inline.get("group"), entry.variables);
+            }
+
+            inlineTag = getStringEvalSafe(inline, "tag", inlineTag, entry.variables);
+            inlineCouplerTag = getStringEvalSafe(inline, "couplerTag", inlineCouplerTag, entry.variables);
+            inlineStartRadius = getFloatSafe(inline, "couplerStartRadius", inlineStartRadius, entry.variables);
+            inlineCouplerStrength = getFloatSafe(inline, "couplerStrength", inlineCouplerStrength, entry.variables);
+            if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
+            else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
+            inlineCouplerLatchSpeed = getFloatSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed, entry.variables);
+            inlineCouplerLockRadius = getFloatSafe(inline, "couplerLockRadius", inlineCouplerLockRadius, entry.variables);
+        }
+
+        String id = row.get(0).getAsString();
+
+        // 提取原始 BeamNG 空间位置；$= 坐标由 evaluator 求值，未定义/非法 → null → 跳过该节点
+        Double rawX = parseNodeCoordinate(row.get(1), entry.variables);
+        Double rawY = parseNodeCoordinate(row.get(2), entry.variables);
+        Double rawZ = parseNodeCoordinate(row.get(3), entry.variables);
+        if (rawX == null || rawY == null || rawZ == null) {
+            System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
+            return null;
+        }
+
+        // 应用插槽级联变换处理逻辑 (包含对称镜像平移、欧拉角旋转、绝对位移)
+        double[] transformed = entry.transform.transformNode(rawX, rawY, rawZ);
+
+        // 最终引擎空间转换: flip X, swap Y and Z
+        float x = (float) transformed[0];
+        float y = (float) transformed[2];
+        float z = (float) -transformed[1];
+
+        if (!inlineTag.isEmpty() || !inlineCouplerTag.isEmpty()) {
+            couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
+        }
+
+        return new PhysicsSpecs.NodeSpec(
+                id, x, y, z,
+                inlineWeight, inlineFriction, inlineSlidingFriction,
+                entry.partId, inlineCollision, inlineSelfCollision, inlineGroups
+        );
     }
 
     // --- 2. Beam Parsing ---
@@ -451,7 +387,7 @@ public class JBeamParser {
                 currentTransitionZone = getFloatSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
 
                 if (modifier.has("breakGroup")) {
-                    currentBreakGroups = parseGroups(modifier.get("breakGroup"));
+                    currentBreakGroups = parseGroups(modifier.get("breakGroup"), entry.variables);
                     currentBreakGroupType = getIntSafe(modifier, "breakGroupType", currentBreakGroupType);
                 }
                 continue;
@@ -504,7 +440,7 @@ public class JBeamParser {
                         inlineTransitionZone = getFloatSafe(inline, "transitionZone", inlineTransitionZone, entry.variables);
 
                         if (inline.has("breakGroup")) {
-                            inlineBreakGroups = parseGroups(inline.get("breakGroup"));
+                            inlineBreakGroups = parseGroups(inline.get("breakGroup"), entry.variables);
                             inlineBreakGroupType = getIntSafe(inline, "breakGroupType", inlineBreakGroupType);
                         }
 
@@ -690,7 +626,7 @@ public class JBeamParser {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
                 if (modifier.has("group")) {
-                    currentGroups = parseGroups(modifier.get("group"));
+                    currentGroups = parseGroups(modifier.get("group"), entry.variables);
                 }
                 continue;
             }
@@ -703,13 +639,18 @@ public class JBeamParser {
                     String meshName = row.get(0).getAsString();
                     if (meshName.isEmpty()) continue;
 
+                    // meshName 可能是一条 "$=..." 字符串表达式（如 $components 条件选 mesh）
+                    String evaluatedMesh = evalStringValue(meshName, entry.variables);
+                    if (evaluatedMesh == null || evaluatedMesh.isEmpty()) continue;
+                    meshName = evaluatedMesh;
+
                     // 默认使用当前上下文的 Group
                     java.util.List<String> targetGroups = new java.util.ArrayList<>(currentGroups);
 
                     if (row.size() >= 2 && !row.get(1).isJsonObject()) {
                         JsonElement groupElement = row.get(1);
                         // 无条件覆写！即使 JBeam 传入的是 ""，它也能正确解析为空列表，从而实现 BeamNG 的“清除 Group”指令。
-                        targetGroups = parseGroups(groupElement);
+                        targetGroups = parseGroups(groupElement, entry.variables);
                     }
 
                     float px = 0, py = 0, pz = 0;
