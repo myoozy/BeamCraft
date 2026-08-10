@@ -579,4 +579,323 @@ class MaterialRenderPlannerTest {
                 {"mapTo": "lights_on", "translucent": true, "Stages": [ {"baseColorMap": "/x/d.png"} ]}
                 """)));
     }
+
+    // ------------------------------------------------------------------
+    // Anti-regression: BeamNG mirror materials must never render translucent
+    // ------------------------------------------------------------------
+
+    @Test
+    void mirrorMaterialWithTranslucentFlagIsOpaque() {
+        // The real shared mirror materials (vehicles/common/main.materials.json)
+        // declare "translucent": true for their cubemap reflection, which is out
+        // of scope. Without PBR a mirror must render as an opaque diffuse/colour
+        // fallback, never as ordinary see-through glass.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mirror_CE",
+                  "translucent": true,
+                  "translucentBlendOp": "None",
+                  "Stages": [ { "baseColorMap": "/vehicles/common/mirror_CE_b.color.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode(),
+                "mirror_CE must not enter the translucent pass");
+        assertTrue(plan.hasTexture());
+    }
+
+    @Test
+    void mirrorMaterialWithoutDiffuseIsColourOnlyOpaque() {
+        // Real mirror materials carry no baseColorMap (only a normal map /
+        // roughness for the reflection), so the fallback is colour-only — but it
+        // must still be OPAQUE, not a translucent white overlay.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mirror",
+                  "translucent": true,
+                  "Stages": [ { "normalMap": "/vehicles/common/mirror_n.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertFalse(plan.hasTexture());
+        assertEquals(RgbaColor.WHITE, plan.colorFactor());
+    }
+
+    @Test
+    void mirrorMaterialWithAlphaCutoutIsCutoutNotTranslucent() {
+        // "Render them safely as opaque diffuse/colour fallback unless the asset
+        // explicitly requires alpha cutout": an alphaRef on a mirror keeps it in
+        // the opaque pass as a cutout, still never blended.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "glass_mirror",
+                  "translucent": true,
+                  "alphaRef": 0.5,
+                  "Stages": [ { "baseColorMap": "/vehicles/common/mirror_b.color.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
+        assertTrue(plan.hasTexture());
+    }
+
+    @Test
+    void mirrorDetectionCoversAllRawMirrorVariants() {
+        // Every mirror material variant found in the bundled archives.
+        assertTrue(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "mirror", "Stages": []}
+                """)));
+        assertTrue(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "mirror_CE", "Stages": []}
+                """)));
+        assertTrue(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "mirror_CX", "Stages": []}
+                """)));
+        assertTrue(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "mirror_F", "Stages": []}
+                """)));
+        assertTrue(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "glass_mirror", "Stages": []}
+                """)));
+        // Window glass and lamp covers are not mirrors and must be untouched.
+        assertFalse(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "sunburst2_glass", "Stages": []}
+                """)));
+        assertFalse(MaterialRenderPlanner.isMirrorMaterial(def("""
+                {"mapTo": "sunburst2_headlightglass", "Stages": []}
+                """)));
+        assertFalse(MaterialRenderPlanner.isMirrorMaterial(null));
+    }
+
+    // ------------------------------------------------------------------
+    // Anti-regression: effectively-opaque translucent lamp housings are OPAQUE
+    // ------------------------------------------------------------------
+
+    @Test
+    void covetLightsHousingIsEffectivelyOpaqueAndClassifiesOpaque() {
+        // THE Covet/BX regression: covet_lights/bx_lights are translucent:true
+        // with blendOp "None" and no opacity map, so their alpha comes from the
+        // opaque diffuse and is 1. In the translucent pass they could sort after
+        // (over) the coplanar lamp lens and paint it away; as OPAQUE they write
+        // depth in the opaque pass and the coplanar lens (LEQUAL) draws over.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "covet_lights",
+                  "translucent": true,
+                  "translucentBlendOp": "None",
+                  "Stages": [ { "baseColorMap": "/vehicles/covet/covet_lights_b.color.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode(),
+                "an effectively-opaque lamp housing must not enter the translucent pass");
+        assertTrue(plan.hasTexture());
+        assertEquals(RgbaColor.WHITE, plan.colorFactor());
+    }
+
+    @Test
+    void everyFleetHousingClassifiesOpaque() {
+        // The shared housing pattern across the fleet (verified in the bundled
+        // archives): translucent:true, blendOp "None", no opacity map.
+        for (String mapTo : new String[]{"bx_lights", "pickup_lights", "etki_lights",
+                "gavril_lights", "utility_lights", "semi_lights", "tsfb_lights"}) {
+            MaterialDefinition def = def("""
+                    {
+                      "mapTo": "%s",
+                      "translucent": true,
+                      "translucentBlendOp": "None",
+                      "Stages": [ { "baseColorMap": "/vehicles/x/%s_b.color.png" } ]
+                    }
+                    """.formatted(mapTo, mapTo));
+            assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, MaterialRenderPlanner.plan(def).mode(),
+                    mapTo + " is an effectively-opaque housing and must be OPAQUE");
+        }
+    }
+
+    @Test
+    void lampLensGlassStaysTranslucent() {
+        // The covet/bx lamp LENS resolves to the window-glass material
+        // (covet_glass/bx_glass): translucent:true, PreMulAlpha, WITH an opacity
+        // map. It must stay in the translucent pass.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "covet_glass",
+                  "translucent": true,
+                  "translucentBlendOp": "PreMulAlpha",
+                  "Stages": [ { "baseColorMap": "/vehicles/covet/covet_glass_b.color.png",
+                                "opacityMap": "/vehicles/covet/covet_glass_o.data.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, plan.mode());
+        assertTrue(plan.hasOpacity());
+    }
+
+    @Test
+    void translucentWithOpacityMapStaysTranslucent() {
+        // An opacity map makes the transparency real: "None"-blend materials
+        // that carry one must NOT be promoted to opaque.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "some_lightglass",
+                  "translucent": true,
+                  "translucentBlendOp": "None",
+                  "Stages": [ { "baseColorMap": "/vehicles/x/glass_d.png",
+                                "opacityMap": "/vehicles/x/glass_o.png" } ]
+                }
+                """);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, MaterialRenderPlanner.plan(def).mode());
+    }
+
+    @Test
+    void additiveTranslucentStaysTranslucent() {
+        // Additive emissive sheets (neon_tube_glow etc.) keep the translucent
+        // pass even with no opacity map.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "neon_tube_glow",
+                  "translucent": true,
+                  "translucentBlendOp": "Additive",
+                  "Stages": [ { "baseColorMap": "/vehicles/x/glow_d.png" } ]
+                }
+                """);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, MaterialRenderPlanner.plan(def).mode());
+    }
+
+    @Test
+    void subOneFactorNoneBlendStaysTranslucent() {
+        // A "None"-blend translucent material with a genuinely sub-1 factor is
+        // see-through and must stay translucent.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "tinted_cover",
+                  "translucent": true,
+                  "translucentBlendOp": "None",
+                  "Stages": [ { "baseColorMap": "/vehicles/x/cover_d.png",
+                                "baseColorFactor": [1.0, 1.0, 1.0, 0.6] } ]
+                }
+                """);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, MaterialRenderPlanner.plan(def).mode());
+    }
+
+    @Test
+    void preMulAlphaWithoutOpacityStaysTranslucent() {
+        // glass_invisible (translucent, PreMulAlpha, no opacity map) must NOT be
+        // promoted to opaque by the effectively-opaque housing rule — its
+        // PreMulAlpha blend keeps it in the translucent pass regardless of the
+        // stray stage opacityFactor (which the planner ignores on a stage with no
+        // diffuse map).
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "glass_invisible",
+                  "translucent": true,
+                  "translucentBlendOp": "PreMulAlpha",
+                  "Stages": [ { "opacityFactor": 0.0 } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, plan.mode());
+    }
+
+    @Test
+    void isEffectivelyOpaqueTranslucentGatesCorrectly() {
+        assertTrue(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def("""
+                {"mapTo":"covet_lights","translucent":true,"translucentBlendOp":"None",
+                 "Stages":[{"baseColorMap":"/x/d.png"}]}"""), null, RgbaColor.WHITE));
+        assertTrue(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def("""
+                {"mapTo":"bx_lights","translucent":true,"translucentBlendOp":"None",
+                 "Stages":[{"baseColorMap":"/x/d.png"}]}"""), null, RgbaColor.WHITE));
+        assertFalse(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def("""
+                {"mapTo":"covet_glass","translucent":true,"translucentBlendOp":"PreMulAlpha",
+                 "Stages":[{"baseColorMap":"/x/d.png","opacityMap":"/x/o.png"}]}"""),
+                "/x/o.png", RgbaColor.WHITE));
+        assertFalse(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def("""
+                {"mapTo":"neon_glow","translucent":true,"translucentBlendOp":"Additive",
+                 "Stages":[{"baseColorMap":"/x/d.png"}]}"""), null, RgbaColor.WHITE));
+        assertFalse(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def("""
+                {"mapTo":"tinted","translucent":true,"translucentBlendOp":"None",
+                 "Stages":[{"baseColorMap":"/x/d.png","baseColorFactor":[1,1,1,0.5]}]}"""),
+                null, new RgbaColor(1f, 1f, 1f, 0.5f)));
+        assertFalse(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def("""
+                {"mapTo":"opaque_body","Stages":[{"baseColorMap":"/x/d.png"}]}"""),
+                null, RgbaColor.WHITE));
+    }
+
+    @Test
+    void seeThroughLampCoverWithBakedAlphaStaysTranslucent() {
+        // THE baked-alpha guard: the shared lamp-lens covers (common
+        // roundlight_cover / squarelight_cover and their skins) are
+        // translucent "None" materials with no opacity map whose diffuse carries
+        // the baked alpha that makes the lens read as glass. They must NOT be
+        // promoted to OPAQUE merely because the factor alpha is 1.
+        for (String mapTo : new String[]{"roundlight_cover", "squarelight_cover",
+                "roundlight_cover.skin_roundlights.beamng", "squarelight_cover_tims",
+                "roundlight_cover_yellow"}) {
+            MaterialDefinition def = def("""
+                    {
+                      "mapTo": "%s",
+                      "translucent": true,
+                      "translucentBlendOp": "None",
+                      "Stages": [ { "baseColorMap": "/vehicles/common/lights/%s_b.color.png" } ]
+                    }
+                    """.formatted(mapTo, mapTo));
+            assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT,
+                    MaterialRenderPlanner.plan(def).mode(),
+                    mapTo + " is a baked-alpha lamp lens and must stay TRANSLUCENT");
+            assertFalse(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def, null, RgbaColor.WHITE));
+        }
+        assertTrue(MaterialRenderPlanner.isSeeThroughLampCover(def("""
+                {"mapTo": "roundlight_cover", "translucent": true, "translucentBlendOp": "None",
+                 "Stages": [ {"baseColorMap": "/x/d.png"} ]}""")));
+        assertTrue(MaterialRenderPlanner.isSeeThroughLampCover(def("""
+                {"mapTo": "squarelight_cover", "translucent": true, "translucentBlendOp": "None",
+                 "Stages": [ {"baseColorMap": "/x/d.png"} ]}""")));
+    }
+
+    @Test
+    void lampHousingsAreNotSeeThroughLampCovers() {
+        // The proven Covet/BX housings and their fleet siblings carry none of the
+        // see-through lens markers, so the opaque promotion still applies.
+        for (String mapTo : new String[]{"covet_lights", "bx_lights", "etki_lights",
+                "pickup_lights", "gavril_lights", "roundlight", "squarelight"}) {
+            MaterialDefinition def = def("""
+                    {"mapTo": "%s", "translucent": true, "translucentBlendOp": "None",
+                     "Stages": [ {"baseColorMap": "/vehicles/x/%s_b.color.png"} ]}
+                    """.formatted(mapTo, mapTo));
+            assertFalse(MaterialRenderPlanner.isSeeThroughLampCover(def),
+                    mapTo + " is a lamp housing/reflector, not a see-through cover");
+            assertTrue(MaterialRenderPlanner.isEffectivelyOpaqueTranslucent(def, null, RgbaColor.WHITE),
+                    mapTo + " is an effectively-opaque housing and must be OPAQUE");
+            assertEquals(MaterialRenderPlan.RenderMode.OPAQUE,
+                    MaterialRenderPlanner.plan(def).mode(),
+                    mapTo + " must stay in the opaque pass");
+        }
+    }
+
+    @Test
+    void nonMirrorTranslucentGlassIsUnaffected() {
+        // The mirror guard must not leak into real window glass or lamp covers:
+        // they still classify translucent when the asset says so.
+        MaterialDefinition window = def("""
+                {
+                  "mapTo": "sunburst2_glass",
+                  "translucent": true,
+                  "Stages": [ { "baseColorMap": "/vehicles/sunburst2/sunburst2_glass_b.color.png",
+                                "opacityMap": "/vehicles/sunburst2/sunburst2_glass_op.data.png" } ]
+                }
+                """);
+        MaterialRenderPlan windowPlan = MaterialRenderPlanner.plan(window);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, windowPlan.mode());
+
+        MaterialDefinition lamp = def("""
+                {
+                  "mapTo": "pickup_lightglass",
+                  "translucent": true,
+                  "Stages": [ { "baseColorMap": "/vehicles/pickup/pickup_lightglass_b.color.png" } ]
+                }
+                """);
+        MaterialRenderPlan lampPlan = MaterialRenderPlanner.plan(lamp);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, lampPlan.mode());
+    }
 }

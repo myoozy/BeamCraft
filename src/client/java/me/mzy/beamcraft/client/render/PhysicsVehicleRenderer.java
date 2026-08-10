@@ -46,8 +46,13 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
     private static final Set<String> WARNED_UNRESOLVED_TEXTURES = new HashSet<>();
     private static final Set<String> WARNED_MISSING_OPACITY = new HashSet<>();
 
-    /** One opaque/cutout or translucent draw: the range plus its resolved plan. */
-    private record RangeDraw(SubMeshRange range, MaterialRenderPlan plan) {
+    /**
+     * One opaque/cutout or translucent draw: the range, its resolved plan, and
+     * the resolved {@link MaterialDefinition} it was planned from. The material
+     * is retained because the translucent culling decision consults resolved
+     * material provenance (see {@link #isDoubleSidedTranslucentGlass}).
+     */
+    private record RangeDraw(SubMeshRange range, MaterialRenderPlan plan, MaterialDefinition material) {
     }
 
     public PhysicsVehicleRenderer(EntityRendererFactory.Context context) {
@@ -167,11 +172,12 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         List<RangeDraw> opaqueCutout = new ArrayList<>();
         List<RangeDraw> translucent = new ArrayList<>();
         for (SubMeshRange range : flex.skinningPipeline.getSubMeshRanges()) {
-            MaterialRenderPlan plan = resolvePlan(flex, range);
+            MaterialDefinition material = resolveMaterial(flex, range);
+            MaterialRenderPlan plan = MaterialRenderPlanner.plan(material);
             if (plan.mode() == MaterialRenderPlan.RenderMode.TRANSLUCENT) {
-                translucent.add(new RangeDraw(range, plan));
+                translucent.add(new RangeDraw(range, plan, material));
             } else {
-                opaqueCutout.add(new RangeDraw(range, plan));
+                opaqueCutout.add(new RangeDraw(range, plan, material));
             }
         }
 
@@ -188,30 +194,45 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * {@code entity_translucent} shader: blending enabled (normal alpha, or
      * additive for an explicitly declared "Additive" {@code translucentBlendOp}),
      * depth test enabled, depth writes disabled. Back-face culling is applied
-     * per range, not globally: paired window glass (raw DAE symbol in the
-     * {@code *_glass} family, e.g. exterior {@code glass} vs interior
-     * {@code glass_int}) keeps culling on so each shell draws exactly once from
-     * its outward side and translucent layers never stack to white, while
-     * single-shell lamp lenses and covers (e.g. {@code *_headlightglass},
-     * {@code *_signalglass}) draw double-sided so they never vanish from behind
-     * (see {@link #isDoubleSidedTranslucentGlass}). Ranges are sorted
+     * per range, not globally: paired window glass keeps culling on so each shell
+     * draws exactly once from its outward side and translucent layers never stack
+     * to white, while single-shell glass, windshields and lamp lenses draw
+     * double-sided so they never vanish from behind. The per-range decision is
+     * data-driven on the vehicle's raw DAE mesh provenance plus the resolved
+     * material: a range must actually be a glass/lens/lamp-cover material
+     * (raw name or resolved material mentioning {@code glass}/{@code windshield}/
+     * {@code lens}) <em>and</em> have no {@code *_int} opposite shell in the same
+     * vehicle to draw double-sided; every other translucent range (decals,
+     * emissive/additive sheets, lamp housings, screens) keeps default back-face
+     * culling (see {@link #isDoubleSidedTranslucentGlass}). Ranges are sorted
      * back-to-front by their model-space centroid projected into view space.
-     * Every piece of GL state is read back first and restored afterwards, even on
-     * failure.
+     * The double-sided <em>lamp lens/cover</em> ranges additionally switch the
+     * depth test to LEQUAL (see {@link #isDoubleSidedLampLens}): their housing
+     * reflector is now opaque and wrote depth in the opaque pass (see
+     * {@code MaterialRenderPlanner#isEffectivelyOpaqueTranslucent}), and the
+     * cover is exactly coplanar with it, so the plain GL_LESS test would reject
+     * the cover everywhere its depth equals the housing's. LEQUAL lets the cover
+     * pass at equality and draw over the housing, restoring the lens regardless
+     * of back-to-front sort order. Every piece of GL state is read back first
+     * and restored afterwards, even on failure.
      */
     private void drawTranslucentRanges(FlexbodyContainer flex, List<RangeDraw> draws,
                                        Matrix4f modelView,
                                        Matrix4f projection, int packedLight) {
         List<SubMeshRange> ranges = new ArrayList<>(draws.size());
         Map<SubMeshRange, MaterialRenderPlan> planByRange = new IdentityHashMap<>();
+        Map<SubMeshRange, MaterialDefinition> materialByRange = new IdentityHashMap<>();
         for (RangeDraw draw : draws) {
             ranges.add(draw.range);
             planByRange.put(draw.range, draw.plan);
+            materialByRange.put(draw.range, draw.material);
         }
         List<SubMeshRange> sorted = ComputeSkinningPipeline.sortTranslucentBackToFront(ranges, modelView);
+        Set<String> meshMaterialNames = collectMeshMaterialNames(flex);
 
         boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
         boolean previousDepthWrite = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
         int previousSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
         int previousDstRgb = GL11.glGetInteger(GL14.GL_BLEND_DST_RGB);
         int previousSrcAlpha = GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA);
@@ -229,11 +250,23 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
                 if (plan == null) {
                     continue;
                 }
-                if (isDoubleSidedTranslucentGlass(range.materialName)) {
+                MaterialDefinition material = materialByRange.get(range);
+                boolean doubleSided = isDoubleSidedTranslucentGlass(
+                        range.materialName, meshMaterialNames, material);
+                if (doubleSided) {
                     RenderSystem.disableCull();
                 } else {
                     RenderSystem.enableCull();
                 }
+                // A double-sided lamp lens is exactly coplanar with its (now
+                // opaque) housing reflector, which wrote depth in the opaque
+                // pass. GL_LESS would reject the cover where depths are equal,
+                // so the cover draws with LEQUAL and passes at equal depth.
+                // Scoped to the double-sided lamp-lens set only — window glass,
+                // windshields, housings and every other translucent range keep
+                // GL_LESS (see isDoubleSidedLampLens).
+                RenderSystem.depthFunc(isDoubleSidedLampLens(range.materialName, meshMaterialNames, material)
+                        ? GL11.GL_LEQUAL : GL11.GL_LESS);
                 int[] blend = blendFuncFor(plan.blendOp());
                 if (blend[0] == GL11.GL_SRC_ALPHA && blend[1] == GL11.GL_ONE_MINUS_SRC_ALPHA) {
                     RenderSystem.defaultBlendFunc();
@@ -246,6 +279,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             }
         } finally {
             RenderSystem.depthMask(previousDepthWrite);
+            RenderSystem.depthFunc(previousDepthFunc);
             RenderSystem.blendFuncSeparate(previousSrcRgb, previousDstRgb,
                     previousSrcAlpha, previousDstAlpha);
             if (previousBlend) {
@@ -354,57 +388,219 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
     }
 
     /**
-     * Whether a translucent sub-mesh must be drawn double-sided (back-face
-     * culling disabled) rather than with back-face culling.
-     *
-     * <p>BeamNG window glass ships as paired shells — an exterior
-     * {@code *_glass} plus an interior {@code *_glass_int} — each with
-     * outward-facing normals, so culling back-faces makes every triangle draw
-     * exactly once and never stacks translucent layers to white. Lamp lenses,
-     * signal/taillight covers and other single-shell glass carry a compound raw
-     * DAE symbol ({@code *_headlightglass}, {@code *_signalglass},
-     * {@code *_taillightglass}, {@code *_foglightglass}, {@code *_reverselightglass},
-     * {@code *_lowbeamglass}, …) whose triangles face outward only; culling their
-     * back-faces makes the cover vanish from behind.
-     *
-     * <p>Classification keys on the <em>raw DAE material identity</em> (the
-     * sub-mesh provenance), never on the aliased target definition: the Sunburst
-     * lamp covers alias to {@code sunburst2_glass} (a paired window-glass family
-     * member), so resolving them first would wrongly cull them.
-     *
-     * @param rawMaterialName the sub-mesh's raw DAE material name (Assimp
-     *                        {@code AI_MATKEY_NAME}), never the resolved alias
-     * @return true when the range must be double-sided
+     * Lowercased set of every raw DAE material name present in the vehicle's
+     * sub-mesh ranges. This is the culling-decision provenance: the decision must
+     * key on what meshes actually exist, not on a name guess about whether a
+     * paired opposite shell exists. Null names are skipped (they can never match
+     * a pairing).
      */
-    static boolean isDoubleSidedTranslucentGlass(String rawMaterialName) {
-        if (rawMaterialName == null) {
-            return false;
+    private static Set<String> collectMeshMaterialNames(FlexbodyContainer flex) {
+        Set<String> names = new HashSet<>();
+        for (SubMeshRange range : flex.skinningPipeline.getSubMeshRanges()) {
+            if (range.materialName != null) {
+                names.add(range.materialName.toLowerCase(Locale.ROOT));
+            }
         }
-        String n = rawMaterialName.toLowerCase(Locale.ROOT);
-        return n.contains("glass") && !isWindowGlassFamily(n);
+        return names;
     }
 
     /**
-     * True when {@code lowerName} is a paired window-glass family member:
-     * {@code *_glass}, {@code *_glass_int}, {@code *_glass_dmg}, {@code *_glass_on}
-     * or {@code *_glass_on_intense}. These have an opposite shell in the DAE and
-     * draw correctly with back-face culling.
+     * Whether a translucent sub-mesh must be drawn double-sided (back-face
+     * culling disabled) rather than with back-face culling.
+     *
+     * <p>Two independent signals gate the decision:
+     * <ol>
+     *   <li><em>Semantic guard</em> — the range must be an actual glass, lens,
+     *       lamp-cover or windshield material. The raw DAE name <em>or</em> the
+     *       resolved material definition's {@code mapTo}/{@code name} must
+     *       mention {@code glass}, {@code windshield} or {@code lens}. This is
+     *       what keeps unrelated translucent ranges — decals, emissive/additive
+     *       sheets, lamp housings, screens, warning indicators — out of the
+     *       double-sided path: they carry none of those markers and keep their
+     *       default back-face culling.</li>
+     *   <li><em>Provenance pairing</em> — the range must not be one shell of a
+     *       paired window-glass pair: a {@code *_int} opposite shell present in
+     *       the same vehicle's raw DAE mesh set ({@code meshMaterialNames}, the
+     *       lowercased raw DAE material names of every sub-mesh in the vehicle).
+     *       Paired shells each have outward-facing normals, so culling back-faces
+     *       makes every triangle draw exactly once and never stacks translucent
+     *       layers to white.</li>
+     * </ol>
+     *
+     * <p>The semantic guard consults the <em>resolved</em> material (the alias
+     * target) as well as the raw name: a lamp lens whose raw DAE name does not
+     * spell {@code glass} still resolves via the JBeam {@code glowMap} alias to a
+     * glass-named material (e.g. {@code pickup_lowbeamglass} → {@code pickup_lightglass}),
+     * and a single-shell windshield raw name carries {@code windshield}
+     * (e.g. {@code sunburst2_windshield}). The pairing check, by contrast, keys
+     * strictly on the <em>raw DAE identity</em>: the Sunburst lamp covers alias
+     * to {@code sunburst2_glass} (a paired window-glass shell), so using the
+     * resolved name for pairing would wrongly cull them — the raw name is the
+     * only thing that knows whether a {@code *_int} sibling actually exists.
+     *
+     * @param rawMaterialName   the sub-mesh's raw DAE material name (Assimp
+     *                          {@code AI_MATKEY_NAME}), never the resolved alias
+     * @param meshMaterialNames lowercased raw DAE material names of every
+     *                          sub-mesh in the same vehicle (never the resolved
+     *                          alias targets)
+     * @param resolvedMaterial  the material {@code MaterialLibrary} resolves for
+     *                          {@code rawMaterialName} (alias target included),
+     *                          or null when nothing resolved
+     * @return true when the range must be double-sided
      */
-    private static boolean isWindowGlassFamily(String lowerName) {
-        return lowerName.endsWith("_glass")
-                || lowerName.endsWith("_glass_int")
-                || lowerName.endsWith("_glass_dmg")
-                || lowerName.endsWith("_glass_on")
-                || lowerName.endsWith("_glass_on_intense");
+    static boolean isDoubleSidedTranslucentGlass(String rawMaterialName, Set<String> meshMaterialNames,
+                                                 MaterialDefinition resolvedMaterial) {
+        if (rawMaterialName == null) {
+            return false;
+        }
+        if (!isGlassLensMaterial(rawMaterialName, resolvedMaterial)) {
+            return false;
+        }
+        return !hasPairedOppositeShell(rawMaterialName.toLowerCase(Locale.ROOT), meshMaterialNames);
     }
 
-    private MaterialRenderPlan resolvePlan(FlexbodyContainer flex, SubMeshRange range) {
+    /**
+     * Semantic guard: is this range actually glass/lens/windshield? True when the
+     * raw DAE name mentions {@code glass}, {@code windshield} or {@code lens},
+     * or — for raw names that do not — when the resolved material's
+     * {@code mapTo}/{@code name} does (the glowMap alias provenance). A null
+     * material is never proven glass, so unresolved or opaque ranges stay out of
+     * the double-sided path.
+     */
+    private static boolean isGlassLensMaterial(String rawMaterialName, MaterialDefinition resolvedMaterial) {
+        if (containsGlassLike(rawMaterialName)) {
+            return true;
+        }
+        if (resolvedMaterial != null) {
+            return containsGlassLike(resolvedMaterial.mapTo) || containsGlassLike(resolvedMaterial.name);
+        }
+        return false;
+    }
+
+    /** True when a non-empty string mentions glass, windshield or lens, case-insensitive. */
+    private static boolean containsGlassLike(String s) {
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
+        String n = s.toLowerCase(Locale.ROOT);
+        return n.contains("glass") || n.contains("windshield") || n.contains("lens");
+    }
+
+    /**
+     * Whether a translucent sub-mesh is a double-sided single-shell <em>lamp
+     * lens/cover</em> — the set that draws with an equal-depth (LEQUAL) depth
+     * test. A range qualifies when it is proven double-sided glass (see
+     * {@link #isDoubleSidedTranslucentGlass}) <em>and</em> its raw DAE name or
+     * resolved material identifies a light cover ({@link #isLampLensCover}).
+     * This is exactly the geometry that is coplanar with the opaque lamp housing
+     * reflector: the Covet/BX covers (e.g. {@code covet_headlightglass},
+     * {@code bx_taillightglass}) share exact vertex positions with the housing
+     * meshes, so GL_LESS depth rejection would make them disappear where the
+     * housing's written depth is equal.
+     *
+     * @param rawMaterialName   the sub-mesh's raw DAE material name (never the
+     *                          resolved alias)
+     * @param meshMaterialNames lowercased raw DAE material names of every
+     *                          sub-mesh in the same vehicle (the pairing
+     *                          provenance)
+     * @param resolvedMaterial  the resolved material, or null
+     * @return true when the range is a double-sided lamp lens that must pass
+     *         depth at equality
+     */
+    static boolean isDoubleSidedLampLens(String rawMaterialName, Set<String> meshMaterialNames,
+                                         MaterialDefinition resolvedMaterial) {
+        return isDoubleSidedTranslucentGlass(rawMaterialName, meshMaterialNames, resolvedMaterial)
+                && isLampLensCover(rawMaterialName, resolvedMaterial);
+    }
+
+    /**
+     * Semantic guard: is this glass/lens/windshield range a <em>lamp
+     * cover</em>? True when the raw DAE name or the resolved material's
+     * {@code mapTo}/{@code name} mentions one of the BeamNG lamp-cover markers
+     * ({@code headlight}, {@code taillight}, {@code signal}, {@code brakelight},
+     * {@code chmsl}, {@code foglight}, {@code reverselight}, {@code marker},
+     * {@code lowbeam}/{@code highbeam}, {@code parkinglight}, {@code sidemarker},
+     * {@code runninglight}, {@code lightglass}, {@code sealedbeam},
+     * {@code halogen}, {@code lamp}, {@code lens}, {@code sign}, {@code gauge}).
+     * This is what keeps window glass, windshields, housings and decals out of
+     * the equal-depth path: {@code glass_invisible}, {@code van_glass} and
+     * {@code sunburst2_windshield} carry none of those markers and keep the plain
+     * GL_LESS test. It is consulted only for ranges already proven double-sided
+     * glass (see {@link #isDoubleSidedLampLens}), so a housing like
+     * {@code covet_lights} — which resolves to a light-named material but is not
+     * glass — still keeps default depth.
+     */
+    static boolean isLampLensCover(String rawMaterialName, MaterialDefinition resolvedMaterial) {
+        if (containsLampLensMarker(rawMaterialName)) {
+            return true;
+        }
+        if (resolvedMaterial != null) {
+            return containsLampLensMarker(resolvedMaterial.mapTo)
+                    || containsLampLensMarker(resolvedMaterial.name);
+        }
+        return false;
+    }
+
+    /** True when a non-empty string mentions a BeamNG lamp-cover marker, case-insensitive. */
+    private static boolean containsLampLensMarker(String s) {
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
+        String n = s.toLowerCase(Locale.ROOT);
+        for (String marker : LAMP_LENS_MARKERS) {
+            if (n.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Lamp-cover markers seen in the actual raw DAE material names and resolved
+     * materials of the bundled vehicles (covet/bx/sunburst2/pickup/etki/citybus/
+     * common). Ordered longest-first so compound markers match before their
+     * shorter substrings (matters only for readability).
+     */
+    private static final String[] LAMP_LENS_MARKERS = {
+            "headlight", "taillight", "parkinglight", "reverselight", "runninglight",
+            "brakelight", "sidemarker", "foglight", "signalglass", "lightglass",
+            "lowbeam", "highbeam", "sealedbeam", "halogen", "chmsl", "marker",
+            "signal", "lamp", "lens", "sign", "gauge", "cover"
+    };
+
+    /**
+     * True when the vehicle's mesh set contains the paired opposite shell for
+     * {@code lowerName}: for a {@code *_int} interior shell the partner is the
+     * name stripped of {@code _int}; for every other name the partner is
+     * {@code lowerName + "_int"}. A null/empty mesh set (never passed by the
+     * renderer) yields false so the caller falls back to double-sided.
+     */
+    private static boolean hasPairedOppositeShell(String lowerName, Set<String> meshMaterialNames) {
+        if (meshMaterialNames == null) {
+            return false;
+        }
+        if (lowerName.endsWith(INTERIOR_SHELL_SUFFIX)) {
+            return meshMaterialNames.contains(
+                    lowerName.substring(0, lowerName.length() - INTERIOR_SHELL_SUFFIX.length()));
+        }
+        return meshMaterialNames.contains(lowerName + INTERIOR_SHELL_SUFFIX);
+    }
+
+    /** Suffix marking the interior shell of a paired window-glass pair. */
+    private static final String INTERIOR_SHELL_SUFFIX = "_int";
+
+    /**
+     * Resolves the material definition for a sub-mesh's raw DAE name (through
+     * the namespace's static glowMap aliases, then the common library). Returns
+     * null when nothing resolves, after a one-time warning.
+     */
+    private MaterialDefinition resolveMaterial(FlexbodyContainer flex, SubMeshRange range) {
         String namespace = flex.vehicleNamespace;
         MaterialDefinition material = MaterialLibrary.getMaterial(namespace, range.materialName);
         if (material == null) {
             warnOnceMissingMaterial(namespace, range.materialName);
         }
-        return MaterialRenderPlanner.plan(material);
+        return material;
     }
 
     private static void warnOnceMissingMaterial(String namespace, String materialName) {

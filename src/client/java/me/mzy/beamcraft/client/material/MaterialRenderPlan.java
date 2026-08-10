@@ -24,11 +24,12 @@ package me.mzy.beamcraft.client.material;
  *       can never become see-through from a stray {@code alphaRef}.</li>
  *   <li>{@link RenderMode#TRANSLUCENT} — true transparency (BeamNG
  *       {@code translucent: true}, or an effective alpha below 1). Drawn last,
- *       back-to-front, with blending, depth writes off and back-face culling on.
- *       Culling stays on because the DAE already splits glass into exterior and
- *       interior meshes (e.g. {@code glass} vs {@code glass_int}); drawing every
- *       triangle double-sided would stack several translucent layers and wash
- *       the interior white.</li>
+ *       back-to-front, with blending and depth writes off. Back-face culling is
+ *       decided per range by the renderer against the vehicle's mesh provenance:
+ *       paired window glass (an exterior {@code glass} plus its interior
+ *       {@code glass_int} shell) keeps culling on so each shell draws exactly
+ *       once and translucent layers never stack white, while single-shell lamp
+ *       lenses/covers draw double-sided so they never vanish from behind.</li>
  * </ul>
  *
  * <p>When {@link #hasTexture()} is false the renderer renders the sub-mesh
