@@ -2,7 +2,12 @@
 
 BeamCraft is an experimental Minecraft mod exploring soft-body vehicle simulation inspired by BeamNG-style physics.
 
-⚠️ Status: early-stage prototype. Not a playable game system.
+## Videos and Channels
+
+- [YouTube playlist](https://youtube.com/playlist?list=PLKse2v6xW8Dc&si=kp0lr9YGZrn9Fw5Q)
+- [Bilibili channel](https://space.bilibili.com/270425369?spm_id_from=333.788.upinfo.head.click)
+
+鈿狅笍 Status: early-stage prototype. Not a playable game system.
 
 ---
 
@@ -28,7 +33,7 @@ run/mods/beamcraft/vehicles
 
 ---
 
-### ⚠️ Required file
+### 鈿狅笍 Required file
 
 The mod also requires `common.zip` from the BeamNG vehicle content directory.
 
@@ -55,26 +60,26 @@ It must be present for correct loading of shared assets.
 
 ## Features
 
-1. Node–beam soft-body physics simulation  
-2. Torsion bar and slider constraints  
-3. Collision with Minecraft world and soft-body interaction  
-4. Inflatable tire simulation (non-destructible)  
-5. Basic skinned rendering system  
-   - partial lighting support  
-   - no textures yet  
-   - known rendering culling issues  
+1. Node鈥揵eam soft-body physics simulation
+2. Torsion bar and slider constraints
+3. Collision with Minecraft world and soft-body interaction
+4. Inflatable tire simulation (non-destructible)
+5. Basic skinned rendering system
+   - partial lighting support
+   - no textures yet
+   - known rendering culling issues
 
 ---
 
 ## Missing Features
 
-1. Damage / breakable parts system  
-2. Aerodynamics (drag, lift, downforce)  
-3. Powertrain system  
-4. Vehicle control logic  
-5. Texture and audio system  
-6. Interaction with Minecraft entities  
-7. Gameplay systems  
+1. Damage / breakable parts system
+2. Aerodynamics (drag, lift, downforce)
+3. Powertrain system
+4. Vehicle control logic
+5. Texture and audio system
+6. Interaction with Minecraft entities
+7. Gameplay systems
 
 ---
 
@@ -116,6 +121,8 @@ BeamNG.drive is a product of BeamNG GmbH. This project is not affiliated with or
 
 ## License
 
-Based on Fabric Example Mod (CC0).
+Copyright (C) 2026 M1AO.
 
-Original code licensed under MIT unless otherwise stated.
+BeamCraft's original code is licensed under the [GNU General Public License v3.0 or later](LICENSE). If you distribute a modified version, you must make its corresponding source code available under the same license.
+
+Portions derived from the Fabric Example Mod remain available under CC0. Third-party components retain their respective licenses.
