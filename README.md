@@ -7,37 +7,34 @@ BeamCraft is an experimental Minecraft mod exploring soft-body vehicle simulatio
 - [YouTube playlist](https://youtube.com/playlist?list=PLKse2v6xW8Dc&si=kp0lr9YGZrn9Fw5Q)
 - [Bilibili channel](https://space.bilibili.com/270425369?spm_id_from=333.788.upinfo.head.click)
 
-鈿狅笍 Status: early-stage prototype. Not a playable game system.
+⚠️ Status: early-stage prototype. Not a playable game system.
 
 ---
 
 ## Installation
 
-### 1. Required external assets (BeamNG.drive)
+### 1. User-provided vehicle data
 
-BeamCraft requires vehicle data from BeamNG.drive.
+BeamCraft does not include or distribute vehicle data. Compatibility testing
+requires user-provided JBeam, DAE, material, and texture data that the user is
+legally entitled to use.
 
-You must provide your own locally installed copy of BeamNG.drive vehicle files.
-
-Typical source location:
-
-steamapps/common/BeamNG.drive/content/vehicles
+Do not redistribute third-party game assets with BeamCraft.
 
 ---
 
 ### 2. Asset placement
 
-Place vehicle folders or archives into:
+For the current prototype, place compatible vehicle folders or archives into:
 
-run/mods/beamcraft/vehicles
+`run/mods/beamcraft/vehicles`
 
 ---
 
-### 鈿狅笍 Required file
+### Shared data
 
-The mod also requires `common.zip` from the BeamNG vehicle content directory.
-
-It must be present for correct loading of shared assets.
+Some vehicle data sets also require their corresponding `common.zip` for
+shared definitions and assets. BeamCraft does not provide this file.
 
 ---
 
@@ -47,7 +44,7 @@ It must be present for correct loading of shared assets.
 
 `/spawnvehicle <name> <pcFile>`
 
-- `<name>`: vehicle identifier (folder name from BeamNG content)
+- `<name>`: vehicle identifier from the compatible vehicle data
 - `<pcFile>`: vehicle configuration / preset file
 
 ---
@@ -60,7 +57,7 @@ It must be present for correct loading of shared assets.
 
 ## Features
 
-1. Node鈥揵eam soft-body physics simulation
+1. Node–beam soft-body physics simulation
 2. Torsion bar and slider constraints
 3. Collision with Minecraft world and soft-body interaction
 4. Inflatable tire simulation (non-destructible)
@@ -113,7 +110,8 @@ Other versions not tested.
 
 This project does not include or distribute any assets from BeamNG.drive.
 
-Users must provide their own locally installed BeamNG.drive vehicle data.
+BeamCraft is an independent interoperability experiment. Users are responsible
+for ensuring that they have the right to use any data they load.
 
 BeamNG.drive is a product of BeamNG GmbH. This project is not affiliated with or endorsed by BeamNG GmbH.
 
@@ -123,6 +121,6 @@ BeamNG.drive is a product of BeamNG GmbH. This project is not affiliated with or
 
 Copyright (C) 2026 M1AO.
 
-BeamCraft's original code is licensed under the [GNU General Public License v3.0 or later](LICENSE). If you distribute a modified version, you must make its corresponding source code available under the same license.
+BeamCraft's original code is licensed under the [MIT License](LICENSE).
 
 Portions derived from the Fabric Example Mod remain available under CC0. Third-party components retain their respective licenses.
