@@ -12,7 +12,7 @@
 		"sources": "https://github.com/myoozy/BeamCraft",
 		"issues": "https://github.com/myoozy/BeamCraft/issues"
 	},
-	"license": "GPL-3.0-or-later",
+	"license": "MIT",
 	"icon": "assets/beamcraft/icon.png",
 	"environment": "*",
 	"entrypoints": {
