@@ -12,12 +12,12 @@ public class TorsionBarContainer {
     public int[] node3 = new int[INIT_TORSION_CAP];
     public int[] node4 = new int[INIT_TORSION_CAP];
 
-    public double[] restAngle = new double[INIT_TORSION_CAP]; // 静止角度
-    public double[] baseRestAngle = new double[INIT_TORSION_CAP];
-    public double[] spring = new double[INIT_TORSION_CAP];
-    public double[] damp = new double[INIT_TORSION_CAP];
-    public double[] deform = new double[INIT_TORSION_CAP];
-    public double[] strength = new double[INIT_TORSION_CAP];
+    public float[] restAngle = new float[INIT_TORSION_CAP]; // 静止角度
+    public float[] baseRestAngle = new float[INIT_TORSION_CAP];
+    public float[] spring = new float[INIT_TORSION_CAP];
+    public float[] damp = new float[INIT_TORSION_CAP];
+    public float[] deform = new float[INIT_TORSION_CAP];
+    public float[] strength = new float[INIT_TORSION_CAP];
     public boolean[] broken = new boolean[INIT_TORSION_CAP];
 
     private void ensureCapacity() {
@@ -38,11 +38,7 @@ public class TorsionBarContainer {
         }
     }
 
-    public void addTorsionBar(int index1, int index2, int index3, int index4,
-                              double posX1, double posX2, double posX3, double posX4,
-                              double posY1, double posY2, double posY3, double posY4,
-                              double posZ1, double posZ2, double posZ3, double posZ4,
-                              double torsionSpring, double torsionDamp, double torsionDeform, double torsionStrength) {
+    public void addTorsionBar(PhysicsSpecs.TorsionBarSpec spec, int index1, int index2, int index3, int index4, NodeContainer nodes) {
         ensureCapacity();
 
         int n1 = index1; int n2 = index2;
@@ -51,15 +47,15 @@ public class TorsionBarContainer {
         node1[count] = n1; node2[count] = n2;
         node3[count] = n3; node4[count] = n4;
 
-        spring[count] = torsionSpring; damp[count] = torsionDamp;
-        deform[count] = torsionDeform; strength[count] = torsionStrength;
+        spring[count] = spec.spring(); damp[count] = spec.damp();
+        deform[count] = spec.deform(); strength[count] = spec.strength();
         broken[count] = false;
 
         // 获取初始坐标
-        double x1 = posX1, y1 = posY1, z1 = posZ1;
-        double x2 = posX2, y2 = posY2, z2 = posZ2;
-        double x3 = posX3, y3 = posY3, z3 = posZ3;
-        double x4 = posX4, y4 = posY4, z4 = posZ4;
+        double x1 = nodes.posX[n1], y1 = nodes.posY[n1], z1 = nodes.posZ[n1];
+        double x2 = nodes.posX[n2], y2 = nodes.posY[n2], z2 = nodes.posZ[n2];
+        double x3 = nodes.posX[n3], y3 = nodes.posY[n3], z3 = nodes.posZ[n3];
+        double x4 = nodes.posX[n4], y4 = nodes.posY[n4], z4 = nodes.posZ[n4];
 
         // 算出 3 根向量: b1, b2, b3
         double b1x = x2 - x1, b1y = y2 - y1, b1z = z2 - z1;
@@ -86,7 +82,7 @@ public class TorsionBarContainer {
 
         double angle = Math.atan2(dot1, dot2);
 
-        restAngle[count] = angle;
+        restAngle[count] = (float) angle;
         baseRestAngle[count] = restAngle[count];
         if (Double.isNaN(angle)) broken[count] = true;
 

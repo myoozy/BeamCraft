@@ -28,14 +28,14 @@ public class TriangleContainer {
         }
     }
 
-    public void addTriangle(int index1, int index2, int index3, int triPartId, boolean triCollision) {
+    public void addTriangle(PhysicsSpecs.TriangleSpec spec, int index1, int index2, int index3) {
         ensureTriangleCapacity();
 
         node1[count] = index1;
         node2[count] = index2;
         node3[count] = index3;
-        partId[count] = triPartId;
-        collision[count] = triCollision;
+        partId[count] = spec.partId();
+        collision[count] = spec.collision();
         count++;
     }
 

@@ -1,194 +1,809 @@
 package me.mzy.beamcraft.client.render;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.material.MaterialRenderPlan;
+import me.mzy.beamcraft.client.material.RgbaColor;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.VertexBuffer;
-import net.minecraft.client.render.*;
+import net.minecraft.client.util.BufferAllocator;
+import net.minecraft.client.render.BufferBuilder;
+import net.minecraft.client.render.OverlayTexture;
+import net.minecraft.client.render.Tessellator;
+import net.minecraft.client.render.VertexFormat;
+import net.minecraft.client.render.VertexFormatElement;
+import net.minecraft.client.render.VertexFormats;
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
-import org.lwjgl.opengl.GL43;
+import org.lwjgl.opengl.GL31;
 import org.lwjgl.system.MemoryUtil;
+import org.joml.Matrix4f;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
+/**
+ * GPU-only soft-body skinning for Minecraft's OpenGL renderer.
+ *
+ * <p>The class name is retained for source compatibility, but the implementation
+ * deliberately does not use an OpenGL 4.3 compute shader. An OpenGL 3.2 vertex
+ * shader performs the same calculation under rasterizer discard and Transform
+ * Feedback writes the result into the position/normal VBO.</p>
+ */
 public class ComputeSkinningPipeline {
 
-    public static final double VERTEX_GROUP_SIZE = 256.0;
+    private enum State {
+        NEW,
+        READY,
+        FAILED,
+        CLOSED
+    }
 
-    public VertexBuffer mcVbo;
+    /**
+     * One drawable sub-mesh: a contiguous range of the combined index buffer.
+     * {@link #combinedStartIndex} is the index offset into the combined EBO
+     * (already rebased to absolute render-vertex indices, so no base vertex is
+     * needed), {@link #indexCount} the number of indices, and
+     * {@link #materialName} the DAE material name for scoped material lookup.
+     *
+     * <p>{@link #centerX}/{@link #centerY}/{@link #centerZ} is the model-space
+     * centroid of the range's vertices, computed during the index build from the
+     * rest-pose skinned positions (see {@link #computeRangeCentroids}); it is
+     * only meaningful when {@link #hasCentroid} is true. The centroid backs the
+     * back-to-front sort of translucent sub-meshes: transforming it by the
+     * vehicle's model-view matrix yields a view-space depth without touching the
+     * GPU buffers.
+     */
+    public static final class SubMeshRange {
+        public final String materialName;
+        public final int combinedStartIndex;
+        public final int indexCount;
+        /** Model-space centroid of the range's vertices; valid when {@link #hasCentroid}. */
+        public float centerX, centerY, centerZ;
+        public boolean hasCentroid;
 
-    public int customPosNormVbo = -1;
+        public SubMeshRange(String materialName, int combinedStartIndex, int indexCount) {
+            this.materialName = materialName;
+            this.combinedStartIndex = combinedStartIndex;
+            this.indexCount = indexCount;
+        }
 
-    public int computeProgramId = -1;
-    public int ssboRigging = -1;
-    public int vboOutput = -1;
-    public int ssboNodes = -1;
+        @Override
+        public String toString() {
+            return "SubMeshRange[" + materialName + ", " + combinedStartIndex + "+" + indexCount
+                    + (hasCentroid ? ", centroid=(" + centerX + ", " + centerY + ", " + centerZ + ")" : "")
+                    + ']';
+        }
+    }
 
-    public int totalVertices = 0;
-    public int maxNodeCount = 0;
-
-    private ByteBuffer persistentNodeBuffer;
-
-    public void init(FlexbodyContainer flex, int maxNodes) {
-        this.totalVertices = flex.totalVertexCount;
-        this.maxNodeCount = maxNodes;
-        if (totalVertices == 0) return;
-
-        this.persistentNodeBuffer = MemoryUtil.memAlloc(maxNodes * 16);
-
-        // 1. 读取并编译 Shader
-        try {
-            InputStream is = getClass().getResourceAsStream("/assets/beamcraft/shaders/softbody.comp");
-            if (is != null) {
-                String source = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-                this.computeProgramId = ComputeShaderLoader.compileComputeShader(source);
-            } else {
-                System.err.println("Failed to load softbody.comp");
-                return;
+    /**
+     * Pure, unit-tested: rebases a geometry's relative {@code SubMesh} ranges
+     * (startIndex/indexCount relative to that geometry's own index array) into
+     * the combined index buffer space by adding {@code combinedIndexStart}.
+     * Invalid/empty ranges are skipped, and ranges that would overflow an int or
+     * run past the geometry's own {@code geometryIndexCount} (into a neighbouring
+     * geometry's slice of the combined buffer) are rejected, all checked with
+     * {@code long} arithmetic so the guards themselves cannot overflow.
+     */
+    public static List<SubMeshRange> rebaseSubMeshRanges(
+            List<DaeMeshLoader.SubMesh> subMeshes, int combinedIndexStart, int geometryIndexCount) {
+        List<SubMeshRange> out = new ArrayList<>();
+        if (subMeshes == null) {
+            return out;
+        }
+        for (DaeMeshLoader.SubMesh sm : subMeshes) {
+            if (sm == null || sm.indexCount <= 0 || sm.startIndex < 0) {
+                continue;
             }
-        } catch (Exception e) {
-            e.printStackTrace();
+            long relativeEnd = (long) sm.startIndex + sm.indexCount;
+            if (relativeEnd > geometryIndexCount) {
+                continue; // cross-geometry range
+            }
+            long combinedStart = (long) combinedIndexStart + sm.startIndex;
+            long combinedEnd = combinedStart + sm.indexCount;
+            if (combinedStart > Integer.MAX_VALUE || combinedEnd > Integer.MAX_VALUE) {
+                continue; // int overflow in the rebased range
+            }
+            out.add(new SubMeshRange(sm.materialName, (int) combinedStart, sm.indexCount));
+        }
+        return out;
+    }
+
+    /**
+     * Pure, unit-tested: returns a new list of translucent ranges sorted
+     * back-to-front for alpha blending, using each range's model-space centroid
+     * (see {@link SubMeshRange#hasCentroid}) transformed into view space by
+     * {@code modelView}. The OpenGL camera looks down -Z, so the most-negative
+     * view-space depth is the farthest range and is drawn first; ascending sort
+     * therefore yields far-to-near order.
+     *
+     * <p>Ranges without a centroid (should not occur after the index build)
+     * sort to the front of the list and are drawn first, treated as farthest.
+     * The sort is stable, and the input list is not modified. When
+     * {@code modelView} is null the input order is preserved.
+     */
+    public static List<SubMeshRange> sortTranslucentBackToFront(List<SubMeshRange> ranges, Matrix4f modelView) {
+        List<SubMeshRange> out = new ArrayList<>(ranges);
+        if (modelView == null) {
+            return out;
+        }
+        out.sort((a, b) -> Float.compare(viewSpaceDepth(modelView, a), viewSpaceDepth(modelView, b)));
+        return out;
+    }
+
+    private static float viewSpaceDepth(Matrix4f modelView, SubMeshRange range) {
+        if (!range.hasCentroid) {
+            return Float.NEGATIVE_INFINITY;
+        }
+        org.joml.Vector4f viewPos = new org.joml.Vector4f(range.centerX, range.centerY, range.centerZ, 1f);
+        modelView.transform(viewPos);
+        return viewPos.z;
+    }
+
+    private static final int RIG_STREAM_COUNT = 3;
+    private static final int TEXTURE_UNIT_WEIGHTS = 0;
+    private static final int TEXTURE_UNIT_NORMALS = 1;
+    private static final int TEXTURE_UNIT_OFFSETS = 2;
+    private static final int TEXTURE_UNIT_NODES = 3;
+
+    private VertexBuffer mcVbo;
+    private int customPosNormVbo = -1;
+
+    private final int[] rigBuffers = {-1, -1, -1};
+    private final int[] rigTextures = {-1, -1, -1};
+
+    private int nodeBuffer = -1;
+    private int nodeTexture = -1;
+    private int transformProgramId = -1;
+    private int transformVao = -1;
+
+    private int totalVertices;
+    private int totalIndexCount;
+    private VertexFormat.IndexType indexType;
+    private int indexSizeBytes;
+    private int maxNodeCount;
+    private int lightAttributeIndex = -1;
+    private final List<SubMeshRange> subMeshRanges = new ArrayList<>();
+    private ByteBuffer nodeUploadBuffer;
+
+    private State state = State.NEW;
+    private boolean hasValidOutput;
+    private long lastRenderMoment = Long.MIN_VALUE;
+
+    public boolean init(FlexbodyContainer flex, int requestedNodeCapacity) {
+        RenderSystem.assertOnRenderThread();
+        if (state != State.NEW) {
+            return state == State.READY;
+        }
+
+        totalVertices = flex.totalVertexCount;
+        maxNodeCount = Math.max(1, requestedNodeCapacity);
+        if (totalVertices == 0) {
+            state = State.FAILED;
+            return false;
+        }
+
+        try {
+            validateCapabilities();
+            transformProgramId = TransformFeedbackShaderLoader.compile(loadShaderSource());
+            configureSamplerUnits();
+            createRigStreams(flex);
+            createNodeStream();
+            createMinecraftVertexBuffer(flex);
+            createOutputBufferAndConfigureVertexArray();
+            transformVao = GL30.glGenVertexArrays();
+            state = State.READY;
+            BeamCraft.LOGGER.info(
+                    "Initialized OpenGL 3.2 GPU skinning for {} vertices on {} / {} ({})",
+                    totalVertices,
+                    GL11.glGetString(GL11.GL_VENDOR),
+                    GL11.glGetString(GL11.GL_RENDERER),
+                    GL11.glGetString(GL11.GL_VERSION)
+            );
+            return true;
+        } catch (RuntimeException | IOException exception) {
+            BeamCraft.LOGGER.error("Failed to initialize GPU-only soft-body skinning", exception);
+            releaseGlResources();
+            state = State.FAILED;
+            return false;
+        }
+    }
+
+    public boolean isReady() {
+        return state == State.READY;
+    }
+
+    public boolean hasValidOutput() {
+        return state == State.READY && hasValidOutput;
+    }
+
+    /**
+     * Per-material drawable index ranges, in combined index-buffer order.
+     * Unmodifiable view: callers may iterate but never mutate the internal list.
+     */
+    public List<SubMeshRange> getSubMeshRanges() {
+        return Collections.unmodifiableList(subMeshRanges);
+    }
+
+    private void validateCapabilities() {
+        if (!GL.getCapabilities().OpenGL32) {
+            throw new IllegalStateException("BeamCraft GPU skinning requires OpenGL 3.2, "
+                    + "which is also Minecraft 1.21's minimum graphics API");
+        }
+
+        int maxTextureBufferTexels = GL11.glGetInteger(GL31.GL_MAX_TEXTURE_BUFFER_SIZE);
+        int requiredTexels = Math.max(totalVertices, maxNodeCount);
+        if (requiredTexels > maxTextureBufferTexels) {
+            throw new IllegalStateException("Vehicle requires " + requiredTexels
+                    + " texture-buffer texels, but this GPU supports " + maxTextureBufferTexels);
+        }
+
+        int vertexTextureUnits = GL11.glGetInteger(GL20.GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS);
+        if (vertexTextureUnits < 4) {
+            throw new IllegalStateException("GPU skinning requires four vertex texture units, but this GPU supports "
+                    + vertexTextureUnits);
+        }
+    }
+
+    private String loadShaderSource() throws IOException {
+        String path = "/assets/beamcraft/shaders/softbody_transform.vsh";
+        try (InputStream stream = getClass().getResourceAsStream(path)) {
+            if (stream == null) {
+                throw new IOException("Missing shader resource " + path);
+            }
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private void configureSamplerUnits() {
+        int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        try {
+            GL20.glUseProgram(transformProgramId);
+            setSampler("uRigWeights", TEXTURE_UNIT_WEIGHTS);
+            setSampler("uRigNormals", TEXTURE_UNIT_NORMALS);
+            setSampler("uRigOffsets", TEXTURE_UNIT_OFFSETS);
+            setSampler("uPhysicsNodes", TEXTURE_UNIT_NODES);
+        } finally {
+            GL20.glUseProgram(previousProgram);
+        }
+    }
+
+    private void setSampler(String name, int textureUnit) {
+        int location = GL20.glGetUniformLocation(transformProgramId, name);
+        if (location < 0) {
+            throw new IllegalStateException("Missing GPU skinning sampler " + name);
+        }
+        GL20.glUniform1i(location, textureUnit);
+    }
+
+    private void createRigStreams(FlexbodyContainer flex) {
+        ByteBuffer weights = MemoryUtil.memAlloc(totalVertices * 16);
+        ByteBuffer normals = MemoryUtil.memAlloc(totalVertices * 16);
+        ByteBuffer offsets = MemoryUtil.memAlloc(totalVertices * 16);
+
+        try {
+            for (int i = 0; i < totalVertices; i++) {
+                weights.putFloat(flex.vWeightX[i]);
+                weights.putFloat(flex.vWeightY[i]);
+                weights.putFloat(flex.vWeightZ[i]);
+                weights.putFloat(flex.vCenterNode[i]);
+
+                normals.putFloat(flex.vNormWeightX[i]);
+                normals.putFloat(flex.vNormWeightY[i]);
+                normals.putFloat(flex.vNormWeightZ[i]);
+                normals.putFloat(flex.vUseCrossZ[i] ? flex.vVxNode[i] : -1.0f);
+
+                offsets.putFloat(flex.skinnedPosX[i]);
+                offsets.putFloat(flex.skinnedPosY[i]);
+                offsets.putFloat(flex.skinnedPosZ[i]);
+                offsets.putFloat(flex.vUseCrossZ[i] ? flex.vVyNode[i] : -1.0f);
+            }
+
+            weights.flip();
+            normals.flip();
+            offsets.flip();
+            createTextureBufferStream(0, weights, GL15.GL_STATIC_DRAW);
+            createTextureBufferStream(1, normals, GL15.GL_STATIC_DRAW);
+            createTextureBufferStream(2, offsets, GL15.GL_STATIC_DRAW);
+        } finally {
+            MemoryUtil.memFree(weights);
+            MemoryUtil.memFree(normals);
+            MemoryUtil.memFree(offsets);
+        }
+    }
+
+    private void createTextureBufferStream(int index, ByteBuffer data, int usage) {
+        rigBuffers[index] = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, rigBuffers[index]);
+        GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, data, usage);
+
+        rigTextures[index] = GL11.glGenTextures();
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, rigTextures[index]);
+        GL31.glTexBuffer(GL31.GL_TEXTURE_BUFFER, GL30.GL_RGBA32F, rigBuffers[index]);
+
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
+    }
+
+    private void createNodeStream() {
+        nodeUploadBuffer = MemoryUtil.memAlloc(maxNodeCount * 16);
+
+        nodeBuffer = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, nodeBuffer);
+        GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, (long) maxNodeCount * 16, GL15.GL_STREAM_DRAW);
+
+        nodeTexture = GL11.glGenTextures();
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, nodeTexture);
+        GL31.glTexBuffer(GL31.GL_TEXTURE_BUFFER, GL30.GL_RGBA32F, nodeBuffer);
+
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
+    }
+
+    private void createMinecraftVertexBuffer(FlexbodyContainer flex) {
+        int[] indices = buildCombinedIndices(flex);
+        if (indices.length < totalVertices) {
+            throw new IllegalStateException("Indexed vehicle mesh contains unused render vertices");
+        }
+
+        mcVbo = new VertexBuffer(VertexBuffer.Usage.STATIC);
+        Tessellator tessellator = Tessellator.getInstance();
+        BufferBuilder builder = tessellator.begin(
+                VertexFormat.DrawMode.TRIANGLES,
+                VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL
+        );
+
+        for (int i = 0; i < totalVertices; i++) {
+            builder.vertex(0, 0, 0)
+                    .color(255, 255, 255, 255)
+                    .texture(flex.uvU[i], flex.uvV[i])
+                    .overlay(OverlayTexture.DEFAULT_UV)
+                    .light(0)
+                    .normal(0, 1, 0);
+        }
+        // BufferBuilder controls VertexBuffer's private draw parameters. Pad
+        // with unreferenced vertices so its index count equals our real EBO
+        // count; only the compact vertices above are addressed by that EBO.
+        for (int i = totalVertices; i < indices.length; i++) {
+            builder.vertex(0, 0, 0)
+                    .color(255, 255, 255, 255)
+                    .texture(0, 0)
+                    .overlay(OverlayTexture.DEFAULT_UV)
+                    .light(0)
+                    .normal(0, 1, 0);
+        }
+
+        var meshData = builder.end();
+        if (meshData == null) {
+            throw new IllegalStateException("Minecraft produced no mesh data for a non-empty vehicle");
+        }
+
+        mcVbo.bind();
+        mcVbo.upload(meshData);
+        indexType = VertexFormat.IndexType.smallestFor(indices.length);
+        indexSizeBytes = indexType.size;
+        uploadIndexBuffer(indices, indexType);
+        VertexBuffer.unbind();
+    }
+
+    private int[] buildCombinedIndices(FlexbodyContainer flex) {
+        subMeshRanges.clear();
+        int totalIndexCount = 0;
+        for (int mesh = 0; mesh < flex.meshCount; mesh++) {
+            DaeMeshLoader.RawGeometry geometry = findGeometry(flex, mesh);
+            if (geometry != null) {
+                totalIndexCount += geometry.indexCount;
+            }
+        }
+
+        int[] combined = new int[totalIndexCount];
+        int indexOffset = 0;
+        int vertexOffset = 0;
+        for (int mesh = 0; mesh < flex.meshCount; mesh++) {
+            DaeMeshLoader.RawGeometry geometry = findGeometry(flex, mesh);
+            if (geometry == null) {
+                continue;
+            }
+            int geometryIndexStart = indexOffset;
+            for (int index = 0; index < geometry.indexCount; index++) {
+                combined[indexOffset++] = vertexOffset + geometry.indices[index];
+            }
+            subMeshRanges.addAll(rebaseSubMeshRanges(geometry.subMeshes, geometryIndexStart, geometry.indexCount));
+            vertexOffset += geometry.vertexCount;
+        }
+
+        if (vertexOffset != totalVertices || indexOffset != combined.length) {
+            throw new IllegalStateException("DAE geometry changed while the GPU skinning pipeline was initialized");
+        }
+        this.totalIndexCount = combined.length;
+        computeRangeCentroids(flex, combined);
+        return combined;
+    }
+
+    /**
+     * Fills each {@link SubMeshRange}'s model-space centroid from the rest-pose
+     * skinned positions. The centroid is the mean position of the range's
+     * vertices; it is used only for the translucent back-to-front sort, so it is
+     * computed once at init time and never updated as the vehicle deforms (glass
+     * panels move with the body, so the rest-pose ordering stays defensible).
+     */
+    private void computeRangeCentroids(FlexbodyContainer flex, int[] combined) {
+        for (SubMeshRange range : subMeshRanges) {
+            float sx = 0f, sy = 0f, sz = 0f;
+            int count = 0;
+            int end = range.combinedStartIndex + range.indexCount;
+            for (int i = range.combinedStartIndex; i < end; i++) {
+                int v = combined[i];
+                if (v < 0 || v >= totalVertices) {
+                    continue;
+                }
+                sx += flex.skinnedPosX[v];
+                sy += flex.skinnedPosY[v];
+                sz += flex.skinnedPosZ[v];
+                count++;
+            }
+            if (count > 0) {
+                range.centerX = sx / count;
+                range.centerY = sy / count;
+                range.centerZ = sz / count;
+                range.hasCentroid = true;
+            }
+        }
+    }
+
+    private DaeMeshLoader.RawGeometry findGeometry(FlexbodyContainer flex, int mesh) {
+        if (flex.meshName[mesh].isEmpty()) {
+            return null;
+        }
+        String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[mesh];
+        DaeMeshLoader.RawGeometry geometry = DaeMeshLoader.MESH_CACHE.get(scopedKey);
+        return geometry != null
+                ? geometry
+                : DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[mesh]);
+    }
+
+    private void uploadIndexBuffer(int[] indices, VertexFormat.IndexType indexType) {
+        int bytesPerIndex = indexType == VertexFormat.IndexType.SHORT
+                ? Short.BYTES
+                : Integer.BYTES;
+        int byteCount = indices.length * bytesPerIndex;
+
+        try (BufferAllocator allocator = new BufferAllocator(byteCount)) {
+            long address = allocator.allocate(byteCount);
+            ByteBuffer indexData = MemoryUtil.memByteBuffer(address, byteCount);
+            if (indexType == VertexFormat.IndexType.SHORT) {
+                for (int index : indices) {
+                    indexData.putShort((short) index);
+                }
+            } else {
+                for (int index : indices) {
+                    indexData.putInt(index);
+                }
+            }
+
+            BufferAllocator.CloseableBuffer allocated = allocator.getAllocated();
+            if (allocated == null) {
+                throw new IllegalStateException("Failed to allocate the vehicle index buffer");
+            }
+            mcVbo.uploadIndexBuffer(allocated);
+        }
+    }
+
+    private void createOutputBufferAndConfigureVertexArray() {
+        customPosNormVbo = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, customPosNormVbo);
+        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, (long) totalVertices * 6 * Float.BYTES, GL15.GL_STREAM_DRAW);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+
+        VertexFormat format = VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL;
+        int positionIndex = requireAttributeIndex(format, VertexFormatElement.POSITION);
+        int normalIndex = requireAttributeIndex(format, VertexFormatElement.NORMAL);
+        lightAttributeIndex = requireAttributeIndex(format, VertexFormatElement.UV_2);
+
+        // This VAO belongs exclusively to mcVbo, so the dynamic bindings can be
+        // installed once rather than mutating and restoring them on every draw.
+        mcVbo.bind();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, customPosNormVbo);
+        GL20.glEnableVertexAttribArray(positionIndex);
+        GL20.glVertexAttribPointer(positionIndex, 3, GL11.GL_FLOAT, false, 24, 0L);
+        GL20.glEnableVertexAttribArray(normalIndex);
+        GL20.glVertexAttribPointer(normalIndex, 3, GL11.GL_FLOAT, false, 24, 12L);
+        GL20.glDisableVertexAttribArray(lightAttributeIndex);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        VertexBuffer.unbind();
+    }
+
+    private int requireAttributeIndex(VertexFormat format, VertexFormatElement element) {
+        int index = format.getElements().indexOf(element);
+        if (index < 0) {
+            throw new IllegalStateException("Minecraft vertex format is missing required element " + element);
+        }
+        return index;
+    }
+
+    public boolean updateGpuSkinning(
+            float[] interpX,
+            float[] interpY,
+            float[] interpZ,
+            int activeNodes,
+            long renderMoment
+    ) {
+        RenderSystem.assertOnRenderThread();
+        if (state != State.READY || activeNodes <= 0) {
+            return false;
+        }
+        if (hasValidOutput && lastRenderMoment == renderMoment) {
+            return true;
+        }
+
+        try {
+            ensureNodeCapacity(activeNodes);
+            uploadNodes(interpX, interpY, interpZ, activeNodes);
+            runTransformFeedback();
+            hasValidOutput = true;
+            lastRenderMoment = renderMoment;
+            return true;
+        } catch (RuntimeException exception) {
+            BeamCraft.LOGGER.error("GPU soft-body skinning failed; this vehicle will no longer be rendered", exception);
+            hasValidOutput = false;
+            state = State.FAILED;
+            return false;
+        }
+    }
+
+    private void ensureNodeCapacity(int activeNodes) {
+        if (activeNodes <= maxNodeCount) {
             return;
         }
 
-        // 2. 打包静态网格数据 (SSBO 0)
-        ByteBuffer rigBuffer = MemoryUtil.memAlloc(totalVertices * 64);
-        int ptr = 0;
-
-        for (int m = 0; m < flex.meshCount; m++) {
-            if (flex.meshName[m].isEmpty()) continue;
-            String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[m];
-            DaeMeshLoader.RawGeometry geom = DaeMeshLoader.MESH_CACHE.get(scopedKey);
-            if (geom == null) geom = DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[m]);
-            if (geom == null) continue;
-
-            for (int v = 0; v < geom.vertexCount; v++) {
-                int i = ptr;
-                rigBuffer.putFloat(flex.vWeightX[i]);
-                rigBuffer.putFloat(flex.vWeightY[i]);
-                rigBuffer.putFloat(flex.vWeightZ[i]);
-                rigBuffer.putFloat(Float.intBitsToFloat(flex.vCenterNode[i]));
-
-                rigBuffer.putFloat(flex.vNormWeightX != null ? flex.vNormWeightX[i] : 0f);
-                rigBuffer.putFloat(flex.vNormWeightY != null ? flex.vNormWeightY[i] : 1f);
-                rigBuffer.putFloat(flex.vNormWeightZ != null ? flex.vNormWeightZ[i] : 0f);
-                rigBuffer.putFloat(Float.intBitsToFloat(flex.vUseCrossZ[i] ? flex.vVxNode[i] : 0));
-
-                rigBuffer.putFloat(flex.skinnedPosX[i]);
-                rigBuffer.putFloat(flex.skinnedPosY[i]);
-                rigBuffer.putFloat(flex.skinnedPosZ[i]);
-                rigBuffer.putFloat(Float.intBitsToFloat(flex.vUseCrossZ[i] ? flex.vVyNode[i] : 0));
-
-                rigBuffer.putFloat(flex.uvU[i]);
-                rigBuffer.putFloat(flex.uvV[i]);
-                rigBuffer.putFloat(Float.intBitsToFloat(flex.vUseCrossZ[i] ? 1 : 0));
-                rigBuffer.putFloat(0f);
-
-                ptr++;
-            }
-        }
-        rigBuffer.flip();
-
-        this.ssboRigging = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.ssboRigging);
-        GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, rigBuffer, GL15.GL_STATIC_DRAW);
-        MemoryUtil.memFree(rigBuffer);
-
-        // ==========================================
-        // 3. 生成官方 VBO (只做欺骗，不写入)
-        // ==========================================
-        this.mcVbo = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
-        Tessellator tessellator = Tessellator.getInstance();
-        BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.TRIANGLES, VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL);
-        for (int i = 0; i < totalVertices; i++) {
-            // 🔥 1. 从 Flexbody 数据中拿出真实的静态 UV
-            float u = flex.uvU[i];
-            float v = flex.uvV[i];
-
-            // 🔥 2. 把真实的 (u, v) 塞进去，替换掉之前的 (0, 0)
-            builder.vertex(0, 0, 0)
-                    .color(255, 255, 255, 255)
-                    .texture(u, v)  // <--- 核心修复！
-                    .overlay(OverlayTexture.DEFAULT_UV)
-                    .light(15728880) // 默认满亮度
-                    .normal(0, 1, 0);
-        }
-        var meshData = builder.end();
-        if (meshData != null) {
-            this.mcVbo.bind();
-            this.mcVbo.upload(meshData);
-            VertexBuffer.unbind();
+        int newCapacity = Math.max(activeNodes, maxNodeCount * 2);
+        int maxTextureBufferTexels = GL11.glGetInteger(GL31.GL_MAX_TEXTURE_BUFFER_SIZE);
+        if (newCapacity > maxTextureBufferTexels) {
+            throw new IllegalStateException("Vehicle node count exceeds GPU texture-buffer capacity");
         }
 
-        // ==========================================
-        // 4. 🔥 生成我们的纯净避难所 VBO
-        // ==========================================
-        this.customPosNormVbo = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.customPosNormVbo);
-        // 大小：顶点数 * 6个Float * 4字节
-        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, totalVertices * 6L * 4L, GL15.GL_DYNAMIC_DRAW);
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        MemoryUtil.memFree(nodeUploadBuffer);
+        nodeUploadBuffer = MemoryUtil.memAlloc(newCapacity * 16);
+        maxNodeCount = newCapacity;
 
-        // ==========================================
-        // 5. 分配物理节点 SSBO 12
-        // ==========================================
-        this.ssboNodes = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.ssboNodes);
-        GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long) maxNodes * 16, GL15.GL_DYNAMIC_DRAW);
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, nodeBuffer);
+        GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, (long) maxNodeCount * 16, GL15.GL_STREAM_DRAW);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
     }
 
-    public void dispatchCompute(float[] interpX, float[] interpY, float[] interpZ, int activeNodes) {
-        if (this.computeProgramId == -1 || this.totalVertices == 0) return;
-
-        this.persistentNodeBuffer.clear();
+    private void uploadNodes(float[] interpX, float[] interpY, float[] interpZ, int activeNodes) {
+        nodeUploadBuffer.clear();
         for (int i = 0; i < activeNodes; i++) {
-            this.persistentNodeBuffer.putFloat(interpX[i]);
-            this.persistentNodeBuffer.putFloat(interpY[i]);
-            this.persistentNodeBuffer.putFloat(interpZ[i]);
-            this.persistentNodeBuffer.putFloat(0f);
+            nodeUploadBuffer.putFloat(interpX[i]);
+            nodeUploadBuffer.putFloat(interpY[i]);
+            nodeUploadBuffer.putFloat(interpZ[i]);
+            nodeUploadBuffer.putFloat(0.0f);
         }
-        this.persistentNodeBuffer.flip();
+        nodeUploadBuffer.flip();
 
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.ssboNodes);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, nodeBuffer);
+        GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, (long) maxNodeCount * 16, GL15.GL_STREAM_DRAW);
+        GL15.glBufferSubData(GL31.GL_TEXTURE_BUFFER, 0, nodeUploadBuffer);
+        GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
+    }
 
-        // Buffer Orphaning (孤立旧缓冲)
-        // 先传一个 null，告诉显卡：“旧数据我不要了，你自己慢慢用，给我开辟一块新的同等大小的区域”
-        // 这样 CPU 就不需要干等 GPU 算完上一帧才能写入了
-        GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long) this.maxNodeCount * 16, GL15.GL_DYNAMIC_DRAW);
-        // 然后再把我们的新数据传进去
-        GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0, this.persistentNodeBuffer);
+    private void runTransformFeedback() {
+        int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        int previousVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int previousTransformFeedbackBuffer = GL30.glGetIntegeri(
+                GL30.GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 0
+        );
+        boolean rasterizerDiscardWasEnabled = GL11.glIsEnabled(GL30.GL_RASTERIZER_DISCARD);
+        boolean transformFeedbackActive = false;
+        int[] previousTextureBindings = new int[4];
 
-        GL20.glUseProgram(this.computeProgramId);
+        try {
+            bindTextureBuffer(TEXTURE_UNIT_WEIGHTS, rigTextures[0], previousTextureBindings);
+            bindTextureBuffer(TEXTURE_UNIT_NORMALS, rigTextures[1], previousTextureBindings);
+            bindTextureBuffer(TEXTURE_UNIT_OFFSETS, rigTextures[2], previousTextureBindings);
+            bindTextureBuffer(TEXTURE_UNIT_NODES, nodeTexture, previousTextureBindings);
 
-        // 🔥 将端口指向我们的纯净 VBO
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, this.ssboRigging);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, this.customPosNormVbo);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, this.ssboNodes);
+            GL20.glUseProgram(transformProgramId);
+            GL30.glBindVertexArray(transformVao);
+            GL30.glBindBufferBase(GL30.GL_TRANSFORM_FEEDBACK_BUFFER, 0, customPosNormVbo);
+            GL11.glEnable(GL30.GL_RASTERIZER_DISCARD);
+            GL30.glBeginTransformFeedback(GL11.GL_POINTS);
+            transformFeedbackActive = true;
+            GL11.glDrawArrays(GL11.GL_POINTS, 0, totalVertices);
+            GL30.glEndTransformFeedback();
+            transformFeedbackActive = false;
+        } finally {
+            if (transformFeedbackActive) {
+                GL30.glEndTransformFeedback();
+            }
+            if (!rasterizerDiscardWasEnabled) {
+                GL11.glDisable(GL30.GL_RASTERIZER_DISCARD);
+            }
+            GL30.glBindBufferBase(
+                    GL30.GL_TRANSFORM_FEEDBACK_BUFFER,
+                    0,
+                    previousTransformFeedbackBuffer
+            );
+            GL30.glBindVertexArray(previousVao);
+            GL20.glUseProgram(previousProgram);
 
-        int loc = GL20.glGetUniformLocation(this.computeProgramId, "u_vertexCount");
-        if (loc != -1) GL20.glUniform1i(loc, this.totalVertices);
+            for (int unit = 0; unit < previousTextureBindings.length; unit++) {
+                GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+                GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, previousTextureBindings[unit]);
+            }
+            GL13.glActiveTexture(previousActiveTexture);
+        }
+    }
 
-        int numGroups = (int) Math.ceil((double) this.totalVertices / VERTEX_GROUP_SIZE);
-        GL43.glDispatchCompute(numGroups, 1, 1);
+    /**
+     * Draws the latest skinned output. Keeping the raw OpenGL vertex attribute
+     * operation here gives a future non-OpenGL backend a single replacement
+     * boundary instead of leaking GL details into the entity renderer.
+     */
+    public void draw(Matrix4f modelView, Matrix4f projection, ShaderProgram shader, int packedLight) {
+        RenderSystem.assertOnRenderThread();
+        if (!hasValidOutput()) {
+            return;
+        }
 
-        GL20.glUseProgram(0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+        mcVbo.bind();
+        try {
+            int blockLight = packedLight & 0xFFFF;
+            int skyLight = packedLight >>> 16 & 0xFFFF;
+            GL30.glVertexAttribI2i(lightAttributeIndex, blockLight, skyLight);
+            mcVbo.draw(modelView, projection, shader);
+        } finally {
+            VertexBuffer.unbind();
+        }
+    }
+
+    /**
+     * Draws one sub-mesh range with its material's diffuse texture through the
+     * vanilla Minecraft entity cutout shader. Replicates {@code mcVbo.draw}'s
+     * uniform setup and shader bind, then issues a {@code glDrawElements} over
+     * the range's byte-sliced index offset. The range is validated defensively;
+     * invalid ranges are skipped rather than drawn.
+     *
+     * <p>This deliberately uses the standard vanilla entity-shader conventions
+     * (no custom uniforms or samplers) so Iris and other shader pipelines can
+     * substitute and manage the entity shader in both the normal and shadow
+     * passes. The diffuse texture is bound as vanilla {@code Sampler0} through
+     * {@link RenderSystem#setShaderTexture(int, int)}, and the material's RGBA
+     * factor is applied as the shader's {@code ColorModulator} through
+     * {@link RenderSystem#setShaderColor(float, float, float, float)} before the
+     * uniform set is initialised. Both are read back and restored afterwards, so
+     * this draw never leaks a per-material colour or texture into the next draw.
+     *
+     * <p>The caller must have the overlay and lightmap textures bound as vanilla
+     * {@code Sampler1}/{@code Sampler2} (e.g. via
+     * {@link net.minecraft.client.render.OverlayTexture} {@code setupOverlayColor}
+     * and {@code LightmapTextureManager#enable}), exactly as the vanilla entity
+     * cutout render layer does. {@code ShaderProgram#bind()} assigns each sampler
+     * its actual GL unit from the loaded sampler list and binds the tracked
+     * texture there; {@code unbind()} restores the post-draw state, leaving the
+     * same GL state as {@code mcVbo.draw} does.
+     */
+    public void drawRange(SubMeshRange range, int diffuseTextureId, MaterialRenderPlan plan,
+                          Matrix4f modelView, Matrix4f projection, ShaderProgram shader, int packedLight) {
+        RenderSystem.assertOnRenderThread();
+        if (!hasValidOutput() || shader == null || range == null) {
+            return;
+        }
+        if (range.indexCount <= 0 || range.combinedStartIndex < 0
+                || (long) range.combinedStartIndex + range.indexCount > totalIndexCount) {
+            return; // defensive: never draw an out-of-range slice
+        }
+
+        mcVbo.bind();
+        try {
+            int blockLight = packedLight & 0xFFFF;
+            int skyLight = packedLight >>> 16 & 0xFFFF;
+            GL30.glVertexAttribI2i(lightAttributeIndex, blockLight, skyLight);
+
+            float[] previousColor = RenderSystem.getShaderColor();
+            float prevR = previousColor[0], prevG = previousColor[1];
+            float prevB = previousColor[2], prevA = previousColor[3];
+            int previousTexture0 = RenderSystem.getShaderTexture(0);
+            RgbaColor factor = plan.colorFactor();
+
+            try {
+                RenderSystem.setShaderTexture(0, diffuseTextureId);
+                RenderSystem.setShaderColor(factor.r(), factor.g(), factor.b(), factor.a());
+                shader.initializeUniforms(VertexFormat.DrawMode.TRIANGLES, modelView, projection,
+                        MinecraftClient.getInstance().getWindow());
+                boolean bound = false;
+                try {
+                    shader.bind();
+                    bound = true;
+                    long byteOffset = (long) range.combinedStartIndex * indexSizeBytes;
+                    GL11.glDrawElements(VertexFormat.DrawMode.TRIANGLES.glMode,
+                            range.indexCount, indexType.glType, byteOffset);
+                } finally {
+                    if (bound) {
+                        shader.unbind(); // also runs if the draw throws
+                    }
+                }
+            } finally {
+                RenderSystem.setShaderColor(prevR, prevG, prevB, prevA);
+                RenderSystem.setShaderTexture(0, previousTexture0);
+            }
+        } finally {
+            VertexBuffer.unbind();
+        }
+    }
+
+    private void bindTextureBuffer(int unit, int texture, int[] previousBindings) {
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+        previousBindings[unit] = GL11.glGetInteger(GL31.GL_TEXTURE_BINDING_BUFFER);
+        GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, texture);
     }
 
     public void free() {
-        if (this.computeProgramId != -1) { GL20.glDeleteProgram(this.computeProgramId); this.computeProgramId = -1; }
-        if (this.ssboRigging != -1) { GL15.glDeleteBuffers(this.ssboRigging); this.ssboRigging = -1; }
-        if (this.customPosNormVbo != -1) { GL15.glDeleteBuffers(this.customPosNormVbo); this.customPosNormVbo = -1; } // 释放内存
-        if (this.ssboNodes != -1) { GL15.glDeleteBuffers(this.ssboNodes); this.ssboNodes = -1; }
-        if (this.mcVbo != null) { this.mcVbo.close(); this.mcVbo = null; }
-        if (this.persistentNodeBuffer != null) { MemoryUtil.memFree(this.persistentNodeBuffer); this.persistentNodeBuffer = null; }
+        if (state == State.CLOSED) {
+            return;
+        }
+        state = State.CLOSED;
+        hasValidOutput = false;
+        if (RenderSystem.isOnRenderThread()) {
+            releaseGlResources();
+        } else {
+            RenderSystem.recordRenderCall(this::releaseGlResources);
+        }
+    }
+
+    private void releaseGlResources() {
+        if (transformProgramId != -1) {
+            GL20.glDeleteProgram(transformProgramId);
+            transformProgramId = -1;
+        }
+        if (transformVao != -1) {
+            GL30.glDeleteVertexArrays(transformVao);
+            transformVao = -1;
+        }
+
+        for (int i = 0; i < RIG_STREAM_COUNT; i++) {
+            if (rigTextures[i] != -1) {
+                GL11.glDeleteTextures(rigTextures[i]);
+                rigTextures[i] = -1;
+            }
+            if (rigBuffers[i] != -1) {
+                GL15.glDeleteBuffers(rigBuffers[i]);
+                rigBuffers[i] = -1;
+            }
+        }
+
+        if (nodeTexture != -1) {
+            GL11.glDeleteTextures(nodeTexture);
+            nodeTexture = -1;
+        }
+        if (nodeBuffer != -1) {
+            GL15.glDeleteBuffers(nodeBuffer);
+            nodeBuffer = -1;
+        }
+        if (customPosNormVbo != -1) {
+            GL15.glDeleteBuffers(customPosNormVbo);
+            customPosNormVbo = -1;
+        }
+        if (mcVbo != null) {
+            mcVbo.close();
+            mcVbo = null;
+        }
+        if (nodeUploadBuffer != null) {
+            MemoryUtil.memFree(nodeUploadBuffer);
+            nodeUploadBuffer = null;
+        }
     }
 }

@@ -7,11 +7,10 @@ version = project.mod_version
 group = project.maven_group
 
 repositories {
-	// Add repositories to retrieve artifacts from in here.
-	// You should only use this when depending on other mods because
-	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
-	// for more information about repositories.
+	// Loom adds the essential maven repositories to download Minecraft and
+	// libraries from automatically; Maven Central is declared for the JUnit 5
+	// test dependencies below (and would serve any future runtime library).
+	mavenCentral()
 }
 
 loom {
@@ -43,12 +42,23 @@ dependencies {
 
 	// 引入 LWJGL 3 的 Assimp 绑定与当前平台的本地库
 	implementation "org.lwjgl:lwjgl-assimp:3.3.3"
+	include "org.lwjgl:lwjgl-assimp:3.3.3"
+	include "org.lwjgl:lwjgl-assimp:3.3.3:natives-windows"
 	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-windows"
 	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-linux"
 	runtimeOnly "org.lwjgl:lwjgl-assimp:3.3.3:natives-macos"
 
 	// TODO: 如果想把核心类库直接打包进 Mod 中，可以使用 include (根据打包策略)
 	// include "org.lwjgl:lwjgl-assimp:3.3.3"
+
+	// JUnit 5 for the texture decode/cache unit tests (src/test/java).
+	// The decode layer itself has no third-party dependencies.
+	testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
 }
 
 processResources {

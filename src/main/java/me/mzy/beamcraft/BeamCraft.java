@@ -40,6 +40,7 @@ public class BeamCraft implements ModInitializer {
 			Identifier.of(MOD_ID, "physics_vehicle"),
 			FabricEntityTypeBuilder.create(SpawnGroup.MISC, PhysicsVehicleEntity::new)
 					.dimensions(EntityDimensions.fixed(2.5f, 2.0f)) // 设置一个粗略的逻辑碰撞箱
+					.fireImmune() // 载具燃烧完全由未来的油箱/电池事件系统驱动，禁用原版火焰点燃与着火动画
 					.build()
 	);
 

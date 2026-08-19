@@ -4,6 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.physics.JBeamExpressionEvaluator.EvalOutcome;
+import me.mzy.beamcraft.client.physics.JBeamExpressionEvaluator.EvalStatus;
 
 import java.util.Map;
 
@@ -14,76 +16,101 @@ import java.util.Map;
 public class JBeamParser {
 
     /**
-     * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"
-     * 支持 + - * / 和变量替换（变量以 $ 开头，未定义变量 → 0.0）
+     * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"。
+     * 内部委托给 {@link JBeamExpressionEvaluator}（真正的 tokenizer + 优先级 parser）。
+     * 兼容语义保持不变：裸 "$var"（未定义 → 0.0f）；非 $= 的非数字串 → null。
      */
-    public static Double evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
+    public static Float evaluateBeamNGExpression(String expr, Map<String, Double> variables) {
+        if (expr == null) return null;
         expr = expr.trim();
-        if (!expr.startsWith("$=")) {
-            try { return Double.parseDouble(expr); } catch (Exception e) { return null; }
+        if (expr.isEmpty()) return null;
+
+        // 纯数字字面量快速路径
+        if (!expr.startsWith("$")) {
+            try { return Float.parseFloat(expr); } catch (NumberFormatException e) { return null; }
         }
-        String equation = expr.substring(2);
 
-        // 递归替换所有 $variable (最长匹配)
-        boolean changed;
-        do {
-            changed = false;
-            StringBuilder sb = new StringBuilder();
-            int i = 0;
-            while (i < equation.length()) {
-                if (equation.charAt(i) == '$') {
-                    int j = i + 1;
-                    while (j < equation.length() && (Character.isLetterOrDigit(equation.charAt(j)) || equation.charAt(j) == '_')) j++;
-                    String varName = equation.substring(i + 1, j);
-                    Double val = variables.getOrDefault(varName, 0.0);
-                    sb.append(val);
-                    i = j;
-                    changed = true;
-                } else {
-                    sb.append(equation.charAt(i));
-                    i++;
+        // 兼容路径：仅当整个字符串就是裸 "$var"（无 $=、无运算符）时才走"未定义→0.0f"逻辑；
+        // "$var + 1" 这类即使没有 $= 也按完整表达式求值。
+        if (!expr.startsWith("$=")) {
+            if (isBareVariable(expr)) {
+                String varName = expr.substring(1);
+                if (variables != null && variables.containsKey(varName)) {
+                    return variables.get(varName).floatValue();
                 }
+                return 0.0f; // Undefined BeamNG variables default to zero.
             }
-            equation = sb.toString();
-        } while (changed);
+            // 形如 "$a+1" / "$components.foo"（dotted）的表达式交给 evaluator
+            EvalOutcome out = JBeamExpressionEvaluator.evaluate(expr, JBeamExpressionEvaluator.contextOf(variables));
+            if (out.status() == EvalStatus.OK && out.value() instanceof Number n) return n.floatValue();
+            if (out.status() != EvalStatus.OK) ExpressionDiagnostics.warn(expr, out.reason());
+            return null;
+        }
 
-        // 简单四则运算 (支持 + - * /，按顺序从左到右，无优先级)
+        EvalOutcome out = JBeamExpressionEvaluator.evaluate(expr, JBeamExpressionEvaluator.contextOf(variables));
+        if (out.status() == EvalStatus.OK && out.value() instanceof Number n) {
+            return n.floatValue();
+        }
+        if (out.status() != EvalStatus.OK) {
+            ExpressionDiagnostics.warn(expr, out.reason());
+        }
+        return null;
+    }
+
+    /**
+     * 字符串字段安全读取：仅在值确实包含 "$=" 前缀时才求值，其余情况原样返回。
+     * 求值结果为 String 时返回该字符串；nil/数值/布尔等非字符串结果视为"未设置"返回 null。
+     */
+    public static String getStringEvalSafe(JsonObject obj, String key, String defaultValue, Map<String, Double> vars) {
+        String raw = getStringSafe(obj, key, defaultValue);
+        return evalStringValue(raw, vars);
+    }
+
+    /**
+     * 对可能为 "$=..." 的原始字符串求值。无 "$=" 前缀时原样返回；
+     * 有前缀时返回求值得到的字符串（非字符串结果 / 求值失败 → null）。
+     */
+    static String evalStringValue(String raw, Map<String, Double> vars) {
+        if (raw == null || !raw.startsWith("$=")) return raw;
+        EvalOutcome out = JBeamExpressionEvaluator.evaluate(raw, JBeamExpressionEvaluator.contextOf(vars));
+        if (out.status() == EvalStatus.OK) {
+            Object v = out.value();
+            if (v instanceof String s) return s;
+            return null; // nil / 数值 / 布尔 在字符串上下文中不可用
+        }
+        ExpressionDiagnostics.warn(raw, out.reason());
+        return null;
+    }
+
+    /**
+     * 判断是否为裸 "$var" 引用（无 $=、无运算符），用于兼容路径：未定义 → 0.0f。
+     */
+    static boolean isBareVariable(String expr) {
+        if (expr == null || expr.length() < 2 || expr.charAt(0) != '$') return false;
+        for (int i = 1; i < expr.length(); i++) {
+            char c = expr.charAt(i);
+            if (!(Character.isLetterOrDigit(c) || c == '_' || c == '.')) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 解析节点坐标单元格。数值/纯数字字符串直接解析；"$=..." 交给 evaluator；
+     * 无法解析时返回 null（调用方跳过该节点）。
+     */
+    static Double parseNodeCoordinate(JsonElement cell, Map<String, Double> vars) {
+        if (cell == null || !cell.isJsonPrimitive()) return null;
+        com.google.gson.JsonPrimitive p = cell.getAsJsonPrimitive();
+        if (p.isNumber()) return p.getAsDouble();
+        String s = p.getAsString().trim();
+        if (s.isEmpty()) return null;
+        if (s.startsWith("$")) {
+            Float f = evaluateBeamNGExpression(s, vars);
+            return f != null ? f.doubleValue() : null;
+        }
         try {
-            equation = equation.replaceAll("\\s+", "");
-            // 先计算乘除
-            while (equation.contains("*") || equation.contains("/")) {
-                int idxMul = equation.indexOf('*');
-                int idxDiv = equation.indexOf('/');
-                int opIdx = (idxMul >= 0 && (idxDiv < 0 || idxMul < idxDiv)) ? idxMul : idxDiv;
-                if (opIdx < 0) break;
-                int leftStart = opIdx - 1;
-                while (leftStart >= 0 && (Character.isDigit(equation.charAt(leftStart)) || equation.charAt(leftStart) == '.')) leftStart--;
-                leftStart++;
-                int rightEnd = opIdx + 1;
-                while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                double left = Double.parseDouble(equation.substring(leftStart, opIdx));
-                double right = Double.parseDouble(equation.substring(opIdx + 1, rightEnd));
-                double res = (equation.charAt(opIdx) == '*') ? left * right : left / right;
-                equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
-            }
-            // 再计算加减
-            while (equation.contains("+") || (equation.contains("-") && equation.lastIndexOf('-') > 0)) {
-                int idxAdd = equation.indexOf('+');
-                int idxSub = equation.lastIndexOf('-');
-                int opIdx = (idxAdd >= 0 && (idxSub < 0 || idxAdd < idxSub)) ? idxAdd : idxSub;
-                if (opIdx < 0) break;
-                int leftStart = opIdx - 1;
-                while (leftStart >= 0 && (Character.isDigit(equation.charAt(leftStart)) || equation.charAt(leftStart) == '.')) leftStart--;
-                leftStart++;
-                int rightEnd = opIdx + 1;
-                while (rightEnd < equation.length() && (Character.isDigit(equation.charAt(rightEnd)) || equation.charAt(rightEnd) == '.')) rightEnd++;
-                double left = Double.parseDouble(equation.substring(leftStart, opIdx));
-                double right = Double.parseDouble(equation.substring(opIdx + 1, rightEnd));
-                double res = (equation.charAt(opIdx) == '+') ? left + right : left - right;
-                equation = equation.substring(0, leftStart) + res + equation.substring(rightEnd);
-            }
-            return Double.parseDouble(equation);
-        } catch (Exception e) {
+            return Double.parseDouble(s);
+        } catch (NumberFormatException e) {
             return null;
         }
     }
@@ -105,6 +132,10 @@ public class JBeamParser {
     }
 
     public static double getDoubleSafe(JsonObject obj, String key, double defaultValue, Map<String, Double> vars) {
+        return getFloatSafe(obj, key, (float) defaultValue, vars);
+    }
+
+    public static float getFloatSafe(JsonObject obj, String key, float defaultValue, Map<String, Double> vars) {
         if (obj == null || !obj.has(key)) return defaultValue;
         JsonElement el = obj.get(key);
         if (el.isJsonNull()) return defaultValue;
@@ -112,23 +143,21 @@ public class JBeamParser {
         String str = el.getAsString().trim();
         if (str.isEmpty()) return defaultValue;
 
-        // 处理特殊常量
-        if (str.contains("FLT_MAX") || str.contains("MAX_FLT")) return Double.MAX_VALUE;
-        if (str.contains("FLT_MIN") || str.contains("MIN_FLT")) return Double.MIN_VALUE;
+        if (str.contains("FLT_MAX") || str.contains("MAX_FLT")) return Float.MAX_VALUE;
+        if (str.contains("FLT_MIN") || str.contains("MIN_FLT")) return Float.MIN_VALUE;
 
-        // 拦截表达式
         if (str.startsWith("$=")) {
-            Double val = evaluateBeamNGExpression(str, vars);
+            Float val = evaluateBeamNGExpression(str, vars);
             return val != null ? val : defaultValue;
         }
 
-        // 拦截纯变量替换 (如 "$camber_F")
         if (str.startsWith("$")) {
-            return vars.getOrDefault(str.substring(1), defaultValue);
+            Double val = vars != null ? vars.get(str.substring(1)) : null;
+            return val != null ? val.floatValue() : defaultValue;
         }
 
         try {
-            return Double.parseDouble(str);
+            return Float.parseFloat(str);
         } catch (NumberFormatException e) {
             return defaultValue;
         }
@@ -149,48 +178,65 @@ public class JBeamParser {
     }
 
     public static java.util.List<String> parseGroups(JsonElement el) {
+        return parseGroups(el, null);
+    }
+
+    /**
+     * 解析 group 字段。条目若以 "$=" 开头则先求值（支持字符串拼接等表达式），
+     * 求值得到非空字符串才作为 group 加入；nil/布尔/数值结果被丢弃。
+     */
+    public static java.util.List<String> parseGroups(JsonElement el, Map<String, Double> vars) {
         java.util.List<String> list = new java.util.ArrayList<>();
         if (el == null || el.isJsonNull()) return list;
 
         if (el.isJsonPrimitive()) {
-            String g = el.getAsString().trim();
-            if (!g.isEmpty()) {
-                list.add(g);
-            }
+            addGroup(list, el.getAsString(), vars);
         } else if (el.isJsonArray()) {
             for (JsonElement item : el.getAsJsonArray()) {
                 if (item.isJsonPrimitive()) {
-                    String g = item.getAsString().trim();
-                    if (!g.isEmpty()) list.add(g);
+                    addGroup(list, item.getAsString(), vars);
                 }
             }
         }
         return list;
     }
 
+    private static void addGroup(java.util.List<String> list, String raw, Map<String, Double> vars) {
+        String g = raw.trim();
+        if (g.isEmpty()) return;
+        String evaluated = evalStringValue(g, vars);
+        if (evaluated != null && !evaluated.isEmpty()) {
+            list.add(evaluated);
+        }
+    }
+
     // --- 1. Node Parsing ---
+
+    /** 可变的行内默认状态，随 nodes 数组中的修饰符对象 {} 逐步更新。 */
+    static final class NodeRowState {
+        float weight = 50.0f;
+        float friction = 0.5f;
+        float slidingFriction = -1.0f;
+        boolean collision = true;
+        boolean selfCollision = false;
+        java.util.List<String> groups = new java.util.ArrayList<>();
+    }
+
     public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry, CouplerRegistry couplerRegistry) {
         boolean isHeader = true;
-
-        double currentWeight = 50.0;
-        double currentFriction = 0.5;
-        double currentSlidingFriction = -1;
-        boolean currentCollision = true;
-        boolean currentSelfCollision = false;
-
-        java.util.List<String> currentGroups = new java.util.ArrayList<>();
+        NodeRowState state = new NodeRowState();
 
         for (JsonElement element : nodes) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentWeight = getDoubleSafe(modifier, "nodeWeight", currentWeight, entry.variables);
-                currentFriction = getDoubleSafe(modifier, "frictionCoef", currentFriction, entry.variables);
-                currentSlidingFriction = getDoubleSafe(modifier, "slidingFrictionCoef", currentSlidingFriction, entry.variables);
-                currentCollision = getBooleanSafe(modifier, "collision", currentCollision);
-                currentSelfCollision = getBooleanSafe(modifier, "selfCollision", currentSelfCollision);
+                state.weight = getFloatSafe(modifier, "nodeWeight", state.weight, entry.variables);
+                state.friction = getFloatSafe(modifier, "frictionCoef", state.friction, entry.variables);
+                state.slidingFriction = getFloatSafe(modifier, "slidingFrictionCoef", state.slidingFriction, entry.variables);
+                state.collision = getBooleanSafe(modifier, "collision", state.collision);
+                state.selfCollision = getBooleanSafe(modifier, "selfCollision", state.selfCollision);
 
                 if (modifier.has("group")) {
-                    currentGroups = parseGroups(modifier.get("group"));
+                    state.groups = parseGroups(modifier.get("group"), entry.variables);
                 }
                 continue;
             }
@@ -200,74 +246,85 @@ public class JBeamParser {
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() < 4) continue;
 
-                double inlineWeight = currentWeight;
-                double inlineFriction = currentFriction;
-                double inlineSlidingFriction = currentSlidingFriction;
-                boolean inlineCollision = currentCollision;
-                boolean inlineSelfCollision = currentSelfCollision;
-
-                java.util.List<String> inlineGroups = currentGroups;
-
-                String inlineTag = "";
-                String inlineCouplerTag = "";
-                double inlineStartRadius = 0.25;
-                double inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
-                boolean inlineCouplerWeld = false;
-                double inlineCouplerLatchSpeed = 0.3;
-                double inlineCouplerLockRadius = 0.025;
-
-                if (row.get(row.size() - 1).isJsonObject()) {
-                    JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
-                    inlineWeight = getDoubleSafe(inline, "nodeWeight", inlineWeight, entry.variables);
-                    inlineFriction = getDoubleSafe(inline, "frictionCoef", inlineFriction, entry.variables);
-                    inlineSlidingFriction = getDoubleSafe(inline, "slidingFrictionCoef", inlineSlidingFriction, entry.variables);
-                    inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
-                    inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
-
-                    if (inline.has("group")) {
-                        inlineGroups = parseGroups(inline.get("group"));
-                    }
-
-                    inlineTag = getStringSafe(inline, "tag", inlineTag);
-                    inlineCouplerTag = getStringSafe(inline, "couplerTag", inlineCouplerTag);
-                    inlineStartRadius = getDoubleSafe(inline, "couplerStartRadius", inlineStartRadius, entry.variables);
-                    inlineCouplerStrength = getDoubleSafe(inline, "couplerStrength", inlineCouplerStrength, entry.variables);
-                    if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
-                    else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
-                    inlineCouplerLatchSpeed = getDoubleSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed, entry.variables);
-                    inlineCouplerLockRadius = getDoubleSafe(inline, "couplerLockRadius", inlineCouplerLockRadius, entry.variables);
+                PhysicsSpecs.NodeSpec spec = buildNodeSpec(row, state, entry, couplerRegistry);
+                if (spec != null) {
+                    vehicle.addNode(spec);
                 }
-
-                String id = row.get(0).getAsString();
-                double x = 0.0;
-                double y = 0.0;
-                double z = 0.0;
-
-                try {
-                    // 提取原始 BeamNG 空间位置
-                    double rawX = row.get(1).getAsDouble();
-                    double rawY = row.get(2).getAsDouble();
-                    double rawZ = row.get(3).getAsDouble();
-
-                    // 应用插槽级联变换处理逻辑 (包含对称镜像平移、欧拉角旋转、绝对位移)
-                    double[] transformed = entry.transform.transformNode(rawX, rawY, rawZ);
-
-                    // 最终引擎空间转换: flip X, swap Y and Z
-                    x = +transformed[0];
-                    y = +transformed[2];
-                    z = -transformed[1];
-                } catch (Exception e) {
-                    System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
-                    continue;
-                }
-
-                if (!inlineTag.isEmpty() || !inlineCouplerTag.isEmpty()) {
-                    couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
-                }
-
-                vehicle.addNode(id, x, y, z, inlineWeight, inlineFriction, inlineSlidingFriction, entry.partId, inlineCollision, inlineSelfCollision, inlineGroups);
             }
         }
+    }
+
+    /**
+     * 将单个节点数据行解析为 NodeSpec。坐标单元格可能是 "$=..." 表达式
+     * （求值后得到数值，确保表达式坐标不会导致节点被跳过）；坐标无法解析时返回 null。
+     */
+    static PhysicsSpecs.NodeSpec buildNodeSpec(JsonArray row, NodeRowState state, JBeamAssembler.PartEntry entry, CouplerRegistry couplerRegistry) {
+        float inlineWeight = state.weight;
+        float inlineFriction = state.friction;
+        float inlineSlidingFriction = state.slidingFriction;
+        boolean inlineCollision = state.collision;
+        boolean inlineSelfCollision = state.selfCollision;
+
+        java.util.List<String> inlineGroups = state.groups;
+
+        String inlineTag = "";
+        String inlineCouplerTag = "";
+        float inlineStartRadius = 0.25f;
+        float inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        boolean inlineCouplerWeld = false;
+        float inlineCouplerLatchSpeed = 0.3f;
+        float inlineCouplerLockRadius = 0.025f;
+
+        if (row.get(row.size() - 1).isJsonObject()) {
+            JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
+            inlineWeight = getFloatSafe(inline, "nodeWeight", inlineWeight, entry.variables);
+            inlineFriction = getFloatSafe(inline, "frictionCoef", inlineFriction, entry.variables);
+            inlineSlidingFriction = getFloatSafe(inline, "slidingFrictionCoef", inlineSlidingFriction, entry.variables);
+            inlineCollision = getBooleanSafe(inline, "collision", inlineCollision);
+            inlineSelfCollision = getBooleanSafe(inline, "selfCollision", inlineSelfCollision);
+
+            if (inline.has("group")) {
+                inlineGroups = parseGroups(inline.get("group"), entry.variables);
+            }
+
+            inlineTag = getStringEvalSafe(inline, "tag", inlineTag, entry.variables);
+            inlineCouplerTag = getStringEvalSafe(inline, "couplerTag", inlineCouplerTag, entry.variables);
+            inlineStartRadius = getFloatSafe(inline, "couplerStartRadius", inlineStartRadius, entry.variables);
+            inlineCouplerStrength = getFloatSafe(inline, "couplerStrength", inlineCouplerStrength, entry.variables);
+            if (inline.has("couplerWeld")) inlineCouplerWeld = getBooleanSafe(inline, "couplerWeld", inlineCouplerWeld);
+            else if (inline.has("couplerLock")) inlineCouplerWeld = getBooleanSafe(inline, "couplerLock", inlineCouplerWeld);
+            inlineCouplerLatchSpeed = getFloatSafe(inline, "couplerLatchSpeed", inlineCouplerLatchSpeed, entry.variables);
+            inlineCouplerLockRadius = getFloatSafe(inline, "couplerLockRadius", inlineCouplerLockRadius, entry.variables);
+        }
+
+        String id = row.get(0).getAsString();
+
+        // 提取原始 BeamNG 空间位置；$= 坐标由 evaluator 求值，未定义/非法 → null → 跳过该节点
+        Double rawX = parseNodeCoordinate(row.get(1), entry.variables);
+        Double rawY = parseNodeCoordinate(row.get(2), entry.variables);
+        Double rawZ = parseNodeCoordinate(row.get(3), entry.variables);
+        if (rawX == null || rawY == null || rawZ == null) {
+            System.err.println("⚠️ Failed to parse node coordinates, skipping: " + id);
+            return null;
+        }
+
+        // 应用插槽级联变换处理逻辑 (包含对称镜像平移、欧拉角旋转、绝对位移)
+        double[] transformed = entry.transform.transformNode(rawX, rawY, rawZ);
+
+        // 最终引擎空间转换: flip X, swap Y and Z
+        float x = (float) transformed[0];
+        float y = (float) transformed[2];
+        float z = (float) -transformed[1];
+
+        if (!inlineTag.isEmpty() || !inlineCouplerTag.isEmpty()) {
+            couplerRegistry.register(id, inlineTag, inlineCouplerTag, inlineStartRadius, inlineCouplerLatchSpeed, inlineCouplerStrength, inlineCouplerWeld, inlineCouplerLockRadius);
+        }
+
+        return new PhysicsSpecs.NodeSpec(
+                id, x, y, z,
+                inlineWeight, inlineFriction, inlineSlidingFriction,
+                entry.partId, inlineCollision, inlineSelfCollision, inlineGroups
+        );
     }
 
     // --- 2. Beam Parsing ---
@@ -275,19 +332,19 @@ public class JBeamParser {
         boolean isHeader = true;
         int currentType = BeamContainer.BEAM_NORMAL;
 
-        double currentPrecomp = 1.0, currentPrecompRange = 0.0, currentPrecompTime = 0.0;
-        double currentSpring = 9000000.0, currentDamp = 12000.0;
-        double currentDeform = 400000.0, currentStrength = 1000000.0;
+        float currentPrecomp = 1.0f, currentPrecompRange = 0.0f, currentPrecompTime = 0.0f;
+        float currentSpring = 9000000.0f, currentDamp = 12000.0f;
+        float currentDeform = 400000.0f, currentStrength = 1000000.0f;
 
-        double currentShortBound = 1.0, currentLongBound = 1.0;
-        double currentShortBoundRange = -1.0, currentLongBoundRange = -1.0;
-        double currentLimitSpring = currentSpring, currentLimitDamp = currentDamp;
+        float currentShortBound = 1.0f, currentLongBound = 1.0f;
+        float currentShortBoundRange = -1.0f, currentLongBoundRange = -1.0f;
+        float currentLimitSpring = currentSpring, currentLimitDamp = currentDamp;
 
-        double currentDampVelSplit = -1.0, currentDampFast = -1.0;
-        double currentDampRebound = -1.0, currentDampReboundFast = -1.0;
+        float currentDampVelSplit = -1.0f, currentDampFast = -1.0f;
+        float currentDampRebound = -1.0f, currentDampReboundFast = -1.0f;
 
-        double currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
-        double currentTransitionZone = 0.0;
+        float currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
+        float currentTransitionZone = 0.0f;
 
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
         int currentBreakGroupType = 0;
@@ -305,32 +362,32 @@ public class JBeamParser {
                     else if (bt.equals("|ANISOTROPIC")) currentType = BeamContainer.BEAM_ANISOTROPIC;
                 }
 
-                currentPrecomp = getDoubleSafe(modifier, "beamPrecompression", currentPrecomp, entry.variables);
-                currentPrecompRange = getDoubleSafe(modifier, "precompressionRange", currentPrecompRange, entry.variables);
-                currentPrecompTime = getDoubleSafe(modifier, "beamPrecompressionTime", currentPrecompTime, entry.variables);
-                currentSpring = getDoubleSafe(modifier, "beamSpring", currentSpring, entry.variables);
-                currentDamp = getDoubleSafe(modifier, "beamDamp", currentDamp, entry.variables);
-                currentDeform = getDoubleSafe(modifier, "beamDeform", currentDeform, entry.variables);
-                currentStrength = getDoubleSafe(modifier, "beamStrength", currentStrength, entry.variables);
+                currentPrecomp = getFloatSafe(modifier, "beamPrecompression", currentPrecomp, entry.variables);
+                currentPrecompRange = getFloatSafe(modifier, "precompressionRange", currentPrecompRange, entry.variables);
+                currentPrecompTime = getFloatSafe(modifier, "beamPrecompressionTime", currentPrecompTime, entry.variables);
+                currentSpring = getFloatSafe(modifier, "beamSpring", currentSpring, entry.variables);
+                currentDamp = getFloatSafe(modifier, "beamDamp", currentDamp, entry.variables);
+                currentDeform = getFloatSafe(modifier, "beamDeform", currentDeform, entry.variables);
+                currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
 
-                currentShortBound = getDoubleSafe(modifier, "beamShortBound", currentShortBound, entry.variables);
-                currentLongBound = getDoubleSafe(modifier, "beamLongBound", currentLongBound, entry.variables);
-                currentShortBoundRange = getDoubleSafe(modifier, "shortBoundRange", currentShortBoundRange, entry.variables);
-                currentLongBoundRange = getDoubleSafe(modifier, "longBoundRange", currentLongBoundRange, entry.variables);
-                currentLimitSpring = getDoubleSafe(modifier, "beamLimitSpring", currentLimitSpring, entry.variables);
-                currentLimitDamp = getDoubleSafe(modifier, "beamLimitDamp", currentLimitDamp, entry.variables);
+                currentShortBound = getFloatSafe(modifier, "beamShortBound", currentShortBound, entry.variables);
+                currentLongBound = getFloatSafe(modifier, "beamLongBound", currentLongBound, entry.variables);
+                currentShortBoundRange = getFloatSafe(modifier, "shortBoundRange", currentShortBoundRange, entry.variables);
+                currentLongBoundRange = getFloatSafe(modifier, "longBoundRange", currentLongBoundRange, entry.variables);
+                currentLimitSpring = getFloatSafe(modifier, "beamLimitSpring", currentLimitSpring, entry.variables);
+                currentLimitDamp = getFloatSafe(modifier, "beamLimitDamp", currentLimitDamp, entry.variables);
 
-                currentDampVelSplit = getDoubleSafe(modifier, "beamDampVelocitySplit", currentDampVelSplit, entry.variables);
-                currentDampFast = getDoubleSafe(modifier, "beamDampFast", currentDampFast, entry.variables);
-                currentDampRebound = getDoubleSafe(modifier, "beamDampRebound", currentDampRebound, entry.variables);
-                currentDampReboundFast = getDoubleSafe(modifier, "beamDampReboundFast", currentDampReboundFast, entry.variables);
+                currentDampVelSplit = getFloatSafe(modifier, "beamDampVelocitySplit", currentDampVelSplit, entry.variables);
+                currentDampFast = getFloatSafe(modifier, "beamDampFast", currentDampFast, entry.variables);
+                currentDampRebound = getFloatSafe(modifier, "beamDampRebound", currentDampRebound, entry.variables);
+                currentDampReboundFast = getFloatSafe(modifier, "beamDampReboundFast", currentDampReboundFast, entry.variables);
 
-                currentSpringExpansion = getDoubleSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
-                currentDampExpansion = getDoubleSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
-                currentTransitionZone = getDoubleSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
+                currentSpringExpansion = getFloatSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
+                currentDampExpansion = getFloatSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
+                currentTransitionZone = getFloatSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
 
                 if (modifier.has("breakGroup")) {
-                    currentBreakGroups = parseGroups(modifier.get("breakGroup"));
+                    currentBreakGroups = parseGroups(modifier.get("breakGroup"), entry.variables);
                     currentBreakGroupType = getIntSafe(modifier, "breakGroupType", currentBreakGroupType);
                 }
                 continue;
@@ -341,16 +398,16 @@ public class JBeamParser {
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 2) {
                     int inlineType = currentType;
-                    double inlineSpring = currentSpring, inlineDamp = currentDamp;
-                    double inlineDeform = currentDeform, inlineStrength = currentStrength;
-                    double inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
-                    double inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
-                    double inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
-                    double inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
-                    double inlineDampVelSplit = currentDampVelSplit, inlineDampFast = currentDampFast;
-                    double inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
-                    double inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
-                    double inlineTransitionZone = currentTransitionZone;
+                    float inlineSpring = currentSpring, inlineDamp = currentDamp;
+                    float inlineDeform = currentDeform, inlineStrength = currentStrength;
+                    float inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
+                    float inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
+                    float inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
+                    float inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
+                    float inlineDampVelSplit = currentDampVelSplit, inlineDampFast = currentDampFast;
+                    float inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
+                    float inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
+                    float inlineTransitionZone = currentTransitionZone;
                     String inlineId3 = null; // for L-Beams
                     java.util.List<String> inlineBreakGroups = currentBreakGroups;
                     int inlineBreakGroupType = currentBreakGroupType;
@@ -358,32 +415,32 @@ public class JBeamParser {
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
 
-                        inlineSpring = getDoubleSafe(inline, "beamSpring", inlineSpring, entry.variables);
-                        inlineDamp = getDoubleSafe(inline, "beamDamp", inlineDamp, entry.variables);
-                        inlineDeform = getDoubleSafe(inline, "beamDeform", inlineDeform, entry.variables);
-                        inlineStrength = getDoubleSafe(inline, "beamStrength", inlineStrength, entry.variables);
-                        inlinePrecomp = getDoubleSafe(inline, "beamPrecompression", inlinePrecomp, entry.variables);
-                        inlinePrecompRange = getDoubleSafe(inline, "precompressionRange", inlinePrecompRange, entry.variables);
-                        inlinePrecompTime = getDoubleSafe(inline, "beamPrecompressionTime", inlinePrecompTime, entry.variables);
+                        inlineSpring = getFloatSafe(inline, "beamSpring", inlineSpring, entry.variables);
+                        inlineDamp = getFloatSafe(inline, "beamDamp", inlineDamp, entry.variables);
+                        inlineDeform = getFloatSafe(inline, "beamDeform", inlineDeform, entry.variables);
+                        inlineStrength = getFloatSafe(inline, "beamStrength", inlineStrength, entry.variables);
+                        inlinePrecomp = getFloatSafe(inline, "beamPrecompression", inlinePrecomp, entry.variables);
+                        inlinePrecompRange = getFloatSafe(inline, "precompressionRange", inlinePrecompRange, entry.variables);
+                        inlinePrecompTime = getFloatSafe(inline, "beamPrecompressionTime", inlinePrecompTime, entry.variables);
 
-                        inlineShortBound = getDoubleSafe(inline, "beamShortBound", inlineShortBound, entry.variables);
-                        inlineLongBound = getDoubleSafe(inline, "beamLongBound", inlineLongBound, entry.variables);
-                        inlineShortBoundRange = getDoubleSafe(inline, "shortBoundRange", inlineShortBoundRange, entry.variables);
-                        inlineLongBoundRange = getDoubleSafe(inline, "longBoundRange", inlineLongBoundRange, entry.variables);
-                        inlineLimitS = getDoubleSafe(inline, "beamLimitSpring", inlineLimitS, entry.variables);
-                        inlineLimitD = getDoubleSafe(inline, "beamLimitDamp", inlineLimitD, entry.variables);
+                        inlineShortBound = getFloatSafe(inline, "beamShortBound", inlineShortBound, entry.variables);
+                        inlineLongBound = getFloatSafe(inline, "beamLongBound", inlineLongBound, entry.variables);
+                        inlineShortBoundRange = getFloatSafe(inline, "shortBoundRange", inlineShortBoundRange, entry.variables);
+                        inlineLongBoundRange = getFloatSafe(inline, "longBoundRange", inlineLongBoundRange, entry.variables);
+                        inlineLimitS = getFloatSafe(inline, "beamLimitSpring", inlineLimitS, entry.variables);
+                        inlineLimitD = getFloatSafe(inline, "beamLimitDamp", inlineLimitD, entry.variables);
 
-                        inlineDampVelSplit = getDoubleSafe(inline, "beamDampVelocitySplit", inlineDampVelSplit, entry.variables);
-                        inlineDampFast = getDoubleSafe(inline, "beamDampFast", inlineDampFast, entry.variables);
-                        inlineDampRebound = getDoubleSafe(inline, "beamDampRebound", inlineDampRebound, entry.variables);
-                        inlineDampReboundFast = getDoubleSafe(inline, "beamDampReboundFast", inlineDampReboundFast, entry.variables);
+                        inlineDampVelSplit = getFloatSafe(inline, "beamDampVelocitySplit", inlineDampVelSplit, entry.variables);
+                        inlineDampFast = getFloatSafe(inline, "beamDampFast", inlineDampFast, entry.variables);
+                        inlineDampRebound = getFloatSafe(inline, "beamDampRebound", inlineDampRebound, entry.variables);
+                        inlineDampReboundFast = getFloatSafe(inline, "beamDampReboundFast", inlineDampReboundFast, entry.variables);
 
-                        inlineSpringExpansion = getDoubleSafe(inline, "springExpansion", inlineSpringExpansion, entry.variables);
-                        inlineDampExpansion = getDoubleSafe(inline, "dampExpansion", inlineDampExpansion, entry.variables);
-                        inlineTransitionZone = getDoubleSafe(inline, "transitionZone", inlineTransitionZone, entry.variables);
+                        inlineSpringExpansion = getFloatSafe(inline, "springExpansion", inlineSpringExpansion, entry.variables);
+                        inlineDampExpansion = getFloatSafe(inline, "dampExpansion", inlineDampExpansion, entry.variables);
+                        inlineTransitionZone = getFloatSafe(inline, "transitionZone", inlineTransitionZone, entry.variables);
 
                         if (inline.has("breakGroup")) {
-                            inlineBreakGroups = parseGroups(inline.get("breakGroup"));
+                            inlineBreakGroups = parseGroups(inline.get("breakGroup"), entry.variables);
                             inlineBreakGroupType = getIntSafe(inline, "breakGroupType", inlineBreakGroupType);
                         }
 
@@ -401,14 +458,15 @@ public class JBeamParser {
 
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
-                    vehicle.addBeam(inlineType, id1, id2, inlineId3,
+                    vehicle.addBeam(new PhysicsSpecs.BeamSpec(
+                            inlineType, id1, id2, inlineId3,
                             inlineBreakGroups, inlineBreakGroupType,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
                             inlineLimitS, inlineLimitD, inlineDampVelSplit, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone
-                    );
+                    ));
                 }
             }
         }
@@ -437,7 +495,13 @@ public class JBeamParser {
                             inlineCollision = !inline.get("triangleType").getAsString().equals("NONCOLLIDABLE");
                         }
                     }
-                    vehicle.addTriangle(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), entry.partId, inlineCollision);
+                    vehicle.addTriangle(new PhysicsSpecs.TriangleSpec(
+                            row.get(0).getAsString(),
+                            row.get(1).getAsString(),
+                            row.get(2).getAsString(),
+                            entry.partId,
+                            inlineCollision
+                    ));
                 }
             }
         }
@@ -446,17 +510,17 @@ public class JBeamParser {
     // --- 4. Torsionbar Parsing ---
     public static void parseTorsionbars(JsonArray torsionbars, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
         boolean isHeader = true;
-        double currentSpring = 0.0, currentDamp = 0.0;
-        double currentDeform = PhysicsWorld.KINDA_BIG_NUMBER;
-        double currentStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        float currentSpring = 0.0f, currentDamp = 0.0f;
+        float currentDeform = PhysicsWorld.KINDA_BIG_NUMBER;
+        float currentStrength = PhysicsWorld.KINDA_BIG_NUMBER;
 
         for (JsonElement element : torsionbars) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentSpring = getDoubleSafe(modifier, "spring", currentSpring, entry.variables);
-                currentDamp = getDoubleSafe(modifier, "damp", currentDamp, entry.variables);
-                currentDeform = getDoubleSafe(modifier, "deform", currentDeform, entry.variables);
-                currentStrength = getDoubleSafe(modifier, "beamStrength", currentStrength, entry.variables);
+                currentSpring = getFloatSafe(modifier, "spring", currentSpring, entry.variables);
+                currentDamp = getFloatSafe(modifier, "damp", currentDamp, entry.variables);
+                currentDeform = getFloatSafe(modifier, "deform", currentDeform, entry.variables);
+                currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
                 continue;
             }
 
@@ -464,8 +528,13 @@ public class JBeamParser {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 4) {
-                    vehicle.addTorsionBar(row.get(0).getAsString(), row.get(1).getAsString(), row.get(2).getAsString(), row.get(3).getAsString(),
-                            currentSpring, currentDamp, currentDeform, currentStrength);
+                    vehicle.addTorsionBar(new PhysicsSpecs.TorsionBarSpec(
+                            row.get(0).getAsString(),
+                            row.get(1).getAsString(),
+                            row.get(2).getAsString(),
+                            row.get(3).getAsString(),
+                            currentSpring, currentDamp, currentDeform, currentStrength
+                    ));
                 }
             }
         }
@@ -493,16 +562,16 @@ public class JBeamParser {
         boolean isHeader = true;
 
         // 给定默认值
-        double currentSpring = 0.0;
-        double currentDamp = 0.0;
+        float currentSpring = 0.0f;
+        float currentDamp = 0.0f;
 
         for (JsonElement element : slidenodes) {
 
             // 1. 拦截全局修饰符（字典 {}），这里就可以用 getDoubleSafe 了！
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
-                currentSpring = getDoubleSafe(modifier, "spring", currentSpring, entry.variables);
-                currentDamp = getDoubleSafe(modifier, "damp", currentDamp, entry.variables);
+                currentSpring = getFloatSafe(modifier, "spring", currentSpring, entry.variables);
+                currentDamp = getFloatSafe(modifier, "damp", currentDamp, entry.variables);
                 continue;
             }
 
@@ -517,14 +586,14 @@ public class JBeamParser {
                     String railName = row.get(1).getAsString();
 
                     // 继承全局状态
-                    double inlineSpring = currentSpring;
-                    double inlineDamp = currentDamp;
+                    float inlineSpring = currentSpring;
+                    float inlineDamp = currentDamp;
 
                     // 3. 拦截行内修饰符（字典 {}），比如 ["fh4r", "strut_FR", {"spring": 12000}]
                     if (row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
-                        inlineSpring = getDoubleSafe(inline, "spring", inlineSpring, entry.variables);
-                        inlineDamp = getDoubleSafe(inline, "damp", inlineDamp, entry.variables);
+                        inlineSpring = getFloatSafe(inline, "spring", inlineSpring, entry.variables);
+                        inlineDamp = getFloatSafe(inline, "damp", inlineDamp, entry.variables);
                     }
                     // 4. 兼容那个偷懒的旧写法（按格子顺序读）
                     else if (row.size() > 5) {
@@ -532,7 +601,7 @@ public class JBeamParser {
                             String sStr = row.get(5).getAsString().trim();
                             // 过滤掉 FLT_MAX 这种没用的占位符
                             if (!sStr.isEmpty() && !sStr.contains("FLT")) {
-                                inlineSpring = Double.parseDouble(sStr);
+                                inlineSpring = Float.parseFloat(sStr);
                             }
                         } catch (Exception ignored) {} // 如果读不到数字就算了，用默认值
                     }
@@ -540,7 +609,7 @@ public class JBeamParser {
                     // 绑定到轨道上
                     String[] links = globalRailMap.get(railName);
                     if (links != null && links.length >= 2) {
-                        vehicle.addSlideNode(nodeId, links, inlineSpring, inlineDamp);
+                        vehicle.addSlideNode(new PhysicsSpecs.SlideNodeSpec(nodeId, links, inlineSpring, inlineDamp));
                     }
                 }
             }
@@ -557,7 +626,7 @@ public class JBeamParser {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
                 if (modifier.has("group")) {
-                    currentGroups = parseGroups(modifier.get("group"));
+                    currentGroups = parseGroups(modifier.get("group"), entry.variables);
                 }
                 continue;
             }
@@ -570,18 +639,23 @@ public class JBeamParser {
                     String meshName = row.get(0).getAsString();
                     if (meshName.isEmpty()) continue;
 
+                    // meshName 可能是一条 "$=..." 字符串表达式（如 $components 条件选 mesh）
+                    String evaluatedMesh = evalStringValue(meshName, entry.variables);
+                    if (evaluatedMesh == null || evaluatedMesh.isEmpty()) continue;
+                    meshName = evaluatedMesh;
+
                     // 默认使用当前上下文的 Group
                     java.util.List<String> targetGroups = new java.util.ArrayList<>(currentGroups);
 
                     if (row.size() >= 2 && !row.get(1).isJsonObject()) {
                         JsonElement groupElement = row.get(1);
                         // 无条件覆写！即使 JBeam 传入的是 ""，它也能正确解析为空列表，从而实现 BeamNG 的“清除 Group”指令。
-                        targetGroups = parseGroups(groupElement);
+                        targetGroups = parseGroups(groupElement, entry.variables);
                     }
 
-                    double px = 0, py = 0, pz = 0;
-                    double rx = 0, ry = 0, rz = 0;
-                    double sx = 1, sy = 1, sz = 1;
+                    float px = 0, py = 0, pz = 0;
+                    float rx = 0, ry = 0, rz = 0;
+                    float sx = 1, sy = 1, sz = 1;
 
                     // 提取行内末尾的位移/旋转/缩放字典
                     for (int i = 1; i < row.size(); i++) {
@@ -589,21 +663,21 @@ public class JBeamParser {
                             JsonObject trans = row.get(i).getAsJsonObject();
                             if (trans.has("pos")) {
                                 JsonObject pos = trans.getAsJsonObject("pos");
-                                px = getDoubleSafe(pos, "x", 0, entry.variables);
-                                py = getDoubleSafe(pos, "y", 0, entry.variables);
-                                pz = getDoubleSafe(pos, "z", 0, entry.variables);
+                                px = getFloatSafe(pos, "x", 0, entry.variables);
+                                py = getFloatSafe(pos, "y", 0, entry.variables);
+                                pz = getFloatSafe(pos, "z", 0, entry.variables);
                             }
                             if (trans.has("rot")) {
                                 JsonObject rot = trans.getAsJsonObject("rot");
-                                rx = getDoubleSafe(rot, "x", 0, entry.variables);
-                                ry = getDoubleSafe(rot, "y", 0, entry.variables);
-                                rz = getDoubleSafe(rot, "z", 0, entry.variables);
+                                rx = getFloatSafe(rot, "x", 0, entry.variables);
+                                ry = getFloatSafe(rot, "y", 0, entry.variables);
+                                rz = getFloatSafe(rot, "z", 0, entry.variables);
                             }
                             if (trans.has("scale")) {
                                 JsonObject scale = trans.getAsJsonObject("scale");
-                                sx = getDoubleSafe(scale, "x", 1, entry.variables);
-                                sy = getDoubleSafe(scale, "y", 1, entry.variables);
-                                sz = getDoubleSafe(scale, "z", 1, entry.variables);
+                                sx = getFloatSafe(scale, "x", 1, entry.variables);
+                                sy = getFloatSafe(scale, "y", 1, entry.variables);
+                                sz = getFloatSafe(scale, "z", 1, entry.variables);
                             }
                         }
                     }

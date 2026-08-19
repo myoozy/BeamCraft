@@ -3,10 +3,12 @@ package me.mzy.beamcraft.client;
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
+import me.mzy.beamcraft.client.render.VehicleTextureUploader;
 import me.mzy.beamcraft.client.physics.PhysicsWorld;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
@@ -23,6 +25,8 @@ import org.lwjgl.glfw.GLFW;
 import java.io.File;
 
 public class BeamCraftClient implements ClientModInitializer {
+	private static final boolean DEBUG_DRAW = false;
+	private static final boolean DEBUG_SHOW_BEAMS = true;
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
 	public static final double DELTA_TIME = 0.05;
@@ -48,6 +52,10 @@ public class BeamCraftClient implements ClientModInitializer {
 
 		ClientVehicleManager.initRenderHooks(); // 初始化渲染
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
+
+		// Close render-thread GL-owned vehicle textures on client shutdown.
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client ->
+				VehicleTextureUploader.INSTANCE.closeFromAnyThread());
 
 		// 1. 物理计算与控制循环 (每帧运行)
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -122,7 +130,6 @@ public class BeamCraftClient implements ClientModInitializer {
 		// 3. 渲染循环 (遍历所有车，并将局部坐标叠加上实体坐标)
 		WorldRenderEvents.AFTER_ENTITIES.register(context -> {
 			PhysicsWorld world = PHYSICS_WORLD;
-			boolean DEBUG_DRAW = true;
 			if (!DEBUG_DRAW) return;
 			if (world == null || world.vehicles.isEmpty()) return;
 
@@ -143,8 +150,6 @@ public class BeamCraftClient implements ClientModInitializer {
 				double eX = vehicle.parentEntity.getX();
 				double eY = vehicle.parentEntity.getY();
 				double eZ = vehicle.parentEntity.getZ();
-
-				boolean DEBUG_SHOW_BEAMS = true;
 
 				// === 1. 渲染梁/骨架 ===
 				if (DEBUG_SHOW_BEAMS) {

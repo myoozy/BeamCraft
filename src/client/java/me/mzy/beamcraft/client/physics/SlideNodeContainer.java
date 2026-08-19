@@ -9,9 +9,9 @@ public class SlideNodeContainer {
     public int[] nodeId = new int[INIT_SLIDENODE_CAP];
     public int[] railA = new int[INIT_SLIDENODE_CAP];
     public int[] railB = new int[INIT_SLIDENODE_CAP];
-    public double[] spring = new double[INIT_SLIDENODE_CAP];
-    public double[] damp = new double[INIT_SLIDENODE_CAP];
-    public double[] restDist = new double[INIT_SLIDENODE_CAP];
+    public float[] spring = new float[INIT_SLIDENODE_CAP];
+    public float[] damp = new float[INIT_SLIDENODE_CAP];
+    public float[] restDist = new float[INIT_SLIDENODE_CAP];
 
     private void ensureCapacity() {
         if (count >= nodeId.length) {
@@ -26,13 +26,13 @@ public class SlideNodeContainer {
         }
     }
 
-    public void addSlideNode(int nId, int railAId, int railBId, double slideSpring, double slideDamp, double slideRestDist) {
+    public void addSlideNode(PhysicsSpecs.SlideNodeSpec spec, int nId, int railAId, int railBId, float slideRestDist) {
         ensureCapacity();
         nodeId[count] = nId;
         railA[count] = railAId;
         railB[count] = railBId;
-        spring[count] = slideSpring;
-        damp[count] = slideDamp;
+        spring[count] = spec.spring();
+        damp[count] = spec.damp();
         restDist[count] = slideRestDist;
         count++;
     }

@@ -3,14 +3,14 @@ package me.mzy.beamcraft.client.physics;
 import me.mzy.beamcraft.utility.Utility;
 
 public class AnisotropicBeamContainer extends BeamContainer {
-    public double[] springExpansion;
-    public double[] dampExpansion;
-    public double[] transitionZone;
+    public float[] springExpansion;
+    public float[] dampExpansion;
+    public float[] transitionZone;
 
     public AnisotropicBeamContainer() {
-        springExpansion = new double[INIT_BEAM_CAP];
-        dampExpansion = new double[INIT_BEAM_CAP];
-        transitionZone = new double[INIT_BEAM_CAP];
+        springExpansion = new float[INIT_BEAM_CAP];
+        dampExpansion = new float[INIT_BEAM_CAP];
+        transitionZone = new float[INIT_BEAM_CAP];
     }
 
     @Override
@@ -21,17 +21,11 @@ public class AnisotropicBeamContainer extends BeamContainer {
         transitionZone = Utility.expand(transitionZone, newSize);
     }
 
-    public int addBeam(java.util.List<String> breakGroups, int breakGroupType,
-                        int node1Idx, int node2Idx, double nodeDist,
-                        double beamSpring, double beamDamp,
-                        double beamDeform, double beamStrength,
-                        double precomp, double precompRange, double precompTime,
-                        double beamSpringExpansion, double beamDampExpansion, double beamTransitionZone) {
-        int idx = addBeamInternal(breakGroups, breakGroupType, node1Idx, node2Idx, nodeDist, beamSpring, beamDamp,
-                beamDeform, beamStrength, precomp, precompRange, precompTime);
-        springExpansion[idx] = beamSpringExpansion;
-        dampExpansion[idx] = beamDampExpansion;
-        transitionZone[idx] = beamTransitionZone;
+    public int addBeam(PhysicsSpecs.BeamSpec spec, int node1Idx, int node2Idx, float nodeDist) {
+        int idx = addBeamInternal(spec, node1Idx, node2Idx, nodeDist);
+        springExpansion[idx] = spec.springExpansion();
+        dampExpansion[idx] = spec.dampExpansion();
+        transitionZone[idx] = spec.transitionZone();
         return idx;
     }
 }

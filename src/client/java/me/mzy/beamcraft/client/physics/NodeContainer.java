@@ -21,38 +21,38 @@ public class NodeContainer {
     public java.util.List<String>[] assignedGroups = new java.util.List[INIT_NODE_CAP];
 
     // Initial local coordinates from JBeam
-    public double[] baseX = new double[INIT_NODE_CAP];
-    public double[] baseY = new double[INIT_NODE_CAP];
-    public double[] baseZ = new double[INIT_NODE_CAP];
+    public float[] baseX = new float[INIT_NODE_CAP];
+    public float[] baseY = new float[INIT_NODE_CAP];
+    public float[] baseZ = new float[INIT_NODE_CAP];
 
     // Current local offsets relative to the vehicle entity origin
-    public double[] posX = new double[INIT_NODE_CAP];
-    public double[] posY = new double[INIT_NODE_CAP];
-    public double[] posZ = new double[INIT_NODE_CAP];
+    public float[] posX = new float[INIT_NODE_CAP];
+    public float[] posY = new float[INIT_NODE_CAP];
+    public float[] posZ = new float[INIT_NODE_CAP];
 
-    public double[] prevPosX = new double[INIT_NODE_CAP];
-    public double[] prevPosY = new double[INIT_NODE_CAP];
-    public double[] prevPosZ = new double[INIT_NODE_CAP];
+    public float[] prevPosX = new float[INIT_NODE_CAP];
+    public float[] prevPosY = new float[INIT_NODE_CAP];
+    public float[] prevPosZ = new float[INIT_NODE_CAP];
 
     // 渲染只读缓冲：在每次物理世界 tick 结束时，把 posX/Y/Z 拷贝进来
-    public double[] renderSnapPrevX = new double[INIT_NODE_CAP];
-    public double[] renderSnapPrevY = new double[INIT_NODE_CAP];
-    public double[] renderSnapPrevZ = new double[INIT_NODE_CAP];
-    public double[] renderSnapCurrX = new double[INIT_NODE_CAP];
-    public double[] renderSnapCurrY = new double[INIT_NODE_CAP];
-    public double[] renderSnapCurrZ = new double[INIT_NODE_CAP];
+    public float[] renderSnapPrevX = new float[INIT_NODE_CAP];
+    public float[] renderSnapPrevY = new float[INIT_NODE_CAP];
+    public float[] renderSnapPrevZ = new float[INIT_NODE_CAP];
+    public float[] renderSnapCurrX = new float[INIT_NODE_CAP];
+    public float[] renderSnapCurrY = new float[INIT_NODE_CAP];
+    public float[] renderSnapCurrZ = new float[INIT_NODE_CAP];
 
-    public double[] velX = new double[INIT_NODE_CAP];
-    public double[] velY = new double[INIT_NODE_CAP];
-    public double[] velZ = new double[INIT_NODE_CAP];
+    public float[] velX = new float[INIT_NODE_CAP];
+    public float[] velY = new float[INIT_NODE_CAP];
+    public float[] velZ = new float[INIT_NODE_CAP];
 
-    public double[] forceX = new double[INIT_NODE_CAP];
-    public double[] forceY = new double[INIT_NODE_CAP];
-    public double[] forceZ = new double[INIT_NODE_CAP];
+    public float[] forceX = new float[INIT_NODE_CAP];
+    public float[] forceY = new float[INIT_NODE_CAP];
+    public float[] forceZ = new float[INIT_NODE_CAP];
 
-    public double[] mass = new double[INIT_NODE_CAP];
-    public double[] friction = new double[INIT_NODE_CAP];
-    public double[] slidingFriction = new double[INIT_NODE_CAP];
+    public float[] mass = new float[INIT_NODE_CAP];
+    public float[] friction = new float[INIT_NODE_CAP];
+    public float[] slidingFriction = new float[INIT_NODE_CAP];
     public boolean[] collision = new boolean[INIT_NODE_CAP];
     public boolean[] selfCollision = new boolean[INIT_NODE_CAP];
 
@@ -92,54 +92,46 @@ public class NodeContainer {
     /**
      * Adds a node to the container or accumulates mass if the node already exists.
      */
-    public int addNode(String name, double x, double y, double z, double nodeMass, double nodeFriction, double nodeSlidingFriction,
-                        int nodePartId, boolean nodeCollision, boolean nodeSelfCollision, java.util.List<String> groups) {
+    public int addNode(PhysicsSpecs.NodeSpec spec) {
         ensureNodeCapacity();
 
         int idx;
 
-        if (nameToIndex.containsKey(name)) {
-            // if exists, add weight to it, then return
-            int existingIdx = nameToIndex.get(name);
-            mass[existingIdx] += nodeMass;
+        if (nameToIndex.containsKey(spec.name())) {
+            int existingIdx = nameToIndex.get(spec.name());
+            mass[existingIdx] += spec.mass();
 
-            // 合并 groups
-            if (groups != null && !groups.isEmpty()) {
+            if (spec.groups() != null && !spec.groups().isEmpty()) {
                 java.util.List<String> existingGroups = assignedGroups[existingIdx];
                 if (existingGroups == null) {
-                    // 原有组列表为空，直接新建
-                    assignedGroups[existingIdx] = new java.util.ArrayList<>(groups);
+                    assignedGroups[existingIdx] = new java.util.ArrayList<>(spec.groups());
                 } else {
-                    // 去重合并（可根据需要改用 addAll 允许重复）
-                    for (String g : groups) {
-                        if (!existingGroups.contains(g)) {
-                            existingGroups.add(g);
+                    for (String group : spec.groups()) {
+                        if (!existingGroups.contains(group)) {
+                            existingGroups.add(group);
                         }
                     }
                 }
             }
 
             idx = existingIdx;
-        }
-        else {
-            mass[count] = nodeMass;
-            names[count] = name;
-            nameToIndex.put(name, count);
+        } else {
+            mass[count] = spec.mass();
+            names[count] = spec.name();
+            nameToIndex.put(spec.name(), count);
 
-            // 存入组列表快照
-            if (groups != null && !groups.isEmpty()) {
-                assignedGroups[count] = new java.util.ArrayList<>(groups);
+            if (spec.groups() != null && !spec.groups().isEmpty()) {
+                assignedGroups[count] = new java.util.ArrayList<>(spec.groups());
             } else {
                 assignedGroups[count] = null;
             }
 
-            partId[count] = nodePartId;
+            partId[count] = spec.partId();
             wheelId[count] = -1;
             collisionRate[count] = 0;
             sleepRate[count] = 0;
             degree[count] = 0;
 
-            // clear velocity and force
             velX[count] = 0;  velY[count] = 0;  velZ[count] = 0;
             forceX[count] = 0; forceY[count] = 0; forceZ[count] = 0;
 
@@ -147,18 +139,17 @@ public class NodeContainer {
             count++;
         }
 
-        baseX[idx] = x; baseY[idx] = y; baseZ[idx] = z;
-        posX[idx] = x;  posY[idx] = y;  posZ[idx] = z;
+        baseX[idx] = spec.x(); baseY[idx] = spec.y(); baseZ[idx] = spec.z();
+        posX[idx] = spec.x();  posY[idx] = spec.y();  posZ[idx] = spec.z();
 
-        friction[idx] = nodeFriction;
-        slidingFriction[idx] = nodeSlidingFriction > PhysicsWorld.KINDA_SMALL_NUMBER ?  nodeSlidingFriction : nodeFriction;
+        friction[idx] = spec.friction();
+        slidingFriction[idx] = spec.slidingFriction() > PhysicsWorld.KINDA_SMALL_NUMBER ? spec.slidingFriction() : spec.friction();
 
-        collision[idx] = nodeCollision;
-        selfCollision[idx] = nodeSelfCollision;
+        collision[idx] = spec.collision();
+        selfCollision[idx] = spec.selfCollision();
 
         return idx;
     }
-
     public void bindToTire(String nodeName, int wheelIdx) {
         if (nameToIndex.containsKey(nodeName)) {
             int idx = nameToIndex.get(nodeName);
@@ -175,12 +166,12 @@ public class NodeContainer {
     public void clear() {
         // 清空速度、受力
         for (int i = 0; i < count; i++) {
-            velX[i] = 0.0;
-            velY[i] = 0.0;
-            velZ[i] = 0.0;
-            forceX[i] = 0.0;
-            forceY[i] = 0.0;
-            forceZ[i] = 0.0;
+            velX[i] = 0.0f;
+            velY[i] = 0.0f;
+            velZ[i] = 0.0f;
+            forceX[i] = 0.0f;
+            forceY[i] = 0.0f;
+            forceZ[i] = 0.0f;
             sleepRate[i] = 0;
         }
         count = 0;
@@ -217,9 +208,9 @@ public class NodeContainer {
             pos = new net.minecraft.util.math.Vec3d(posX[i], posY[i], posZ[i]);
             pos = pos.rotateZ(radRoll).rotateX(radPitch).rotateY(radYaw);
 
-            posX[i] = pos.x;
-            posY[i] = pos.y;
-            posZ[i] = pos.z;
+            posX[i] = (float) pos.x;
+            posY[i] = (float) pos.y;
+            posZ[i] = (float) pos.z;
         }
     }
     
@@ -227,7 +218,7 @@ public class NodeContainer {
      * 一次性移动载具的所有节点
      * 可以在生成后调用，也可以在运行时作为独立工具调用
      */
-    public void moveNodes(double deltaX, double deltaY, double deltaZ) {
+    public void moveNodes(float deltaX, float deltaY, float deltaZ) {
         for(int i = 0; i < count; i++) {
             posX[i] = posX[i] + deltaX;
             posY[i] = posY[i] + deltaY;
@@ -237,12 +228,12 @@ public class NodeContainer {
 
     public void stopNodes() {
         for(int i = 0; i < count; i++) {
-            velX[i] = 0.0;
-            velY[i] = 0.0;
-            velZ[i] = 0.0;
-            forceX[i] = 0.0;
-            forceY[i] = 0.0;
-            forceZ[i] = 0.0;
+            velX[i] = 0.0f;
+            velY[i] = 0.0f;
+            velZ[i] = 0.0f;
+            forceX[i] = 0.0f;
+            forceY[i] = 0.0f;
+            forceZ[i] = 0.0f;
         }
     }
 
@@ -259,12 +250,12 @@ public class NodeContainer {
      * 计算所有节点的质心（总质量加权平均位置）
      * @param out An array of length 3 to store the x, y, z coordinates of the com; 长度为3的数组，用于接收质心的 x, y, z
      */
-    public void getCenterOfMass(double[] out) {
-        double totalMass = 0.0;
-        double cx = 0.0, cy = 0.0, cz = 0.0;
+    public void getCenterOfMass(float[] out) {
+        float totalMass = 0.0f;
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
 
         for (int i = 0; i < count; i++) {
-            double m = mass[i];
+            float m = mass[i];
             totalMass += m;
             cx += posX[i] * m;
             cy += posY[i] * m;
@@ -272,14 +263,14 @@ public class NodeContainer {
         }
 
         if (totalMass > 1e-8) {
-            double invMass = 1.0 / totalMass;
+            float invMass = 1.0f / totalMass;
             out[0] = cx * invMass;
             out[1] = cy * invMass;
             out[2] = cz * invMass;
         } else {
-            out[0] = 0.0;
-            out[1] = 0.0;
-            out[2] = 0.0;
+            out[0] = 0.0f;
+            out[1] = 0.0f;
+            out[2] = 0.0f;
         }
     }
 }
