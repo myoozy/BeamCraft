@@ -126,6 +126,14 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(PhysicsSpecs.BeamSpec spec) {
+        addBeam(spec, false);
+    }
+
+    public void addCouplerBeam(PhysicsSpecs.BeamSpec spec) {
+        addBeam(spec, true);
+    }
+
+    private void addBeam(PhysicsSpecs.BeamSpec spec, boolean coupler) {
         String name1 = spec.name1();
         String name2 = spec.name2();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
@@ -180,6 +188,8 @@ public class SoftBodyVehicle {
                 container = normalBeams;
 
             }
+
+            container.coupler[beamIdx] = coupler;
 
             if (spec.breakGroups() != null && !spec.breakGroups().isEmpty()) {
                 for (String bg : spec.breakGroups()) {
@@ -286,154 +296,205 @@ public class SoftBodyVehicle {
     }
 
     public void finalizePhysicsSetup() {
-
-
-        // ==========================================
-        // ==========================================
         flexbodies.compileGroupsCSR(nodes);
-
-        // ==========================================
-        // ==========================================
 
         matrixPartStride = maxTrackedPartId + 1;
         nodeInPartMatrix = new boolean[nodes.count * matrixPartStride];
-
         for (int i = 0; i < nodes.count; i++) {
             int originalPart = nodes.partId[i];
             if (originalPart >= 0 && originalPart < matrixPartStride) {
                 nodeInPartMatrix[i * matrixPartStride + originalPart] = true;
             }
         }
-
         for (int i = 0; i < triangles.count; i++) {
-            int tPart = triangles.partId[i];
-            if (tPart >= 0 && tPart < matrixPartStride) {
-                nodeInPartMatrix[triangles.node1[i] * matrixPartStride + tPart] = true;
-                nodeInPartMatrix[triangles.node2[i] * matrixPartStride + tPart] = true;
-                nodeInPartMatrix[triangles.node3[i] * matrixPartStride + tPart] = true;
+            int part = triangles.partId[i];
+            if (part >= 0 && part < matrixPartStride) {
+                nodeInPartMatrix[triangles.node1[i] * matrixPartStride + part] = true;
+                nodeInPartMatrix[triangles.node2[i] * matrixPartStride + part] = true;
+                nodeInPartMatrix[triangles.node3[i] * matrixPartStride + part] = true;
             }
         }
 
-        // ==========================================
-        // ==========================================
+        limitConstraintStiffnessAndDamping(PhysicsWorld.invPhysicsDT, 0.90f);
+    }
 
-        float invDt = PhysicsWorld.invPhysicsDT;
-        float safeFractionSpring = 0.95f;
-        float safeFractionDamp = 0.95f;
-        float avgCosSq = 1.0f;
+    private void limitConstraintStiffnessAndDamping(float invDt, float safetyFraction) {
+        DirectionalStabilityLimiter limiter =
+                new DirectionalStabilityLimiter(nodes.count, nodes.mass, invDt, safetyFraction);
 
-        // ==========================================
-        // ==========================================
-        for (int i = 0; i < normalBeams.count; i++) {
-            int n1 = normalBeams.node1[i];
-            int n2 = normalBeams.node2[i];
+        int[] normalIds = addAxialConstraints(limiter, normalBeams, normalBeams.spring, normalBeams.damp, invDt);
+        int[] supportIds = addAxialConstraints(limiter, supportBeams, supportBeams.spring, supportBeams.damp, invDt);
 
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            normalBeams.spring[i] = Math.min(normalBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            normalBeams.damp[i] = Math.min(normalBeams.damp[i], maxSafeDamp);
-        }
-
-        // ==========================================
-        // ==========================================
-        for (int i = 0; i < supportBeams.count; i++) {
-            int n1 = supportBeams.node1[i];
-            int n2 = supportBeams.node2[i];
-
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            supportBeams.spring[i] = Math.min(supportBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            supportBeams.damp[i] = Math.min(supportBeams.damp[i], maxSafeDamp);
-        }
-
-        // ==========================================
-        // ==========================================
+        int[] boundedIds = new int[boundedBeams.count];
         for (int i = 0; i < boundedBeams.count; i++) {
-            int n1 = boundedBeams.node1[i];
-            int n2 = boundedBeams.node2[i];
-
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            boundedBeams.spring[i] = Math.min(boundedBeams.spring[i], maxSafeSpring);
-            boundedBeams.limitSpring[i] = Math.min(boundedBeams.limitSpring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            boundedBeams.damp[i] = Math.min(boundedBeams.damp[i], maxSafeDamp);
-            boundedBeams.limitDamp[i] = Math.min(boundedBeams.limitDamp[i], maxSafeDamp);
-            boundedBeams.dampFast[i] = Math.min(boundedBeams.dampFast[i], maxSafeDamp);
-            boundedBeams.dampRebound[i] = Math.min(boundedBeams.dampRebound[i], maxSafeDamp);
-            boundedBeams.dampReboundFast[i] = Math.min(boundedBeams.dampReboundFast[i], maxSafeDamp);
+            float stiffness = positive(boundedBeams.spring[i]) + positive(boundedBeams.limitSpring[i]);
+            float damping = maxPositive(
+                    boundedBeams.damp[i], boundedBeams.limitDamp[i], boundedBeams.dampFast[i],
+                    boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
+            boundedIds[i] = addAxialConstraint(limiter, boundedBeams, i, stiffness,
+                    Math.min(damping, axialDampingCeiling(boundedBeams, i, invDt)));
         }
 
-        // ==========================================
-        // ==========================================
+        int[] lBeamIds = new int[lBeams.count];
+        float[] lBeamDampingCeilings = new float[lBeams.count];
         for (int i = 0; i < lBeams.count; i++) {
-            int n1 = lBeams.node1[i];
-            int n2 = lBeams.node2[i];
-            int n3 = lBeams.node3[i];
-
-            float m1 = nodes.mass[n1];
-            float m2 = nodes.mass[n2];
-            float m3 = nodes.mass[n3];
-
-            float wTotal = (1.0f / m1) + (1.0f / m2) + (2.0f / m3);
-            float genMass = 1.0f / wTotal;
-
-            float maxSafeSpring = 4.0f * genMass * invDt * invDt * safeFractionSpring;
-            lBeams.spring[i] = Math.min(lBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = genMass * invDt * safeFractionDamp;
-            lBeams.damp[i] = Math.min(lBeams.damp[i], maxSafeDamp);
+            lBeamIds[i] = addLBeamConstraint(limiter, i, invDt, lBeamDampingCeilings);
         }
 
-        // ==========================================================
-        // ==========================================================
+        int[] anisotropicIds = new int[anisotropicBeams.count];
         for (int i = 0; i < anisotropicBeams.count; i++) {
-            int n1 = anisotropicBeams.node1[i];
-            int n2 = anisotropicBeams.node2[i];
-
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            anisotropicBeams.damp[i] = Math.min(anisotropicBeams.damp[i], maxSafeDamp);
-
-            anisotropicBeams.springExpansion[i] = Math.min(anisotropicBeams.springExpansion[i], maxSafeSpring);
-            anisotropicBeams.dampExpansion[i]   = Math.min(anisotropicBeams.dampExpansion[i],   maxSafeDamp);
+            float stiffness = Math.max(positive(anisotropicBeams.spring[i]),
+                    positive(anisotropicBeams.springExpansion[i]));
+            float damping = Math.max(positive(anisotropicBeams.damp[i]),
+                    positive(anisotropicBeams.dampExpansion[i]));
+            anisotropicIds[i] = addAxialConstraint(limiter, anisotropicBeams, i, stiffness,
+                    Math.min(damping, axialDampingCeiling(anisotropicBeams, i, invDt)));
         }
+
+        limiter.solve();
+
+        allocateAxialBeams(normalBeams, normalIds, limiter, invDt);
+        allocateAxialBeams(supportBeams, supportIds, limiter, invDt);
+        for (int i = 0; i < boundedBeams.count; i++) {
+            float stiffness = positive(boundedBeams.spring[i]) + positive(boundedBeams.limitSpring[i]);
+            float damping = maxPositive(
+                    boundedBeams.damp[i], boundedBeams.limitDamp[i], boundedBeams.dampFast[i],
+                    boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
+            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
+                    boundedIds[i], stiffness, damping, axialDampingCeiling(boundedBeams, i, invDt));
+            boundedBeams.spring[i] *= allocation.stiffnessScale();
+            boundedBeams.limitSpring[i] *= allocation.stiffnessScale();
+            boundedBeams.damp[i] *= allocation.dampingScale();
+            boundedBeams.limitDamp[i] *= allocation.dampingScale();
+            boundedBeams.dampFast[i] *= allocation.dampingScale();
+            boundedBeams.dampRebound[i] *= allocation.dampingScale();
+            boundedBeams.dampReboundFast[i] *= allocation.dampingScale();
+        }
+        for (int i = 0; i < lBeams.count; i++) {
+            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
+                    lBeamIds[i], lBeams.spring[i], lBeams.damp[i], lBeamDampingCeilings[i]);
+            lBeams.spring[i] *= allocation.stiffnessScale();
+            lBeams.damp[i] *= allocation.dampingScale();
+        }
+        for (int i = 0; i < anisotropicBeams.count; i++) {
+            float stiffness = Math.max(positive(anisotropicBeams.spring[i]),
+                    positive(anisotropicBeams.springExpansion[i]));
+            float damping = Math.max(positive(anisotropicBeams.damp[i]),
+                    positive(anisotropicBeams.dampExpansion[i]));
+            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
+                    anisotropicIds[i], stiffness, damping, axialDampingCeiling(anisotropicBeams, i, invDt));
+            anisotropicBeams.spring[i] *= allocation.stiffnessScale();
+            anisotropicBeams.springExpansion[i] *= allocation.stiffnessScale();
+            anisotropicBeams.damp[i] *= allocation.dampingScale();
+            anisotropicBeams.dampExpansion[i] *= allocation.dampingScale();
+        }
+    }
+
+    private int[] addAxialConstraints(DirectionalStabilityLimiter limiter, BeamContainer beams,
+                                      float[] stiffness, float[] damping, float invDt) {
+        int[] ids = new int[beams.count];
+        for (int i = 0; i < beams.count; i++) {
+            ids[i] = addAxialConstraint(limiter, beams, i, stiffness[i],
+                    Math.min(damping[i], axialDampingCeiling(beams, i, invDt)));
+        }
+        return ids;
+    }
+
+    private int addAxialConstraint(DirectionalStabilityLimiter limiter, BeamContainer beams, int i,
+                                   float stiffness, float damping) {
+        int n1 = beams.node1[i];
+        int n2 = beams.node2[i];
+        double dx = nodes.posX[n2] - nodes.posX[n1];
+        double dy = nodes.posY[n2] - nodes.posY[n1];
+        double dz = nodes.posZ[n2] - nodes.posZ[n1];
+        double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (length < KINDA_SMALL_NUMBER) {
+            return limiter.addIsotropicTwoNode(n1, n2, stiffness, damping);
+        }
+        return limiter.addTwoNode(n1, n2, dx / length, dy / length, dz / length, stiffness, damping);
+    }
+
+    private int addLBeamConstraint(DirectionalStabilityLimiter limiter, int i, float invDt,
+                                   float[] dampingCeilings) {
+        int n1 = lBeams.node1[i];
+        int n2 = lBeams.node2[i];
+        int n3 = lBeams.node3[i];
+
+        double dx13 = nodes.posX[n1] - nodes.posX[n3];
+        double dy13 = nodes.posY[n1] - nodes.posY[n3];
+        double dz13 = nodes.posZ[n1] - nodes.posZ[n3];
+        double dx23 = nodes.posX[n2] - nodes.posX[n3];
+        double dy23 = nodes.posY[n2] - nodes.posY[n3];
+        double dz23 = nodes.posZ[n2] - nodes.posZ[n3];
+        double dx12 = nodes.posX[n2] - nodes.posX[n1];
+        double dy12 = nodes.posY[n2] - nodes.posY[n1];
+        double dz12 = nodes.posZ[n2] - nodes.posZ[n1];
+
+        double l1 = Math.sqrt(dx13 * dx13 + dy13 * dy13 + dz13 * dz13);
+        double l2 = Math.sqrt(dx23 * dx23 + dy23 * dy23 + dz23 * dz23);
+        double dist = Math.sqrt(dx12 * dx12 + dy12 * dy12 + dz12 * dz12);
+        double targetDistSq = l1 * l1 + l2 * l2 - 2.0 * l1 * l2 * lBeams.restCosTheta[i];
+        if (l1 < KINDA_SMALL_NUMBER || l2 < KINDA_SMALL_NUMBER || dist < KINDA_SMALL_NUMBER
+                || targetDistSq < KINDA_SMALL_NUMBER
+                || nodes.mass[n1] <= KINDA_SMALL_NUMBER
+                || nodes.mass[n2] <= KINDA_SMALL_NUMBER
+                || nodes.mass[n3] <= KINDA_SMALL_NUMBER) {
+            dampingCeilings[i] = 0.0f;
+            return limiter.addThreeNode(n1, 0, 0, 0, n2, 0, 0, 0, n3, 0, 0, 0, 0, 0);
+        }
+
+        double targetDist = Math.sqrt(targetDistSq);
+        double g1 = (l1 - l2 * lBeams.restCosTheta[i]) / targetDist;
+        double g2 = (l2 - l1 * lBeams.restCosTheta[i]) / targetDist;
+        double u13x = dx13 / l1, u13y = dy13 / l1, u13z = dz13 / l1;
+        double u23x = dx23 / l2, u23y = dy23 / l2, u23z = dz23 / l2;
+        double u12x = dx12 / dist, u12y = dy12 / dist, u12z = dz12 / dist;
+
+        double g1x = u12x + g1 * u13x, g1y = u12y + g1 * u13y, g1z = u12z + g1 * u13z;
+        double g2x = -u12x + g2 * u23x, g2y = -u12y + g2 * u23y, g2z = -u12z + g2 * u23z;
+        double g3x = -g1 * u13x - g2 * u23x;
+        double g3y = -g1 * u13y - g2 * u23y;
+        double g3z = -g1 * u13z - g2 * u23z;
+        double inverseGeneralizedMass = (g1x * g1x + g1y * g1y + g1z * g1z) / nodes.mass[n1]
+                + (g2x * g2x + g2y * g2y + g2z * g2z) / nodes.mass[n2]
+                + (g3x * g3x + g3y * g3y + g3z * g3z) / nodes.mass[n3];
+        dampingCeilings[i] = inverseGeneralizedMass > KINDA_SMALL_NUMBER
+                ? (float) ((1.0 / inverseGeneralizedMass) * invDt * 0.95)
+                : 0.0f;
+
+        return limiter.addThreeNode(
+                n1, g1x, g1y, g1z,
+                n2, g2x, g2y, g2z,
+                n3, g3x, g3y, g3z,
+                lBeams.spring[i], Math.min(lBeams.damp[i], dampingCeilings[i]));
+    }
+
+    private void allocateAxialBeams(BeamContainer beams, int[] ids,
+                                    DirectionalStabilityLimiter limiter, float invDt) {
+        for (int i = 0; i < beams.count; i++) {
+            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
+                    ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt),
+                    beams.coupler[i]);
+            beams.spring[i] *= allocation.stiffnessScale();
+            beams.damp[i] *= allocation.dampingScale();
+        }
+    }
+
+    private float axialDampingCeiling(BeamContainer beams, int i, float invDt) {
+        float m1 = nodes.mass[beams.node1[i]];
+        float m2 = nodes.mass[beams.node2[i]];
+        if (m1 <= KINDA_SMALL_NUMBER || m2 <= KINDA_SMALL_NUMBER) return 0.0f;
+        return (m1 * m2 / (m1 + m2)) * invDt * 0.95f;
+    }
+
+    private static float positive(float value) {
+        return Math.max(0.0f, value);
+    }
+
+    private static float maxPositive(float... values) {
+        float result = 0.0f;
+        for (float value : values) result = Math.max(result, value);
+        return result;
     }
 
     /**
