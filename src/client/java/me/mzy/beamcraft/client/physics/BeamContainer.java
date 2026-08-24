@@ -30,7 +30,6 @@ public class BeamContainer {
     public float[] deform;
     public float[] strength;
     public boolean[] broken;
-    public boolean[] coupler;
     public int[] breakGroupType;
     public int[] wheelId;
 
@@ -47,7 +46,6 @@ public class BeamContainer {
         deform = new float[INIT_BEAM_CAP];
         strength = new float[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
-        coupler = new boolean[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
         wheelId = new int[INIT_BEAM_CAP];
@@ -75,7 +73,6 @@ public class BeamContainer {
         deform = Utility.expand(deform, newSize);
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
-        coupler = Utility.expand(coupler, newSize);
         breakGroupType = Utility.expand(breakGroupType, newSize);
         wheelId = Utility.expand(wheelId, newSize);
     }
@@ -112,7 +109,6 @@ public class BeamContainer {
         this.deform[idx] = spec.deform();
         this.strength[idx] = spec.strength();
         this.broken[idx] = false;
-        this.coupler[idx] = false;
         this.breakGroupType[idx] = spec.breakGroupType();
         this.wheelId[idx] = -1;
 

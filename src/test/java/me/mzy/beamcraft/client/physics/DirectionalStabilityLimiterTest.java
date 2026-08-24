@@ -34,52 +34,42 @@ class DirectionalStabilityLimiterTest {
     }
 
     @Test
-    void dampingConsumesTheSameDiscreteTimeStabilityBudgetAsSpring() {
+    void returnsAbsoluteCeilingsForCombinedSpringAndDampingBudget() {
         DirectionalStabilityLimiter limiter = limiter(2);
-        // q = k + 2*c/dt = 180 + 2*10*9 = 360; node budget is 180.
         int constraint = limiter.addTwoNode(0, 1, 1, 0, 0, 180, 9);
 
         limiter.solve();
 
         assertEquals(0.5f, limiter.scale(constraint), 1.0e-4f);
-        DirectionalStabilityLimiter.CoefficientAllocation allocation =
-                limiter.allocation(constraint, 180, 9, 9);
-        assertEquals(1.0f, allocation.stiffnessScale(), 1.0e-6f);
-        assertEquals(0.0f, allocation.dampingScale(), 1.0e-6f);
+        DirectionalStabilityLimiter.CoefficientCeilings ceilings =
+                limiter.ceilings(constraint, 180, 9, 9);
+        assertEquals(90.0f, ceilings.stiffness(), 1.0e-3f);
+        assertEquals(4.5f, ceilings.damping(), 1.0e-3f);
     }
 
     @Test
-    void couplerLikeConstraintReservesSafeDampingBeforeSpring() {
+    void highStiffnessConstraintIsClippedWithoutDampingInput() {
         float[] masses = {5.0f, 5.0f};
         DirectionalStabilityLimiter limiter =
                 new DirectionalStabilityLimiter(2, masses, 2_000.0f, SAFETY);
-        double dampingCeiling = 4_750.0;
         int constraint = limiter.addTwoNode(
-                0, 1, 1, 0, 0, 1.0e9, dampingCeiling);
+                0, 1, 1, 0, 0, 1.0e9, 0);
 
         limiter.solve();
-        DirectionalStabilityLimiter.CoefficientAllocation allocation =
-                limiter.allocation(constraint, 1.0e9, 1.0e7, dampingCeiling, true);
 
-        assertTrue(1.0e9 * allocation.stiffnessScale() > 15_000_000.0);
-        assertEquals(dampingCeiling, 1.0e7 * allocation.dampingScale(), 0.1);
+        assertEquals(36_000_000.0, 1.0e9 * limiter.scale(constraint), 10.0);
     }
 
     @Test
-    void initiallyCoincidentCouplerGetsAnIsotropicBudgetInsteadOfZeroStiffness() {
+    void initiallyCoincidentConstraintGetsAnIsotropicBudgetInsteadOfZeroStiffness() {
         float[] masses = {7.5f, 7.5f};
         DirectionalStabilityLimiter limiter =
                 new DirectionalStabilityLimiter(2, masses, 2_000.0f, SAFETY);
-        double dampingCeiling = 7_125.0;
-        int constraint = limiter.addIsotropicTwoNode(0, 1, 1.0e9, dampingCeiling);
+        int constraint = limiter.addIsotropicTwoNode(0, 1, 1.0e9, 0);
 
         limiter.solve();
-        DirectionalStabilityLimiter.CoefficientAllocation allocation =
-                limiter.allocation(constraint, 1.0e9, 1.0e7, dampingCeiling, true);
 
-        assertTrue(allocation.stiffnessScale() > 0.0f);
-        assertTrue(allocation.dampingScale() > 0.0f);
-        assertEquals(dampingCeiling, 1.0e7 * allocation.dampingScale(), 0.1);
+        assertEquals(54_000_000.0, 1.0e9 * limiter.scale(constraint), 1_000.0);
     }
 
     @Test

@@ -141,33 +141,15 @@ final class DirectionalStabilityLimiter {
         return (float) Math.clamp(constraints.get(constraintId).scale, 0.0, 1.0);
     }
 
-    CoefficientAllocation allocation(int constraintId, double stiffness, double damping,
-                                     double dampingCeiling) {
-        return allocation(constraintId, stiffness, damping, dampingCeiling, false);
-    }
-
-    CoefficientAllocation allocation(int constraintId, double stiffness, double damping,
-                                     double dampingCeiling, boolean dampingFirst) {
+    CoefficientCeilings ceilings(int constraintId, double stiffness, double damping,
+                                 double dampingCeiling) {
         Constraint constraint = constraints.get(constraintId);
-        double allowedQ = constraint.q * constraint.scale;
+        double coefficientScale = Math.clamp(constraint.scale, 0.0, 1.0);
         double k = Math.max(0.0, stiffness);
         double c = Math.min(Math.max(0.0, damping), Math.max(0.0, dampingCeiling));
-
-        double keptK;
-        double keptC;
-        if (dampingFirst) {
-            keptC = Math.min(c, allowedQ / (2.0 * invDt));
-            keptK = Math.min(k, Math.max(0.0, allowedQ - 2.0 * invDt * keptC));
-        } else {
-            keptK = Math.min(k, allowedQ);
-            double remainingQ = Math.max(0.0, allowedQ - keptK);
-            keptC = Math.min(c, remainingQ / (2.0 * invDt));
-        }
-        float stiffnessScale = k > 0.0 ? (float) Math.clamp(keptK / k, 0.0, 1.0) : 1.0f;
-        float dampingScale = damping > 0.0
-                ? (float) Math.clamp(keptC / damping, 0.0, 1.0)
-                : 1.0f;
-        return new CoefficientAllocation(stiffnessScale, dampingScale);
+        return new CoefficientCeilings(
+                (float) Math.min(Float.MAX_VALUE, k * coefficientScale),
+                (float) Math.min(Float.MAX_VALUE, c * coefficientScale));
     }
 
     private EigenMode largestMode(int node, List<Integer> nodeConstraints) {
@@ -245,5 +227,6 @@ final class DirectionalStabilityLimiter {
 
     private record EigenMode(double value, double x, double y, double z) {}
 
-    record CoefficientAllocation(float stiffnessScale, float dampingScale) {}
+    record CoefficientCeilings(float stiffness, float damping) {}
+
 }

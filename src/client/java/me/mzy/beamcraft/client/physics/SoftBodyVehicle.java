@@ -126,14 +126,6 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(PhysicsSpecs.BeamSpec spec) {
-        addBeam(spec, false);
-    }
-
-    public void addCouplerBeam(PhysicsSpecs.BeamSpec spec) {
-        addBeam(spec, true);
-    }
-
-    private void addBeam(PhysicsSpecs.BeamSpec spec, boolean coupler) {
         String name1 = spec.name1();
         String name2 = spec.name2();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
@@ -188,8 +180,6 @@ public class SoftBodyVehicle {
                 container = normalBeams;
 
             }
-
-            container.coupler[beamIdx] = coupler;
 
             if (spec.breakGroups() != null && !spec.breakGroups().isEmpty()) {
                 for (String bg : spec.breakGroups()) {
@@ -356,37 +346,43 @@ public class SoftBodyVehicle {
         allocateAxialBeams(normalBeams, normalIds, limiter, invDt);
         allocateAxialBeams(supportBeams, supportIds, limiter, invDt);
         for (int i = 0; i < boundedBeams.count; i++) {
+            float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt);
             float stiffness = positive(boundedBeams.spring[i]) + positive(boundedBeams.limitSpring[i]);
             float damping = maxPositive(
                     boundedBeams.damp[i], boundedBeams.limitDamp[i], boundedBeams.dampFast[i],
                     boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
-            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
-                    boundedIds[i], stiffness, damping, axialDampingCeiling(boundedBeams, i, invDt));
-            boundedBeams.spring[i] *= allocation.stiffnessScale();
-            boundedBeams.limitSpring[i] *= allocation.stiffnessScale();
-            boundedBeams.damp[i] *= allocation.dampingScale();
-            boundedBeams.limitDamp[i] *= allocation.dampingScale();
-            boundedBeams.dampFast[i] *= allocation.dampingScale();
-            boundedBeams.dampRebound[i] *= allocation.dampingScale();
-            boundedBeams.dampReboundFast[i] *= allocation.dampingScale();
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    boundedIds[i], stiffness, damping, dampingCeiling);
+            SpringPair springs = capSpringPair(
+                    boundedBeams.spring[i], boundedBeams.limitSpring[i], ceilings.stiffness());
+            boundedBeams.spring[i] = springs.first();
+            boundedBeams.limitSpring[i] = springs.second();
+            boundedBeams.damp[i] = capDamping(boundedBeams.damp[i], ceilings.damping());
+            boundedBeams.limitDamp[i] = capDamping(boundedBeams.limitDamp[i], ceilings.damping());
+            boundedBeams.dampFast[i] = capDamping(boundedBeams.dampFast[i], ceilings.damping());
+            boundedBeams.dampRebound[i] = capDamping(boundedBeams.dampRebound[i], ceilings.damping());
+            boundedBeams.dampReboundFast[i] = capDamping(boundedBeams.dampReboundFast[i], ceilings.damping());
         }
         for (int i = 0; i < lBeams.count; i++) {
-            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     lBeamIds[i], lBeams.spring[i], lBeams.damp[i], lBeamDampingCeilings[i]);
-            lBeams.spring[i] *= allocation.stiffnessScale();
-            lBeams.damp[i] *= allocation.dampingScale();
+            lBeams.spring[i] = Math.min(lBeams.spring[i], ceilings.stiffness());
+            lBeams.damp[i] = capDamping(lBeams.damp[i], ceilings.damping());
         }
         for (int i = 0; i < anisotropicBeams.count; i++) {
+            float dampingCeiling = axialDampingCeiling(anisotropicBeams, i, invDt);
             float stiffness = Math.max(positive(anisotropicBeams.spring[i]),
                     positive(anisotropicBeams.springExpansion[i]));
             float damping = Math.max(positive(anisotropicBeams.damp[i]),
                     positive(anisotropicBeams.dampExpansion[i]));
-            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
-                    anisotropicIds[i], stiffness, damping, axialDampingCeiling(anisotropicBeams, i, invDt));
-            anisotropicBeams.spring[i] *= allocation.stiffnessScale();
-            anisotropicBeams.springExpansion[i] *= allocation.stiffnessScale();
-            anisotropicBeams.damp[i] *= allocation.dampingScale();
-            anisotropicBeams.dampExpansion[i] *= allocation.dampingScale();
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    anisotropicIds[i], stiffness, damping, dampingCeiling);
+            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], ceilings.stiffness());
+            anisotropicBeams.springExpansion[i] = Math.min(
+                    anisotropicBeams.springExpansion[i], ceilings.stiffness());
+            anisotropicBeams.damp[i] = capDamping(anisotropicBeams.damp[i], ceilings.damping());
+            anisotropicBeams.dampExpansion[i] = capDamping(
+                    anisotropicBeams.dampExpansion[i], ceilings.damping());
         }
     }
 
@@ -472,11 +468,10 @@ public class SoftBodyVehicle {
     private void allocateAxialBeams(BeamContainer beams, int[] ids,
                                     DirectionalStabilityLimiter limiter, float invDt) {
         for (int i = 0; i < beams.count; i++) {
-            DirectionalStabilityLimiter.CoefficientAllocation allocation = limiter.allocation(
-                    ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt),
-                    beams.coupler[i]);
-            beams.spring[i] *= allocation.stiffnessScale();
-            beams.damp[i] *= allocation.dampingScale();
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt));
+            beams.spring[i] = Math.min(beams.spring[i], ceilings.stiffness());
+            beams.damp[i] = capDamping(beams.damp[i], ceilings.damping());
         }
     }
 
@@ -491,11 +486,31 @@ public class SoftBodyVehicle {
         return Math.max(0.0f, value);
     }
 
+    private static float capDamping(float damping, float ceiling) {
+        return Math.min(damping, ceiling);
+    }
+
+    private static SpringPair capSpringPair(float first, float second, float totalCeiling) {
+        float a = positive(first);
+        float b = positive(second);
+        if (a + b <= totalCeiling) return new SpringPair(first, second);
+
+        float half = totalCeiling * 0.5f;
+        if (a <= b) {
+            float keptA = Math.min(a, half);
+            return new SpringPair(keptA, Math.min(b, totalCeiling - keptA));
+        }
+        float keptB = Math.min(b, half);
+        return new SpringPair(Math.min(a, totalCeiling - keptB), keptB);
+    }
+
     private static float maxPositive(float... values) {
         float result = 0.0f;
         for (float value : values) result = Math.max(result, value);
         return result;
     }
+
+    private record SpringPair(float first, float second) {}
 
     /**
      * Reset velocity and deformation state.
