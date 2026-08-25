@@ -507,7 +507,7 @@ public class WheelContainer {
                                            double springExpansion, double dampExpansion, double transitionZone) {
         return new PhysicsSpecs.BeamSpec(
                 type, null, null, null,
-                null, 0,
+                null, 0, false,
                 (float) spring, (float) damp, (float) deform, (float) strength,
                 1.0f, 0.0f, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f,
@@ -518,7 +518,9 @@ public class WheelContainer {
     }
 
     private void addTriangle(int n1, int n2, int n3, int partId, boolean collision) {
-        vehicle.triangles.addTriangle(new PhysicsSpecs.TriangleSpec(null, null, null, partId, collision), n1, n2, n3);
+        vehicle.triangles.addTriangle(
+                new PhysicsSpecs.TriangleSpec(null, null, null, List.of(), partId, collision),
+                n1, n2, n3);
     }
 
     private void calculateWheelBasis(int n1, int n2, int wheelDir, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {

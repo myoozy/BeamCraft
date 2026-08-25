@@ -348,6 +348,7 @@ public class JBeamParser {
 
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
         int currentBreakGroupType = 0;
+        boolean currentDisableTriangleBreaking = false;
 
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
@@ -390,6 +391,8 @@ public class JBeamParser {
                     currentBreakGroups = parseGroups(modifier.get("breakGroup"), entry.variables);
                     currentBreakGroupType = getIntSafe(modifier, "breakGroupType", currentBreakGroupType);
                 }
+                currentDisableTriangleBreaking = getBooleanSafe(
+                        modifier, "disableTriangleBreaking", currentDisableTriangleBreaking);
                 continue;
             }
 
@@ -411,6 +414,7 @@ public class JBeamParser {
                     String inlineId3 = null; // for L-Beams
                     java.util.List<String> inlineBreakGroups = currentBreakGroups;
                     int inlineBreakGroupType = currentBreakGroupType;
+                    boolean inlineDisableTriangleBreaking = currentDisableTriangleBreaking;
 
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
@@ -443,6 +447,8 @@ public class JBeamParser {
                             inlineBreakGroups = parseGroups(inline.get("breakGroup"), entry.variables);
                             inlineBreakGroupType = getIntSafe(inline, "breakGroupType", inlineBreakGroupType);
                         }
+                        inlineDisableTriangleBreaking = getBooleanSafe(
+                                inline, "disableTriangleBreaking", inlineDisableTriangleBreaking);
 
                         String bt = getStringSafe(inline, "beamType", "");
                         if (!bt.isEmpty()) {
@@ -460,7 +466,7 @@ public class JBeamParser {
                     String id2 = row.get(1).getAsString();
                     vehicle.addBeam(new PhysicsSpecs.BeamSpec(
                             inlineType, id1, id2, inlineId3,
-                            inlineBreakGroups, inlineBreakGroupType,
+                            inlineBreakGroups, inlineBreakGroupType, inlineDisableTriangleBreaking,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
@@ -476,11 +482,15 @@ public class JBeamParser {
     public static void parseTriangles(JsonArray triangles, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
         boolean isHeader = true;
         boolean currentCollision = true;
+        java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
         for (JsonElement element : triangles) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
                 if (modifier.has("triangleType")) {
                     currentCollision = !modifier.get("triangleType").getAsString().equals("NONCOLLIDABLE");
+                }
+                if (modifier.has("breakGroup")) {
+                    currentBreakGroups = parseGroups(modifier.get("breakGroup"), entry.variables);
                 }
                 continue;
             }
@@ -489,16 +499,21 @@ public class JBeamParser {
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 3) {
                     boolean inlineCollision = currentCollision;
+                    java.util.List<String> inlineBreakGroups = currentBreakGroups;
                     if (row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
                         if (inline.has("triangleType")) {
                             inlineCollision = !inline.get("triangleType").getAsString().equals("NONCOLLIDABLE");
+                        }
+                        if (inline.has("breakGroup")) {
+                            inlineBreakGroups = parseGroups(inline.get("breakGroup"), entry.variables);
                         }
                     }
                     vehicle.addTriangle(new PhysicsSpecs.TriangleSpec(
                             row.get(0).getAsString(),
                             row.get(1).getAsString(),
                             row.get(2).getAsString(),
+                            inlineBreakGroups,
                             entry.partId,
                             inlineCollision
                     ));

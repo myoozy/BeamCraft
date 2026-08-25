@@ -26,6 +26,7 @@ public final class PhysicsSpecs {
             String name3,
             List<String> breakGroups,
             int breakGroupType,
+            boolean disableTriangleBreaking,
             float spring,
             float damp,
             float deform,
@@ -52,6 +53,7 @@ public final class PhysicsSpecs {
             String name1,
             String name2,
             String name3,
+            List<String> breakGroups,
             int partId,
             boolean collision
     ) {}

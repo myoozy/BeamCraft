@@ -31,6 +31,7 @@ public class BeamContainer {
     public float[] strength;
     public boolean[] broken;
     public int[] breakGroupType;
+    public boolean[] disableTriangleBreaking;
     public int[] wheelId;
 
     public BeamContainer() {
@@ -47,6 +48,7 @@ public class BeamContainer {
         strength = new float[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
+        disableTriangleBreaking = new boolean[INIT_BEAM_CAP];
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
         wheelId = new int[INIT_BEAM_CAP];
     }
@@ -74,6 +76,7 @@ public class BeamContainer {
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
         breakGroupType = Utility.expand(breakGroupType, newSize);
+        disableTriangleBreaking = Utility.expand(disableTriangleBreaking, newSize);
         wheelId = Utility.expand(wheelId, newSize);
     }
 
@@ -110,6 +113,7 @@ public class BeamContainer {
         this.strength[idx] = spec.strength();
         this.broken[idx] = false;
         this.breakGroupType[idx] = spec.breakGroupType();
+        this.disableTriangleBreaking[idx] = spec.disableTriangleBreaking();
         this.wheelId[idx] = -1;
 
         count++;

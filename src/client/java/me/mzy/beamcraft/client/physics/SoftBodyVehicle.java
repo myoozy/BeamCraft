@@ -288,6 +288,7 @@ public class SoftBodyVehicle {
 
     public void finalizePhysicsSetup() {
         flexbodies.compileGroupsCSR(nodes);
+        triangles.buildBreakIndices();
 
         matrixPartStride = maxTrackedPartId + 1;
         nodeInPartMatrix = new boolean[nodes.count * matrixPartStride];
@@ -495,6 +496,9 @@ public class SoftBodyVehicle {
         normalBeams.reset();
         supportBeams.reset();
         boundedBeams.reset();
+        lBeams.reset();
+        anisotropicBeams.reset();
+        triangles.reset();
         torsionbars.reset();
         System.out.println("Vehicle reset.");
     }
@@ -508,11 +512,13 @@ public class SoftBodyVehicle {
         supportBeams.clear();
         boundedBeams.clear();
         lBeams.clear();
+        anisotropicBeams.clear();
         triangles.clear();
         torsionbars.clear();
         slidenodes.clear();
         wheels.clear();
         flexbodies.clear();
+        breakGroupMap.clear();
         triggeredBreakGroups.clear();
         maxTrackedPartId = -1;
 
@@ -681,6 +687,8 @@ public class SoftBodyVehicle {
             return;
         }
 
+        triangles.breakByGroup(groupName);
+
         List<BeamPointer> linkedBeams = breakGroupMap.get(groupName);
         if (linkedBeams == null) return;
 
@@ -690,7 +698,11 @@ public class SoftBodyVehicle {
     }
 
     private void breakBeamAt(BeamContainer container, int idx) {
+        if (container.broken[idx]) return;
         container.broken[idx] = true;
+        if (!container.disableTriangleBreaking[idx]) {
+            triangles.breakByEdge(container.node1[idx], container.node2[idx]);
+        }
         if (container.breakGroupType[idx] == 0) {
             if (container.assignedBreakGroups != null && container.assignedBreakGroups[idx] != null) {
                 for (String bg : container.assignedBreakGroups[idx]) {
@@ -1328,7 +1340,7 @@ public class SoftBodyVehicle {
         double BASE_MARGIN = 0.01;
 
         for (int i = 0; i < triangles.count; i++) {
-            if (!triangles.collision[i]) continue;
+            if (!triangles.collision[i] || triangles.broken[i]) continue;
 
             int nA = triangles.node1[i];
             int nB = triangles.node2[i];

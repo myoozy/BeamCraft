@@ -211,7 +211,7 @@ public class JBeamAssembler {
                         vehicle.addBeam(new PhysicsSpecs.BeamSpec(
                                 BeamContainer.BEAM_NORMAL,
                                 source.nodeName, bestTarget.nodeName, null,
-                                null, 0,
+                                null, 0, false,
                                 1e9f, 1e7f,
                                 PhysicsWorld.KINDA_BIG_NUMBER, (float) finalStrength,
                                 0.0f, (float) precompRange, (float) precompTime,
