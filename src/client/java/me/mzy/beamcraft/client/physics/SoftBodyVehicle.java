@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
+import me.mzy.beamcraft.utility.Utility;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.shape.VoxelShape;
@@ -317,8 +318,9 @@ public class SoftBodyVehicle {
 
         int[] boundedIds = new int[boundedBeams.count];
         for (int i = 0; i < boundedBeams.count; i++) {
-            float stiffness = positive(boundedBeams.spring[i]) + positive(boundedBeams.limitSpring[i]);
-            float damping = maxPositive(
+            float stiffness = Utility.positive(boundedBeams.spring[i])
+                    + Utility.positive(boundedBeams.limitSpring[i]);
+            float damping = Utility.maxPositive(
                     boundedBeams.damp[i], boundedBeams.limitDamp[i], boundedBeams.dampFast[i],
                     boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
             boundedIds[i] = addAxialConstraint(limiter, boundedBeams, i, stiffness,
@@ -333,10 +335,10 @@ public class SoftBodyVehicle {
 
         int[] anisotropicIds = new int[anisotropicBeams.count];
         for (int i = 0; i < anisotropicBeams.count; i++) {
-            float stiffness = Math.max(positive(anisotropicBeams.spring[i]),
-                    positive(anisotropicBeams.springExpansion[i]));
-            float damping = Math.max(positive(anisotropicBeams.damp[i]),
-                    positive(anisotropicBeams.dampExpansion[i]));
+            float stiffness = Math.max(Utility.positive(anisotropicBeams.spring[i]),
+                    Utility.positive(anisotropicBeams.springExpansion[i]));
+            float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
+                    Utility.positive(anisotropicBeams.dampExpansion[i]));
             anisotropicIds[i] = addAxialConstraint(limiter, anisotropicBeams, i, stiffness,
                     Math.min(damping, axialDampingCeiling(anisotropicBeams, i, invDt)));
         }
@@ -347,42 +349,44 @@ public class SoftBodyVehicle {
         allocateAxialBeams(supportBeams, supportIds, limiter, invDt);
         for (int i = 0; i < boundedBeams.count; i++) {
             float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt);
-            float stiffness = positive(boundedBeams.spring[i]) + positive(boundedBeams.limitSpring[i]);
-            float damping = maxPositive(
+            float stiffness = Utility.positive(boundedBeams.spring[i])
+                    + Utility.positive(boundedBeams.limitSpring[i]);
+            float damping = Utility.maxPositive(
                     boundedBeams.damp[i], boundedBeams.limitDamp[i], boundedBeams.dampFast[i],
                     boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     boundedIds[i], stiffness, damping, dampingCeiling);
-            SpringPair springs = capSpringPair(
-                    boundedBeams.spring[i], boundedBeams.limitSpring[i], ceilings.stiffness());
+            Utility.FloatPair springs = Utility.capPairToSum(
+                    boundedBeams.spring[i], boundedBeams.limitSpring[i], ceilings.maxStiffness());
             boundedBeams.spring[i] = springs.first();
             boundedBeams.limitSpring[i] = springs.second();
-            boundedBeams.damp[i] = capDamping(boundedBeams.damp[i], ceilings.damping());
-            boundedBeams.limitDamp[i] = capDamping(boundedBeams.limitDamp[i], ceilings.damping());
-            boundedBeams.dampFast[i] = capDamping(boundedBeams.dampFast[i], ceilings.damping());
-            boundedBeams.dampRebound[i] = capDamping(boundedBeams.dampRebound[i], ceilings.damping());
-            boundedBeams.dampReboundFast[i] = capDamping(boundedBeams.dampReboundFast[i], ceilings.damping());
+            boundedBeams.damp[i] = Math.min(boundedBeams.damp[i], ceilings.maxDamping());
+            boundedBeams.limitDamp[i] = Math.min(boundedBeams.limitDamp[i], ceilings.maxDamping());
+            boundedBeams.dampFast[i] = Math.min(boundedBeams.dampFast[i], ceilings.maxDamping());
+            boundedBeams.dampRebound[i] = Math.min(boundedBeams.dampRebound[i], ceilings.maxDamping());
+            boundedBeams.dampReboundFast[i] = Math.min(
+                    boundedBeams.dampReboundFast[i], ceilings.maxDamping());
         }
         for (int i = 0; i < lBeams.count; i++) {
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     lBeamIds[i], lBeams.spring[i], lBeams.damp[i], lBeamDampingCeilings[i]);
-            lBeams.spring[i] = Math.min(lBeams.spring[i], ceilings.stiffness());
-            lBeams.damp[i] = capDamping(lBeams.damp[i], ceilings.damping());
+            lBeams.spring[i] = Math.min(lBeams.spring[i], ceilings.maxStiffness());
+            lBeams.damp[i] = Math.min(lBeams.damp[i], ceilings.maxDamping());
         }
         for (int i = 0; i < anisotropicBeams.count; i++) {
             float dampingCeiling = axialDampingCeiling(anisotropicBeams, i, invDt);
-            float stiffness = Math.max(positive(anisotropicBeams.spring[i]),
-                    positive(anisotropicBeams.springExpansion[i]));
-            float damping = Math.max(positive(anisotropicBeams.damp[i]),
-                    positive(anisotropicBeams.dampExpansion[i]));
+            float stiffness = Math.max(Utility.positive(anisotropicBeams.spring[i]),
+                    Utility.positive(anisotropicBeams.springExpansion[i]));
+            float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
+                    Utility.positive(anisotropicBeams.dampExpansion[i]));
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     anisotropicIds[i], stiffness, damping, dampingCeiling);
-            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], ceilings.stiffness());
+            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], ceilings.maxStiffness());
             anisotropicBeams.springExpansion[i] = Math.min(
-                    anisotropicBeams.springExpansion[i], ceilings.stiffness());
-            anisotropicBeams.damp[i] = capDamping(anisotropicBeams.damp[i], ceilings.damping());
-            anisotropicBeams.dampExpansion[i] = capDamping(
-                    anisotropicBeams.dampExpansion[i], ceilings.damping());
+                    anisotropicBeams.springExpansion[i], ceilings.maxStiffness());
+            anisotropicBeams.damp[i] = Math.min(anisotropicBeams.damp[i], ceilings.maxDamping());
+            anisotropicBeams.dampExpansion[i] = Math.min(
+                    anisotropicBeams.dampExpansion[i], ceilings.maxDamping());
         }
     }
 
@@ -470,8 +474,8 @@ public class SoftBodyVehicle {
         for (int i = 0; i < beams.count; i++) {
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt));
-            beams.spring[i] = Math.min(beams.spring[i], ceilings.stiffness());
-            beams.damp[i] = capDamping(beams.damp[i], ceilings.damping());
+            beams.spring[i] = Math.min(beams.spring[i], ceilings.maxStiffness());
+            beams.damp[i] = Math.min(beams.damp[i], ceilings.maxDamping());
         }
     }
 
@@ -479,38 +483,8 @@ public class SoftBodyVehicle {
         float m1 = nodes.mass[beams.node1[i]];
         float m2 = nodes.mass[beams.node2[i]];
         if (m1 <= KINDA_SMALL_NUMBER || m2 <= KINDA_SMALL_NUMBER) return 0.0f;
-        return (m1 * m2 / (m1 + m2)) * invDt * 0.95f;
+        return Utility.reducedMass(m1, m2) * invDt * 0.95f;
     }
-
-    private static float positive(float value) {
-        return Math.max(0.0f, value);
-    }
-
-    private static float capDamping(float damping, float ceiling) {
-        return Math.min(damping, ceiling);
-    }
-
-    private static SpringPair capSpringPair(float first, float second, float totalCeiling) {
-        float a = positive(first);
-        float b = positive(second);
-        if (a + b <= totalCeiling) return new SpringPair(first, second);
-
-        float half = totalCeiling * 0.5f;
-        if (a <= b) {
-            float keptA = Math.min(a, half);
-            return new SpringPair(keptA, Math.min(b, totalCeiling - keptA));
-        }
-        float keptB = Math.min(b, half);
-        return new SpringPair(Math.min(a, totalCeiling - keptB), keptB);
-    }
-
-    private static float maxPositive(float... values) {
-        float result = 0.0f;
-        for (float value : values) result = Math.max(result, value);
-        return result;
-    }
-
-    private record SpringPair(float first, float second) {}
 
     /**
      * Reset velocity and deformation state.

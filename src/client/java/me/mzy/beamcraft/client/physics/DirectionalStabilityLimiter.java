@@ -85,9 +85,9 @@ final class DirectionalStabilityLimiter {
 
                 int remainingAdjustments = nodeConstraints.size() + 1;
                 while (remainingAdjustments-- > 0) {
-                    EigenMode mode = largestMode(node, nodeConstraints);
+                    Utility.SymmetricEigenpair3 mode = largestMode(node, nodeConstraints);
                     double budget = 2.0 * nodeMass[node] * invDt * invDt * safetyFraction;
-                    if (mode.value <= budget * (1.0 + 1.0e-7)) break;
+                    if (mode.value() <= budget * (1.0 + 1.0e-7)) break;
 
                     int worstId = -1;
                     double worstContribution = 0.0;
@@ -99,7 +99,7 @@ final class DirectionalStabilityLimiter {
                             contribution = constraint.scale * constraint.q;
                         } else {
                             double[] g = constraint.gradientAt(node);
-                            double projection = g[0] * mode.x + g[1] * mode.y + g[2] * mode.z;
+                            double projection = g[0] * mode.x() + g[1] * mode.y() + g[2] * mode.z();
                             contribution = constraint.scale * constraint.q * projection * projection;
                         }
                         if (contribution > worstContribution) {
@@ -112,7 +112,7 @@ final class DirectionalStabilityLimiter {
                     Constraint worst = constraints.get(worstId);
                     // Multiplying by the modal budget ratio avoids catastrophic
                     // cancellation for values such as Float.MAX_VALUE.
-                    worst.scale *= (budget / mode.value) * (1.0 - 1.0e-7);
+                    worst.scale *= (budget / mode.value()) * (1.0 - 1.0e-7);
                     changed = true;
                 }
             }
@@ -126,10 +126,10 @@ final class DirectionalStabilityLimiter {
             for (int node = 0; node < incident.size(); node++) {
                 List<Integer> nodeConstraints = incident.get(node);
                 if (nodeConstraints.isEmpty() || nodeMass[node] <= PhysicsWorld.KINDA_SMALL_NUMBER) continue;
-                EigenMode mode = largestMode(node, nodeConstraints);
+                Utility.SymmetricEigenpair3 mode = largestMode(node, nodeConstraints);
                 double budget = 2.0 * nodeMass[node] * invDt * invDt * safetyFraction;
-                if (mode.value <= budget) continue;
-                double factor = budget / mode.value;
+                if (mode.value() <= budget) continue;
+                double factor = budget / mode.value();
                 for (int id : nodeConstraints) constraints.get(id).scale *= factor;
                 changed = true;
             }
@@ -152,7 +152,7 @@ final class DirectionalStabilityLimiter {
                 (float) Math.min(Float.MAX_VALUE, c * coefficientScale));
     }
 
-    private EigenMode largestMode(int node, List<Integer> nodeConstraints) {
+    private Utility.SymmetricEigenpair3 largestMode(int node, List<Integer> nodeConstraints) {
         double a00 = 0.0, a01 = 0.0, a02 = 0.0;
         double a11 = 0.0, a12 = 0.0, a22 = 0.0;
         for (int id : nodeConstraints) {
@@ -175,32 +175,7 @@ final class DirectionalStabilityLimiter {
             a22 += coefficient * z * z;
         }
 
-        double value = Utility.maxEigenvalueSym3x3(a00, a01, a02, a11, a12, a22);
-        if (!(value > EPS) || !Double.isFinite(value)) {
-            return new EigenMode(Math.max(0.0, value), 1.0, 0.0, 0.0);
-        }
-
-        double x;
-        double y;
-        double z;
-        if (a00 >= a11 && a00 >= a22) {
-            x = 1.0; y = 0.0; z = 0.0;
-        } else if (a11 >= a22) {
-            x = 0.0; y = 1.0; z = 0.0;
-        } else {
-            x = 0.0; y = 0.0; z = 1.0;
-        }
-        for (int i = 0; i < 24; i++) {
-            double nx = a00 * x + a01 * y + a02 * z;
-            double ny = a01 * x + a11 * y + a12 * z;
-            double nz = a02 * x + a12 * y + a22 * z;
-            double length = Math.sqrt(nx * nx + ny * ny + nz * nz);
-            if (!(length > EPS) || !Double.isFinite(length)) break;
-            x = nx / length;
-            y = ny / length;
-            z = nz / length;
-        }
-        return new EigenMode(value, x, y, z);
+        return Utility.dominantEigenpairSym3x3(a00, a01, a02, a11, a12, a22);
     }
 
     private static final class Constraint {
@@ -225,8 +200,6 @@ final class DirectionalStabilityLimiter {
         }
     }
 
-    private record EigenMode(double value, double x, double y, double z) {}
-
-    record CoefficientCeilings(float stiffness, float damping) {}
+    record CoefficientCeilings(float maxStiffness, float maxDamping) {}
 
 }

@@ -43,8 +43,8 @@ class DirectionalStabilityLimiterTest {
         assertEquals(0.5f, limiter.scale(constraint), 1.0e-4f);
         DirectionalStabilityLimiter.CoefficientCeilings ceilings =
                 limiter.ceilings(constraint, 180, 9, 9);
-        assertEquals(90.0f, ceilings.stiffness(), 1.0e-3f);
-        assertEquals(4.5f, ceilings.damping(), 1.0e-3f);
+        assertEquals(90.0f, ceilings.maxStiffness(), 1.0e-3f);
+        assertEquals(4.5f, ceilings.maxDamping(), 1.0e-3f);
     }
 
     @Test
