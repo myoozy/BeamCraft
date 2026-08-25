@@ -595,6 +595,12 @@ public class WheelContainer {
         }
     }
 
+    public void reset() {
+        for (int i = 0; i < count; i++) {
+            isDeflated[i] = false;
+        }
+    }
+
     public void clear() {
         count = 0;
         nameToIndex.clear();

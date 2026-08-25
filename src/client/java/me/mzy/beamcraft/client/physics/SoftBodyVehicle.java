@@ -500,6 +500,7 @@ public class SoftBodyVehicle {
         anisotropicBeams.reset();
         triangles.reset();
         torsionbars.reset();
+        wheels.reset();
         System.out.println("Vehicle reset.");
     }
 

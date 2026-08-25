@@ -25,7 +25,7 @@ import org.lwjgl.glfw.GLFW;
 import java.io.File;
 
 public class BeamCraftClient implements ClientModInitializer {
-	private static final boolean DEBUG_DRAW = true;
+	private static final boolean DEBUG_DRAW = false;
 	private static final boolean DEBUG_SHOW_BEAMS = true;
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
