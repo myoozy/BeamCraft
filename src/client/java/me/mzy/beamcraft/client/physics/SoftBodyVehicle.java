@@ -30,6 +30,7 @@ public class SoftBodyVehicle {
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
+    public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -519,6 +520,7 @@ public class SoftBodyVehicle {
         slidenodes.clear();
         wheels.clear();
         flexbodies.clear();
+        renderTimeline.clear();
         breakGroupMap.clear();
         triggeredBreakGroups.clear();
         maxTrackedPartId = -1;

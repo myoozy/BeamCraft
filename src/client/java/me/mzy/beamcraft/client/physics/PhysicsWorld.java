@@ -6,6 +6,9 @@ import me.mzy.beamcraft.network.VehicleSyncPayload;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Core physical world controller for beam-based vehicle simulation
  * Manages nodes, beams, collision caching and physics integration
@@ -24,6 +27,8 @@ public class PhysicsWorld {
     public static final float KINDA_BIG_NUMBER = 1e8f;
     public static final int MAX_AABB_SIZE = 10;
     public static final float invPhysicsDT = 2000.0f;
+    /** Publish one render snapshot per this many 2000 Hz physics substeps. */
+    public static final int RENDER_SNAPSHOT_SUBSTEP_INTERVAL = 10;
 
     public final VoxelSnapshot voxelSnapshot = new VoxelSnapshot();
     BlockPos.Mutable mutablePos = new BlockPos.Mutable();
@@ -67,31 +72,60 @@ public class PhysicsWorld {
     }
 
     /**
-     * Main physics update loop
+     * Captures every piece of Minecraft-owned state needed by one physics step.
+     * This method must run on the client thread, after the previous prepared
+     * step has completed.
      */
-    public void step(World mcWorld, double dt, double[] lastPhycisMsDetail) {
+    public PreparedStep prepareStep(World mcWorld, double dt) {
+        long startedNanos = System.nanoTime();
+        List<SoftBodyVehicle> activeVehicles = List.copyOf(vehicles);
         int subSteps = (int)Math.ceil(dt * invPhysicsDT);
-        float subDt = (float) (dt / subSteps);
-        float plasticRelaxation = (float) (1.0 - Math.exp(-PLASTIC_RELAXATION_RATE * subDt));
-        int broadphaseRate = 10;
-
-        long t1 = System.nanoTime();
 
         voxelSnapshot.clear();
-        for (SoftBodyVehicle vehicle : vehicles) {
+        for (SoftBodyVehicle vehicle : activeVehicles) {
             vehicle.cacheEntityLocation();
             vehicle.updateVoxelSnapshot(mcWorld, voxelSnapshot, mutablePos, dt);
         }
 
-        long t2 = System.nanoTime();
-        double mcWorldScanMs = (t2 - t1) / 1_000_000.0;
+        int renderSnapshotCount = 1 + Math.ceilDiv(subSteps, RENDER_SNAPSHOT_SUBSTEP_INTERVAL);
+        long stepDurationNanos = Math.round(dt * 1_000_000_000.0);
+        List<PhysicsRenderTimeline.Writer> renderWriters = new ArrayList<>(activeVehicles.size());
+        for (SoftBodyVehicle vehicle : activeVehicles) {
+            NodeContainer nodes = vehicle.nodes;
+            renderWriters.add(vehicle.renderTimeline.beginStep(
+                    startedNanos,
+                    stepDurationNanos,
+                    renderSnapshotCount,
+                    nodes.posX,
+                    nodes.posY,
+                    nodes.posZ,
+                    nodes.count
+            ));
+        }
+
+        double mcWorldScanMs = (System.nanoTime() - startedNanos) / 1_000_000.0;
+        return new PreparedStep(activeVehicles, renderWriters, dt, subSteps, startedNanos, mcWorldScanMs);
+    }
+
+    /**
+     * Runs the pure physics portion of a prepared step. Minecraft world,
+     * entity, renderer and networking APIs must not be touched from here.
+     */
+    public StepResult simulatePreparedStep(PreparedStep preparedStep) {
+        List<SoftBodyVehicle> activeVehicles = preparedStep.activeVehicles();
+        double dt = preparedStep.dt();
+        int subSteps = preparedStep.subSteps();
+        float subDt = (float) (dt / subSteps);
+        float plasticRelaxation = (float) (1.0 - Math.exp(-PLASTIC_RELAXATION_RATE * subDt));
+        int broadphaseRate = 10;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
 
+        int nextRenderSnapshotIndex = 1;
         for (int s = 0; s < subSteps; s++) {
 
             long ti1 = System.nanoTime();
 
-            vehicles.parallelStream().forEach(vehicle -> {
+            activeVehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveInternalForces(subDt, plasticRelaxation);
             });
 
@@ -103,7 +137,7 @@ public class PhysicsWorld {
                 globalSap.clear();
 
                 int activeOffset = 0;
-                for (SoftBodyVehicle vehicle : vehicles) {
+                for (SoftBodyVehicle vehicle : activeVehicles) {
                     vehicle.globalNodeOffset = activeOffset;
                     activeOffset += vehicle.nodes.count;
 
@@ -119,7 +153,7 @@ public class PhysicsWorld {
 
                 collisionManager.clearContacts();
 
-                vehicles.parallelStream().forEach(vehicle -> {
+                activeVehicles.parallelStream().forEach(vehicle -> {
                     vehicle.generateCollisionCandidates(globalSap, collisionManager, subDt * broadphaseRate);
                 });
 
@@ -136,24 +170,53 @@ public class PhysicsWorld {
             long ti4 = System.nanoTime();
             softCollisionMs += (ti4 - ti3) / 1_000_000.0;
 
-            vehicles.parallelStream().forEach(vehicle -> {
+            activeVehicles.parallelStream().forEach(vehicle -> {
                 vehicle.solveEnvironmentCollisions(voxelSnapshot, subDt);
             });
 
             long ti5 = System.nanoTime();
             mcCollisionMs += (ti5 - ti4) / 1_000_000.0;
+
+            int completedSubSteps = s + 1;
+            if (isRenderSnapshotBoundary(completedSubSteps, subSteps)) {
+                long simulatedOffsetNanos = Math.round(
+                        (double) completedSubSteps / (double) subSteps * dt * 1_000_000_000.0);
+                publishRenderSnapshots(
+                        activeVehicles,
+                        preparedStep.renderWriters(),
+                        nextRenderSnapshotIndex++,
+                        simulatedOffsetNanos
+                );
+            }
         }
 
         long t3 = System.nanoTime();
-        vehicles.parallelStream().forEach(vehicle -> {
+        activeVehicles.parallelStream().forEach(vehicle -> {
             vehicle.updateLocalCOMCache();
             vehicle.updateBeamPrecompression(dt);
-            vehicle.nodes.writeRenderBuffer();
         });
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        for (SoftBodyVehicle vehicle : vehicles) {
+        double[] timings = new double[9];
+        timings[1] = preparedStep.mcWorldScanMs();
+        timings[2] = internalForceMs;
+        timings[3] = globalSAPMs;
+        timings[4] = dyeCollisionMs;
+        timings[5] = softCollisionMs;
+        timings[6] = mcCollisionMs;
+        timings[7] = postUpdateMs;
+        return new StepResult(preparedStep, timings, System.nanoTime());
+    }
+
+    /**
+     * Publishes a completed physics step back to Minecraft. This method must
+     * run on the client thread before vehicle lifecycle changes for the tick.
+     */
+    public double[] commitPreparedStep(StepResult result) {
+        long commitStartedNanos = System.nanoTime();
+        for (SoftBodyVehicle vehicle : result.preparedStep().activeVehicles()) {
+            vehicle.nodes.writeRenderBuffer();
             vehicle.updateEntityLocation();
             if (vehicle.parentEntity != null && ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
                 ClientPlayNetworking.send(new VehicleSyncPayload(
@@ -165,19 +228,57 @@ public class PhysicsWorld {
                 ));
             }
         }
-        long t5 = System.nanoTime();
-        double moveEntityMs = (t5 - t4) / 1_000_000.0;
+        double[] timings = result.timings();
+        timings[8] = (System.nanoTime() - commitStartedNanos) / 1_000_000.0;
+        timings[0] = (result.finishedNanos() - result.preparedStep().startedNanos()) / 1_000_000.0
+                + timings[8];
+        return timings;
+    }
 
-        double totalMs = (t5 - t1) / 1_000_000.0;
-        lastPhycisMsDetail[0] = totalMs;
-        lastPhycisMsDetail[1] = mcWorldScanMs;
-        lastPhycisMsDetail[2] = internalForceMs;
-        lastPhycisMsDetail[3] = globalSAPMs;
-        lastPhycisMsDetail[4] = dyeCollisionMs;
-        lastPhycisMsDetail[5] = softCollisionMs;
-        lastPhycisMsDetail[6] = mcCollisionMs;
-        lastPhycisMsDetail[7] = postUpdateMs;
-        lastPhycisMsDetail[8] = moveEntityMs;
+    /**
+     * Synchronous compatibility entry point used by tools and tests.
+     */
+    public void step(World mcWorld, double dt, double[] lastPhycisMsDetail) {
+        StepResult result = simulatePreparedStep(prepareStep(mcWorld, dt));
+        double[] timings = commitPreparedStep(result);
+        System.arraycopy(timings, 0, lastPhycisMsDetail, 0,
+                Math.min(timings.length, lastPhycisMsDetail.length));
+    }
+
+    public record PreparedStep(
+            List<SoftBodyVehicle> activeVehicles,
+            List<PhysicsRenderTimeline.Writer> renderWriters,
+            double dt,
+            int subSteps,
+            long startedNanos,
+            double mcWorldScanMs
+    ) {
+    }
+
+    public record StepResult(PreparedStep preparedStep, double[] timings, long finishedNanos) {
+    }
+
+    private static boolean isRenderSnapshotBoundary(int completedSubSteps, int totalSubSteps) {
+        return completedSubSteps == totalSubSteps
+                || completedSubSteps % RENDER_SNAPSHOT_SUBSTEP_INTERVAL == 0;
+    }
+
+    private static void publishRenderSnapshots(
+            List<SoftBodyVehicle> activeVehicles,
+            List<PhysicsRenderTimeline.Writer> renderWriters,
+            int snapshotIndex,
+            long simulatedOffsetNanos
+    ) {
+        for (int vehicleIndex = 0; vehicleIndex < activeVehicles.size(); vehicleIndex++) {
+            NodeContainer nodes = activeVehicles.get(vehicleIndex).nodes;
+            renderWriters.get(vehicleIndex).publish(
+                    snapshotIndex,
+                    simulatedOffsetNanos,
+                    nodes.posX,
+                    nodes.posY,
+                    nodes.posZ
+            );
+        }
     }
 
     /**

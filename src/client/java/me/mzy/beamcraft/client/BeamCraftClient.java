@@ -6,6 +6,7 @@ import me.mzy.beamcraft.client.assets.BeamCraftConfig;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
 import me.mzy.beamcraft.client.render.VehicleTextureUploader;
+import me.mzy.beamcraft.client.physics.AsyncPhysicsScheduler;
 import me.mzy.beamcraft.client.physics.PhysicsWorld;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 
@@ -21,6 +22,7 @@ import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -32,9 +34,12 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final boolean DEBUG_SHOW_BEAMS = true;
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
+	private static long lastOverrunNoticeNanos = 0L;
+	private static boolean physicsFailureReported = false;
 	public static final double DELTA_TIME = 0.05;
 
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
+	public static final AsyncPhysicsScheduler PHYSICS_SCHEDULER = new AsyncPhysicsScheduler(PHYSICS_WORLD);
 	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
 	public static final File VEHICLES_DIR = new File(GAME_DIR, "mods/beamcraft/vehicles");
 	// 资产根列表，来自 config/beamcraft.json；默认仍指向 VEHICLES_DIR
@@ -42,6 +47,8 @@ public class BeamCraftClient implements ClientModInitializer {
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
+	public static double lastPhysicsWaitMs = 0.0;
+	public static boolean lastPhysicsOverBudget = false;
 	public static double[] lastPhysicsMsDetail = new double[9];
 
 	@Override
@@ -55,22 +62,54 @@ public class BeamCraftClient implements ClientModInitializer {
 			if (!root.exists()) root.mkdirs();
 		}
 
-		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			// 让管理器接管一切生命周期
-			ClientVehicleManager.update(client);
-		});
-
 		ClientVehicleManager.initRenderHooks(); // 初始化渲染
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
 
-		// Close render-thread GL-owned vehicle textures on client shutdown.
-		ClientLifecycleEvents.CLIENT_STOPPING.register(client ->
-				VehicleTextureUploader.INSTANCE.closeFromAnyThread());
+		// Stop CPU physics before closing render-thread-owned resources.
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			PHYSICS_SCHEDULER.close();
+			VehicleTextureUploader.INSTANCE.closeFromAnyThread();
+		});
 
-		// 1. 物理计算与控制循环 (每帧运行)
-		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			if (client.player == null || client.world == null) return;
+		// One game tick owns one fixed physics step. The preceding step is
+		// committed first; only an over-budget step blocks this tick boundary.
+		ClientTickEvents.START_CLIENT_TICK.register(client -> {
 			PhysicsWorld world = PHYSICS_WORLD;
+			AsyncPhysicsScheduler.Completion completion = PHYSICS_SCHEDULER.finishPreviousStep();
+			if (completion != null) {
+				lastPhysicsWaitMs = completion.waitMs();
+				lastPhysicsOverBudget = completion.overBudget();
+				if (completion.timings() != null) {
+					lastPhysicsMsDetail = completion.timings();
+					lastPhysicsMs = lastPhysicsMsDetail[0];
+				}
+
+				if (completion.failure() != null && !physicsFailureReported) {
+					physicsFailureReported = true;
+					BeamCraft.LOGGER.error("Asynchronous BeamCraft physics stopped after a worker failure",
+							completion.failure());
+					if (client.player != null) {
+						client.player.sendMessage(Text.literal(
+								"[BeamCraft] Physics worker failed; simulation stopped. Check latest.log."), false);
+					}
+				} else if (completion.overBudget()) {
+					long now = System.nanoTime();
+					if (now - lastOverrunNoticeNanos >= 5_000_000_000L) {
+						lastOverrunNoticeNanos = now;
+						BeamCraft.LOGGER.error("BeamCraft physics step exceeded the 50 ms tick budget: {} ms (tick waited {} ms)",
+								String.format("%.2f", lastPhysicsMs), String.format("%.2f", lastPhysicsWaitMs));
+						if (client.player != null) {
+							client.player.sendMessage(Text.literal(String.format(
+									"[BeamCraft] Physics overrun: %.2f ms (tick barrier %.2f ms)",
+									lastPhysicsMs, lastPhysicsWaitMs)), false);
+						}
+					}
+				}
+			}
+
+			// Vehicle creation/removal is safe only after the previous job joined.
+			ClientVehicleManager.update(client);
+			if (client.player == null || client.world == null || PHYSICS_SCHEDULER.failure() != null) return;
 
 			// 检测 G 键 (调试功能：瞬间重置所有现存车辆，并传送到玩家头顶)
 			boolean isG = InputUtil.isKeyPressed(client.getWindow().getHandle(), GLFW.GLFW_KEY_G);
@@ -85,13 +124,10 @@ public class BeamCraftClient implements ClientModInitializer {
 			}
 			gWasPressed = isG;
 
-			// 统一执行物理世界所有车辆的更新
+			// World access happens synchronously in prepareStep; the 100 substeps
+			// then run independently until the next game-tick barrier.
 			if (!world.vehicles.isEmpty()) {
-				long t1 = System.nanoTime();
-				world.step(client.world, DELTA_TIME, lastPhysicsMsDetail);
-				long t2 = System.nanoTime();
-
-				lastPhysicsMs = (t2 - t1) / 1_000_000.0;
+				PHYSICS_SCHEDULER.startStep(client.world, DELTA_TIME);
 			}
 		});
 
@@ -102,6 +138,7 @@ public class BeamCraftClient implements ClientModInitializer {
 
 			String physicsStepText = String.format("BeamCraft Physics: %.2f ms", lastPhysicsMs);
 			String[] lines = {
+					String.format("tickBarrierWait: %.2f ms", lastPhysicsWaitMs),
 					String.format("mcWorldScan: %.2f ms", lastPhysicsMsDetail[1]),
 					String.format("internalForce: %.2f ms", lastPhysicsMsDetail[2]),
 					String.format("globalSAP: %.2f ms", lastPhysicsMsDetail[3]),
@@ -112,7 +149,9 @@ public class BeamCraftClient implements ClientModInitializer {
 					String.format("moveEntity: %.2f ms", lastPhysicsMsDetail[8])
 			};
 
-			int color = (lastPhysicsMs > 10.0) ? 0xFF0000 : 0x00FF00;
+			int color = (lastPhysicsOverBudget || PHYSICS_SCHEDULER.failure() != null)
+					? 0xFF0000
+					: (lastPhysicsMs > 10.0 ? 0xFFFF00 : 0x00FF00);
 
 			// 标题
 			drawContext.drawTextWithShadow(

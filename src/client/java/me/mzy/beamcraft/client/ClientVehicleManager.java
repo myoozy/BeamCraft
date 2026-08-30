@@ -169,6 +169,7 @@ public final class ClientVehicleManager {
             }
 
             float tickDelta = context.tickCounter().getTickDelta(true);
+            long renderNanos = System.nanoTime();
             long renderMoment = client.world.getTime() << 32
                     ^ Integer.toUnsignedLong(Float.floatToRawIntBits(tickDelta));
 
@@ -188,22 +189,31 @@ public final class ClientVehicleManager {
                 }
 
                 ensureInterpolationCapacity(nodes.count);
-                for (int node = 0; node < nodes.count; node++) {
-                    sharedInterpX[node] = interpolate(
-                            nodes.renderSnapPrevX[node],
-                            nodes.renderSnapCurrX[node],
-                            tickDelta
-                    );
-                    sharedInterpY[node] = interpolate(
-                            nodes.renderSnapPrevY[node],
-                            nodes.renderSnapCurrY[node],
-                            tickDelta
-                    );
-                    sharedInterpZ[node] = interpolate(
-                            nodes.renderSnapPrevZ[node],
-                            nodes.renderSnapCurrZ[node],
-                            tickDelta
-                    );
+                boolean sampledTimeline = vehicle.renderTimeline.sample(
+                        renderNanos,
+                        sharedInterpX,
+                        sharedInterpY,
+                        sharedInterpZ,
+                        nodes.count
+                );
+                if (!sampledTimeline) {
+                    for (int node = 0; node < nodes.count; node++) {
+                        sharedInterpX[node] = interpolate(
+                                nodes.renderSnapPrevX[node],
+                                nodes.renderSnapCurrX[node],
+                                tickDelta
+                        );
+                        sharedInterpY[node] = interpolate(
+                                nodes.renderSnapPrevY[node],
+                                nodes.renderSnapCurrY[node],
+                                tickDelta
+                        );
+                        sharedInterpZ[node] = interpolate(
+                                nodes.renderSnapPrevZ[node],
+                                nodes.renderSnapCurrZ[node],
+                                tickDelta
+                        );
+                    }
                 }
 
                 flex.skinningPipeline.updateGpuSkinning(
