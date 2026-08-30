@@ -72,6 +72,7 @@ public class PhysicsWorld {
     public void step(World mcWorld, double dt, double[] lastPhycisMsDetail) {
         int subSteps = (int)Math.ceil(dt * invPhysicsDT);
         float subDt = (float) (dt / subSteps);
+        float plasticRelaxation = (float) (1.0 - Math.exp(-PLASTIC_RELAXATION_RATE * subDt));
         int broadphaseRate = 10;
 
         long t1 = System.nanoTime();
@@ -91,7 +92,7 @@ public class PhysicsWorld {
             long ti1 = System.nanoTime();
 
             vehicles.parallelStream().forEach(vehicle -> {
-                vehicle.solveInternalForces(subDt);
+                vehicle.solveInternalForces(subDt, plasticRelaxation);
             });
 
             long ti2 = System.nanoTime();

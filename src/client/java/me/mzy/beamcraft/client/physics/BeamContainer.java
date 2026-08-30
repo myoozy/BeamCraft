@@ -30,6 +30,7 @@ public class BeamContainer {
     public float[] deform;
     public float[] baseDeform;
     public float[] deformLimitStress;
+    public float[] maxDeform;
     public float[] strength;
     public boolean[] broken;
     public int[] breakGroupType;
@@ -49,6 +50,7 @@ public class BeamContainer {
         deform = new float[INIT_BEAM_CAP];
         baseDeform = new float[INIT_BEAM_CAP];
         deformLimitStress = new float[INIT_BEAM_CAP];
+        maxDeform = new float[INIT_BEAM_CAP];
         strength = new float[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
@@ -79,6 +81,7 @@ public class BeamContainer {
         deform = Utility.expand(deform, newSize);
         baseDeform = Utility.expand(baseDeform, newSize);
         deformLimitStress = Utility.expand(deformLimitStress, newSize);
+        maxDeform = Utility.expand(maxDeform, newSize);
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
         breakGroupType = Utility.expand(breakGroupType, newSize);
@@ -119,6 +122,8 @@ public class BeamContainer {
         this.baseDeform[idx] = spec.deform();
         this.deformLimitStress[idx] = spec.deformLimitStress();
         this.strength[idx] = spec.strength();
+        float hardeningLimit = spec.deform() + Math.max(0.0f, spec.deformLimitStress());
+        this.maxDeform[idx] = Math.min(spec.strength(), hardeningLimit);
         this.broken[idx] = false;
         this.breakGroupType[idx] = spec.breakGroupType();
         this.disableTriangleBreaking[idx] = spec.disableTriangleBreaking();

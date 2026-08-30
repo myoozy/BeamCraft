@@ -720,55 +720,38 @@ public class SoftBodyVehicle {
      * The exponential relaxation is timestep independent and never overshoots the
      * current hardening surface for a single solve.
      */
-    private static float plasticDelta(float elasticLoad, float yieldLoad, float maxYieldLoad,
-                                      float stiffness, float relaxation) {
-        if (!(stiffness > KINDA_SMALL_NUMBER)) return 0.0f;
-        float excessLoad = Math.abs(elasticLoad) - Math.max(0.0f, yieldLoad);
-        if (!(excessLoad > 0.0f)) return 0.0f;
-
+    private static float plasticDeltaFromExcess(float excessLoad, float yieldLoad, float maxYieldLoad,
+                                                float stiffness, float relaxation) {
+        float invStiffness = 1.0f / stiffness;
         float remainingHardening = Math.max(0.0f, maxYieldLoad - yieldLoad);
         float targetDelta;
         if (remainingHardening > 0.0f) {
-            float deltaToHardeningLimit = remainingHardening / stiffness;
-            float deltaOnHardeningSurface = excessLoad / (2.0f * stiffness);
-            if (deltaOnHardeningSurface <= deltaToHardeningLimit) {
-                targetDelta = deltaOnHardeningSurface;
+            if (excessLoad <= 2.0f * remainingHardening) {
+                targetDelta = 0.5f * excessLoad * invStiffness;
             } else {
-                float residualLoad = excessLoad - 2.0f * stiffness * deltaToHardeningLimit;
-                targetDelta = deltaToHardeningLimit + Math.max(0.0f, residualLoad) / stiffness;
+                targetDelta = (excessLoad - remainingHardening) * invStiffness;
             }
         } else {
-            targetDelta = excessLoad / stiffness;
+            targetDelta = excessLoad * invStiffness;
         }
         return relaxation * targetDelta;
     }
 
-    private static double plasticDelta(double elasticLoad, double yieldLoad, double maxYieldLoad,
-                                       double stiffness, double relaxation) {
-        if (!(stiffness > KINDA_SMALL_NUMBER)) return 0.0;
-        double excessLoad = Math.abs(elasticLoad) - Math.max(0.0, yieldLoad);
-        if (!(excessLoad > 0.0)) return 0.0;
-
+    private static double plasticDeltaFromExcess(double excessLoad, double yieldLoad, double maxYieldLoad,
+                                                 double stiffness, double relaxation) {
+        double invStiffness = 1.0 / stiffness;
         double remainingHardening = Math.max(0.0, maxYieldLoad - yieldLoad);
         double targetDelta;
         if (remainingHardening > 0.0) {
-            double deltaToHardeningLimit = remainingHardening / stiffness;
-            double deltaOnHardeningSurface = excessLoad / (2.0 * stiffness);
-            if (deltaOnHardeningSurface <= deltaToHardeningLimit) {
-                targetDelta = deltaOnHardeningSurface;
+            if (excessLoad <= 2.0 * remainingHardening) {
+                targetDelta = 0.5 * excessLoad * invStiffness;
             } else {
-                double residualLoad = excessLoad - 2.0 * stiffness * deltaToHardeningLimit;
-                targetDelta = deltaToHardeningLimit + Math.max(0.0, residualLoad) / stiffness;
+                targetDelta = (excessLoad - remainingHardening) * invStiffness;
             }
         } else {
-            targetDelta = excessLoad / stiffness;
+            targetDelta = excessLoad * invStiffness;
         }
         return relaxation * targetDelta;
-    }
-
-    private static float maxHardenedDeform(BeamContainer beams, int index) {
-        float hardeningLimit = beams.baseDeform[index] + Math.max(0.0f, beams.deformLimitStress[index]);
-        return Math.min(beams.strength[index], hardeningLimit);
     }
 
     private static float hardenDeform(float currentDeform, float maxDeform, float stiffness, float permanentDelta) {
@@ -817,16 +800,20 @@ public class SoftBodyVehicle {
                 continue;
             }
 
-            float maxDeform = maxHardenedDeform(normalBeams, i);
-            float permanentDelta = plasticDelta(springForce, normalBeams.deform[i], maxDeform,
-                    activeSpring, plasticRelaxation);
-            if (permanentDelta > 0.0f) {
-                float newRestLength = Math.max(KINDA_SMALL_NUMBER,
-                        restL + Math.signum(springForce) * permanentDelta);
-                float appliedDelta = Math.abs(newRestLength - restL);
-                normalBeams.restLength[i] = newRestLength;
-                normalBeams.deform[i] = hardenDeform(normalBeams.deform[i], maxDeform,
-                        activeSpring, appliedDelta);
+            float absSpringForce = Math.abs(springForce);
+            if (activeSpring > KINDA_SMALL_NUMBER && absSpringForce > normalBeams.deform[i]) {
+                float maxDeform = normalBeams.maxDeform[i];
+                float permanentDelta = plasticDeltaFromExcess(absSpringForce - normalBeams.deform[i],
+                        normalBeams.deform[i], maxDeform,
+                        activeSpring, plasticRelaxation);
+                if (permanentDelta > 0.0f) {
+                    float newRestLength = Math.max(KINDA_SMALL_NUMBER,
+                            restL + Math.signum(springForce) * permanentDelta);
+                    float appliedDelta = Math.abs(newRestLength - restL);
+                    normalBeams.restLength[i] = newRestLength;
+                    normalBeams.deform[i] = hardenDeform(normalBeams.deform[i], maxDeform,
+                            activeSpring, appliedDelta);
+                }
             }
 
             float fx = totalForce * dx * invDist;
@@ -876,16 +863,20 @@ public class SoftBodyVehicle {
                 continue;
             }
 
-            float maxDeform = maxHardenedDeform(supportBeams, i);
-            float permanentDelta = plasticDelta(springForce, supportBeams.deform[i], maxDeform,
-                    activeSpring, plasticRelaxation);
-            if (permanentDelta > 0.0f) {
-                float newRestLength = Math.max(KINDA_SMALL_NUMBER,
-                        restL + Math.signum(springForce) * permanentDelta);
-                float appliedDelta = Math.abs(newRestLength - restL);
-                supportBeams.restLength[i] = newRestLength;
-                supportBeams.deform[i] = hardenDeform(supportBeams.deform[i], maxDeform,
-                        activeSpring, appliedDelta);
+            float absSpringForce = Math.abs(springForce);
+            if (activeSpring > KINDA_SMALL_NUMBER && absSpringForce > supportBeams.deform[i]) {
+                float maxDeform = supportBeams.maxDeform[i];
+                float permanentDelta = plasticDeltaFromExcess(absSpringForce - supportBeams.deform[i],
+                        supportBeams.deform[i], maxDeform,
+                        activeSpring, plasticRelaxation);
+                if (permanentDelta > 0.0f) {
+                    float newRestLength = Math.max(KINDA_SMALL_NUMBER,
+                            restL + Math.signum(springForce) * permanentDelta);
+                    float appliedDelta = Math.abs(newRestLength - restL);
+                    supportBeams.restLength[i] = newRestLength;
+                    supportBeams.deform[i] = hardenDeform(supportBeams.deform[i], maxDeform,
+                            activeSpring, appliedDelta);
+                }
             }
 
             float fx = totalForce * dx * invDist;
@@ -968,16 +959,20 @@ public class SoftBodyVehicle {
                 continue;
             }
 
-            float maxDeform = maxHardenedDeform(boundedBeams, i);
-            float permanentDelta = plasticDelta(springForce, boundedBeams.deform[i], maxDeform,
-                    plasticStiffness, plasticRelaxation);
-            if (permanentDelta > 0.0f) {
-                float newRestLength = Math.max(KINDA_SMALL_NUMBER,
-                        restL + Math.signum(springForce) * permanentDelta);
-                float appliedDelta = Math.abs(newRestLength - restL);
-                boundedBeams.restLength[i] = newRestLength;
-                boundedBeams.deform[i] = hardenDeform(boundedBeams.deform[i], maxDeform,
-                        plasticStiffness, appliedDelta);
+            float absSpringForce = Math.abs(springForce);
+            if (plasticStiffness > KINDA_SMALL_NUMBER && absSpringForce > boundedBeams.deform[i]) {
+                float maxDeform = boundedBeams.maxDeform[i];
+                float permanentDelta = plasticDeltaFromExcess(absSpringForce - boundedBeams.deform[i],
+                        boundedBeams.deform[i], maxDeform,
+                        plasticStiffness, plasticRelaxation);
+                if (permanentDelta > 0.0f) {
+                    float newRestLength = Math.max(KINDA_SMALL_NUMBER,
+                            restL + Math.signum(springForce) * permanentDelta);
+                    float appliedDelta = Math.abs(newRestLength - restL);
+                    boundedBeams.restLength[i] = newRestLength;
+                    boundedBeams.deform[i] = hardenDeform(boundedBeams.deform[i], maxDeform,
+                            plasticStiffness, appliedDelta);
+                }
             }
 
             float fx = totalForce * dx * invDist;
@@ -1057,17 +1052,21 @@ public class SoftBodyVehicle {
                 continue;
             }
 
-            float maxDeform = maxHardenedDeform(lBeams, i);
-            double permanentDelta = plasticDelta(springForce, lBeams.deform[i], maxDeform,
-                    activeSpring, plasticRelaxation);
-            if (permanentDelta > 0.0) {
-                double newTargetDist = targetDist + Math.signum(springForce) * permanentDelta;
-                newTargetDist = Math.clamp(newTargetDist, Math.abs(l1 - l2), l1 + l2);
-                double appliedDelta = Math.abs(newTargetDist - targetDist);
-                double newRestCos = (l1Sq + l2Sq - newTargetDist * newTargetDist) / (2.0 * l1 * l2);
-                lBeams.restCosTheta[i] = (float) Math.clamp(newRestCos, -1.0, 1.0);
-                lBeams.deform[i] = (float) hardenDeform(lBeams.deform[i], maxDeform,
-                        activeSpring, appliedDelta);
+            double absSpringForce = Math.abs(springForce);
+            if (activeSpring > KINDA_SMALL_NUMBER && absSpringForce > lBeams.deform[i]) {
+                float maxDeform = lBeams.maxDeform[i];
+                double permanentDelta = plasticDeltaFromExcess(absSpringForce - lBeams.deform[i],
+                        lBeams.deform[i], maxDeform,
+                        activeSpring, plasticRelaxation);
+                if (permanentDelta > 0.0) {
+                    double newTargetDist = targetDist + Math.signum(springForce) * permanentDelta;
+                    newTargetDist = Math.clamp(newTargetDist, Math.abs(l1 - l2), l1 + l2);
+                    double appliedDelta = Math.abs(newTargetDist - targetDist);
+                    double newRestCos = (l1Sq + l2Sq - newTargetDist * newTargetDist) / (2.0 * l1 * l2);
+                    lBeams.restCosTheta[i] = (float) Math.clamp(newRestCos, -1.0, 1.0);
+                    lBeams.deform[i] = (float) hardenDeform(lBeams.deform[i], maxDeform,
+                            activeSpring, appliedDelta);
+                }
             }
 
             double u13x = dx13 * invL1,   u13y = dy13 * invL1,   u13z = dz13 * invL1;
@@ -1151,16 +1150,20 @@ public class SoftBodyVehicle {
                 continue;
             }
 
-            float maxDeform = maxHardenedDeform(anisotropicBeams, i);
-            float permanentDelta = plasticDelta(springForce, anisotropicBeams.deform[i], maxDeform,
-                    activeSpring, plasticRelaxation);
-            if (permanentDelta > 0.0f) {
-                float newRestLength = Math.max(KINDA_SMALL_NUMBER,
-                        restL + Math.signum(springForce) * permanentDelta);
-                float appliedDelta = Math.abs(newRestLength - restL);
-                anisotropicBeams.restLength[i] = newRestLength;
-                anisotropicBeams.deform[i] = hardenDeform(anisotropicBeams.deform[i], maxDeform,
-                        activeSpring, appliedDelta);
+            float absSpringForce = Math.abs(springForce);
+            if (activeSpring > KINDA_SMALL_NUMBER && absSpringForce > anisotropicBeams.deform[i]) {
+                float maxDeform = anisotropicBeams.maxDeform[i];
+                float permanentDelta = plasticDeltaFromExcess(absSpringForce - anisotropicBeams.deform[i],
+                        anisotropicBeams.deform[i], maxDeform,
+                        activeSpring, plasticRelaxation);
+                if (permanentDelta > 0.0f) {
+                    float newRestLength = Math.max(KINDA_SMALL_NUMBER,
+                            restL + Math.signum(springForce) * permanentDelta);
+                    float appliedDelta = Math.abs(newRestLength - restL);
+                    anisotropicBeams.restLength[i] = newRestLength;
+                    anisotropicBeams.deform[i] = hardenDeform(anisotropicBeams.deform[i], maxDeform,
+                            activeSpring, appliedDelta);
+                }
             }
 
             float fx = totalForce * dx * invDist;
@@ -1272,15 +1275,19 @@ public class SoftBodyVehicle {
                 torsionbars.broken[i] = true;
                 continue;
             }
-            double maxDeform = torsionbars.strength[i];
-            double permanentDelta = plasticDelta(elasticTorque, torsionbars.deform[i], maxDeform,
-                    activeSpring, plasticRelaxation);
-            if (permanentDelta > 0.0) {
-                torsionbars.restAngle[i] += Math.signum(elasticTorque) * permanentDelta;
-                torsionbars.deform[i] = (float) hardenDeform(torsionbars.deform[i], maxDeform,
-                        activeSpring, permanentDelta);
-                while (torsionbars.restAngle[i] > Math.PI) torsionbars.restAngle[i] -= Math.PI * 2;
-                while (torsionbars.restAngle[i] < -Math.PI) torsionbars.restAngle[i] += Math.PI * 2;
+            double absElasticTorque = Math.abs(elasticTorque);
+            if (activeSpring > KINDA_SMALL_NUMBER && absElasticTorque > torsionbars.deform[i]) {
+                double maxDeform = torsionbars.strength[i];
+                double permanentDelta = plasticDeltaFromExcess(absElasticTorque - torsionbars.deform[i],
+                        torsionbars.deform[i], maxDeform,
+                        activeSpring, plasticRelaxation);
+                if (permanentDelta > 0.0) {
+                    torsionbars.restAngle[i] += Math.signum(elasticTorque) * permanentDelta;
+                    torsionbars.deform[i] = (float) hardenDeform(torsionbars.deform[i], maxDeform,
+                            activeSpring, permanentDelta);
+                    while (torsionbars.restAngle[i] > Math.PI) torsionbars.restAngle[i] -= Math.PI * 2;
+                    while (torsionbars.restAngle[i] < -Math.PI) torsionbars.restAngle[i] += Math.PI * 2;
+                }
             }
 
             nodes.forceX[n1] += torque * g1x; nodes.forceY[n1] += torque * g1y; nodes.forceZ[n1] += torque * g1z;
@@ -1357,9 +1364,8 @@ public class SoftBodyVehicle {
         }
     }
 
-    public void solveInternalForces(float dt){
+    public void solveInternalForces(float dt, float plasticRelaxation){
         float invDt = 1.0f / dt;
-        float plasticRelaxation = (float) (1.0 - Math.exp(-PhysicsWorld.PLASTIC_RELAXATION_RATE * dt));
 
         for (int i = 0; i < nodes.count; i++) {
             nodes.forceX[i] = 0.0f;
