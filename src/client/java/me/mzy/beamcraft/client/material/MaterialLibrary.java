@@ -466,6 +466,14 @@ public final class MaterialLibrary {
     }
 
     private static void scanVehicle(List<File> roots, String ns) {
+        // TODO(texture-vs-conflict-strategy): Texture paths are resolved by
+        // TextureResourceLocator's first-registered-source order, independently
+        // of the AssetScanner conflict strategy. This only diverges when two
+        // registered containers share a texture path with different content and
+        // BOTH hold a winning entry (partial vehicle overlap across roots); a
+        // full override is consistent because the shadowed root is never
+        // registered. Fix: expose the per-logical-path winner from AssetScanner
+        // and have the locator prefer that source (needs mtime for "newer").
         NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, ns);
         List<File> ownedSources = new ArrayList<>();
         Set<String> ownedSourceIds = new HashSet<>();
