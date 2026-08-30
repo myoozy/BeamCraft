@@ -46,7 +46,8 @@ public final class PhysicsSpecs {
             float dampReboundFast,
             float springExpansion,
             float dampExpansion,
-            float transitionZone
+            float transitionZone,
+            float deformLimitStress
     ) {}
 
     public record TriangleSpec(

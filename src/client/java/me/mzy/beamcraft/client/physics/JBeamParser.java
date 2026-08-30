@@ -335,6 +335,7 @@ public class JBeamParser {
         float currentPrecomp = 1.0f, currentPrecompRange = 0.0f, currentPrecompTime = 0.0f;
         float currentSpring = 9000000.0f, currentDamp = 12000.0f;
         float currentDeform = 400000.0f, currentStrength = 1000000.0f;
+        float currentDeformLimitStress = PhysicsWorld.KINDA_BIG_NUMBER;
 
         float currentShortBound = 1.0f, currentLongBound = 1.0f;
         float currentShortBoundRange = -1.0f, currentLongBoundRange = -1.0f;
@@ -370,6 +371,7 @@ public class JBeamParser {
                 currentDamp = getFloatSafe(modifier, "beamDamp", currentDamp, entry.variables);
                 currentDeform = getFloatSafe(modifier, "beamDeform", currentDeform, entry.variables);
                 currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
+                currentDeformLimitStress = getFloatSafe(modifier, "deformLimitStress", currentDeformLimitStress, entry.variables);
 
                 currentShortBound = getFloatSafe(modifier, "beamShortBound", currentShortBound, entry.variables);
                 currentLongBound = getFloatSafe(modifier, "beamLongBound", currentLongBound, entry.variables);
@@ -403,6 +405,7 @@ public class JBeamParser {
                     int inlineType = currentType;
                     float inlineSpring = currentSpring, inlineDamp = currentDamp;
                     float inlineDeform = currentDeform, inlineStrength = currentStrength;
+                    float inlineDeformLimitStress = currentDeformLimitStress;
                     float inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
                     float inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
                     float inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
@@ -423,6 +426,7 @@ public class JBeamParser {
                         inlineDamp = getFloatSafe(inline, "beamDamp", inlineDamp, entry.variables);
                         inlineDeform = getFloatSafe(inline, "beamDeform", inlineDeform, entry.variables);
                         inlineStrength = getFloatSafe(inline, "beamStrength", inlineStrength, entry.variables);
+                        inlineDeformLimitStress = getFloatSafe(inline, "deformLimitStress", inlineDeformLimitStress, entry.variables);
                         inlinePrecomp = getFloatSafe(inline, "beamPrecompression", inlinePrecomp, entry.variables);
                         inlinePrecompRange = getFloatSafe(inline, "precompressionRange", inlinePrecompRange, entry.variables);
                         inlinePrecompTime = getFloatSafe(inline, "beamPrecompressionTime", inlinePrecompTime, entry.variables);
@@ -471,7 +475,8 @@ public class JBeamParser {
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
                             inlineLimitS, inlineLimitD, inlineDampVelSplit, inlineDampFast,
-                            inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone
+                            inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone,
+                            inlineDeformLimitStress
                     ));
                 }
             }

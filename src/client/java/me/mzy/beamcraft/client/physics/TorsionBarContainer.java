@@ -17,6 +17,7 @@ public class TorsionBarContainer {
     public float[] spring = new float[INIT_TORSION_CAP];
     public float[] damp = new float[INIT_TORSION_CAP];
     public float[] deform = new float[INIT_TORSION_CAP];
+    public float[] baseDeform = new float[INIT_TORSION_CAP];
     public float[] strength = new float[INIT_TORSION_CAP];
     public boolean[] broken = new boolean[INIT_TORSION_CAP];
 
@@ -32,6 +33,7 @@ public class TorsionBarContainer {
             spring =  Utility.expand(spring, newSize);
             damp = Utility.expand(damp, newSize);
             deform = Utility.expand(deform, newSize);
+            baseDeform = Utility.expand(baseDeform, newSize);
             strength = Utility.expand(strength, newSize);
             broken = Utility.expand(broken, newSize);
             System.out.println("⚠️ [TorsionBarContainer] Resized to: " + newSize);
@@ -48,7 +50,8 @@ public class TorsionBarContainer {
         node3[count] = n3; node4[count] = n4;
 
         spring[count] = spec.spring(); damp[count] = spec.damp();
-        deform[count] = spec.deform(); strength[count] = spec.strength();
+        deform[count] = spec.deform(); baseDeform[count] = spec.deform();
+        strength[count] = spec.strength();
         broken[count] = false;
 
         // 获取初始坐标
@@ -98,6 +101,7 @@ public class TorsionBarContainer {
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             restAngle[i] = baseRestAngle[i];
+            deform[i] = baseDeform[i];
         }
     }
 }

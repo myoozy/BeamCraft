@@ -28,6 +28,8 @@ public class BeamContainer {
     public float[] spring;
     public float[] damp;
     public float[] deform;
+    public float[] baseDeform;
+    public float[] deformLimitStress;
     public float[] strength;
     public boolean[] broken;
     public int[] breakGroupType;
@@ -45,6 +47,8 @@ public class BeamContainer {
         spring = new float[INIT_BEAM_CAP];
         damp = new float[INIT_BEAM_CAP];
         deform = new float[INIT_BEAM_CAP];
+        baseDeform = new float[INIT_BEAM_CAP];
+        deformLimitStress = new float[INIT_BEAM_CAP];
         strength = new float[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
@@ -73,6 +77,8 @@ public class BeamContainer {
         spring = Utility.expand(spring, newSize);
         damp = Utility.expand(damp, newSize);
         deform = Utility.expand(deform, newSize);
+        baseDeform = Utility.expand(baseDeform, newSize);
+        deformLimitStress = Utility.expand(deformLimitStress, newSize);
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
         breakGroupType = Utility.expand(breakGroupType, newSize);
@@ -110,6 +116,8 @@ public class BeamContainer {
         this.spring[idx] = spec.spring();
         this.damp[idx] = spec.damp();
         this.deform[idx] = spec.deform();
+        this.baseDeform[idx] = spec.deform();
+        this.deformLimitStress[idx] = spec.deformLimitStress();
         this.strength[idx] = spec.strength();
         this.broken[idx] = false;
         this.breakGroupType[idx] = spec.breakGroupType();
@@ -139,6 +147,7 @@ public class BeamContainer {
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             restLength[i] = baseRestLength[i];
+            deform[i] = baseDeform[i];
             precompTimer[i] = precompTimeTotal[i];
         }
     }

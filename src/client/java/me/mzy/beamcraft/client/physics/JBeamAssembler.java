@@ -218,7 +218,8 @@ public class JBeamAssembler {
                                 0.0f, 0.0f, -1.0f, -1.0f,
                                 0.0f, 0.0f,
                                 -1.0f, -1.0f, -1.0f, -1.0f,
-                                0.0f, 0.0f, 0.0f
+                                0.0f, 0.0f, 0.0f,
+                                PhysicsWorld.KINDA_BIG_NUMBER
                         ));
                         weldedCount++;
                     }

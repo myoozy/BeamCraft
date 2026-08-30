@@ -15,7 +15,11 @@ public class PhysicsWorld {
     public static final float SOUND_SPEED = 340.0f;
     public static final float BLOCK_REBOUND = 0.0f;
     public static final float BLOCK_FRICTION = 1.0f;
-    public static final float METAL_PLASTIC_FLOW_RATE = 100.0f;
+    /**
+     * Rate at which yielded constraints move toward the perfectly-plastic rest state.
+     * This is a solver relaxation rate in 1/s, not a JBeam material property.
+     */
+    public static final float PLASTIC_RELAXATION_RATE = 100.0f;
     public static final float KINDA_SMALL_NUMBER = 1e-8f;
     public static final float KINDA_BIG_NUMBER = 1e8f;
     public static final int MAX_AABB_SIZE = 10;
