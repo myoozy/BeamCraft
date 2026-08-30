@@ -1,6 +1,8 @@
 package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.assets.BeamCraftConfig;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
 import me.mzy.beamcraft.client.render.VehicleTextureUploader;
@@ -23,6 +25,7 @@ import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 import java.io.File;
+import java.util.List;
 
 public class BeamCraftClient implements ClientModInitializer {
 	private static final boolean DEBUG_DRAW = false;
@@ -34,6 +37,8 @@ public class BeamCraftClient implements ClientModInitializer {
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
 	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
 	public static final File VEHICLES_DIR = new File(GAME_DIR, "mods/beamcraft/vehicles");
+	// 资产根列表，来自 config/beamcraft.json；默认仍指向 VEHICLES_DIR
+	public static volatile List<File> ASSET_ROOTS = List.of(VEHICLES_DIR);
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
@@ -42,8 +47,13 @@ public class BeamCraftClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 
-		// 确保目录存在
-		if (!VEHICLES_DIR.exists()) VEHICLES_DIR.mkdirs();
+		// 加载配置文件，确定资产根列表并确保目录存在
+		BeamCraftConfig config = BeamCraftConfig.load(FabricLoader.getInstance().getConfigDir());
+		ASSET_ROOTS = config.resolveAssetRoots(GAME_DIR);
+		AssetScanner.INSTANCE.configure(config.policy());
+		for (File root : ASSET_ROOTS) {
+			if (!root.exists()) root.mkdirs();
+		}
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			// 让管理器接管一切生命周期

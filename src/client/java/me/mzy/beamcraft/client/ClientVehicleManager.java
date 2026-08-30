@@ -72,15 +72,15 @@ public final class ClientVehicleManager {
         Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
         Map<String, String> localConfig = new HashMap<>();
         JBeamLoader.loadVehicle(
-                BeamCraftClient.VEHICLES_DIR,
+                BeamCraftClient.ASSET_ROOTS,
                 rootPart,
                 vehicleEntity.getPcFileName(),
                 localRegistry,
                 localConfig
         );
 
-        DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
-        MaterialLibrary.requireMaterials(BeamCraftClient.VEHICLES_DIR, rootPart);
+        DaeMeshLoader.requireVehicleModels(BeamCraftClient.ASSET_ROOTS, rootPart);
+        MaterialLibrary.requireMaterials(BeamCraftClient.ASSET_ROOTS, rootPart);
         boolean assembled = new JBeamAssembler().assembleVehicle(
                 rootPart,
                 localConfig,

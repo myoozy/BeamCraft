@@ -33,9 +33,7 @@ public class FlexbodyBindingUtil {
             if (!valid) {
                 flex.meshName[m] = "";
             } else {
-                String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[m];
-                DaeMeshLoader.RawGeometry geom = DaeMeshLoader.MESH_CACHE.get(scopedKey);
-                if (geom == null) geom = DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[m]);
+                DaeMeshLoader.RawGeometry geom = DaeMeshLoader.resolveMesh(flex.vehicleNamespace, flex.meshName[m]);
                 if (geom != null) totalVerts += geom.vertexCount;
             }
         }
@@ -52,9 +50,7 @@ public class FlexbodyBindingUtil {
             // 直接判断名字是否为空，跳过被我们“处决”的幽灵网格
             if (flex.meshName[m].isEmpty()) continue;
 
-            String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[m];
-            DaeMeshLoader.RawGeometry geom = DaeMeshLoader.MESH_CACHE.get(scopedKey);
-            if (geom == null) geom = DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[m]);
+            DaeMeshLoader.RawGeometry geom = DaeMeshLoader.resolveMesh(flex.vehicleNamespace, flex.meshName[m]);
             if (geom == null) continue;
 
             List<Integer> primaryPool = new ArrayList<>();

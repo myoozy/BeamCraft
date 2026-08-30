@@ -1,20 +1,19 @@
 package me.mzy.beamcraft.client.model;
 
+import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.assets.NamespaceScan;
+import me.mzy.beamcraft.client.assets.ResolvedEntry;
+
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.assimp.*;
 import org.lwjgl.PointerBuffer;
 
-import java.io.*;
+import java.io.File;
 import java.nio.IntBuffer;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
-import java.util.stream.Stream;
 
 public class DaeMeshLoader {
 
@@ -69,6 +68,16 @@ public class DaeMeshLoader {
      * 当一辆车准备生成时调用（按需加载该车系及 Common 的所有模型）
      */
     public static void requireVehicleModels(File vehiclesRootDir, String targetVehicleName) {
+        requireVehicleModels(List.of(vehiclesRootDir), targetVehicleName);
+    }
+
+    /**
+     * Multi-root variant: scans every configured asset root for the vehicle's
+     * {@code .dae} meshes (and the shared common library), via
+     * {@link AssetScanner}. Zip-sourced meshes are materialised to a temporary
+     * file for Assimp and deleted afterwards.
+     */
+    public static void requireVehicleModels(List<File> assetRoots, String targetVehicleName) {
         int count = VEHICLE_REF_COUNT.getOrDefault(targetVehicleName, 0);
         VEHICLE_REF_COUNT.put(targetVehicleName, count + 1);
 
@@ -77,13 +86,13 @@ public class DaeMeshLoader {
 
             // 1. 确保基础 common 资产已加载
             if (!isCommonLoaded) {
-                loadSpecificVehicleDae(vehiclesRootDir, "common");
+                loadSpecificVehicleDae(assetRoots, "common");
                 isCommonLoaded = true;
             }
 
             // 2. 加载目标车系的所有 DAE 资产
             if (!targetVehicleName.equals("common")) {
-                loadSpecificVehicleDae(vehiclesRootDir, targetVehicleName);
+                loadSpecificVehicleDae(assetRoots, targetVehicleName);
             }
         }
     }
@@ -106,74 +115,28 @@ public class DaeMeshLoader {
         }
     }
 
-    private static void loadSpecificVehicleDae(File vehiclesRootDir, String targetVehicleName) {
-        boolean isCommon = targetVehicleName.equals("common");
-
-        File commonZip = new File(vehiclesRootDir, "common.zip");
-        File commonDir = new File(vehiclesRootDir, "common");
-
-        if (isCommon) {
-            if (commonZip.exists()) scanZipForSpecificDae(commonZip, targetVehicleName, true);
-            if (commonDir.exists()) scanFolderForSpecificDae(commonDir, targetVehicleName, true);
-            return;
-        }
-
-        File[] files = vehiclesRootDir.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                String name = file.getName();
-                if (name.equals("common.zip") || name.equals("common")) continue;
-
-                if (name.toLowerCase().contains(targetVehicleName.toLowerCase())) {
-                    if (file.isDirectory()) {
-                        scanFolderForSpecificDae(file, targetVehicleName, false);
-                    } else if (name.endsWith(".zip")) {
-                        scanZipForSpecificDae(file, targetVehicleName, false);
-                    }
-                }
-            }
-        }
+    /** Shared scoped lookup: the namespace's own mesh first, then the common library. */
+    public static RawGeometry resolveMesh(String namespace, String meshName) {
+        RawGeometry geometry = MESH_CACHE.get(namespace + ":" + meshName);
+        return geometry != null ? geometry : MESH_CACHE.get("common:" + meshName);
     }
 
-    private static void scanZipForSpecificDae(File zipFile, String targetVehicleName, boolean isCommon) {
-        try (ZipFile zf = new ZipFile(zipFile)) {
-            Enumeration<? extends ZipEntry> entries = zf.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry entry = entries.nextElement();
-                String name = entry.getName();
-
-                // 定向过滤核心逻辑
-                boolean isTarget = isCommon || name.contains("vehicles/" + targetVehicleName + "/");
-
-                if (isTarget && !entry.isDirectory() && !name.contains("__MACOSX") && name.toLowerCase().endsWith(".dae")) {
-                    File tempFile = File.createTempFile("beamcraft_dae_", ".dae");
-                    try {
-                        try (InputStream is = zf.getInputStream(entry)) {
-                            Files.copy(is, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                        }
-                        loadMeshUsingAssimp(tempFile.getAbsolutePath(), targetVehicleName);
-                    } finally {
-                        tempFile.delete();
-                    }
-                }
+    private static void loadSpecificVehicleDae(List<File> assetRoots, String namespace) {
+        NamespaceScan scan = AssetScanner.INSTANCE.scan(assetRoots, namespace);
+        for (ResolvedEntry entry : scan.entries()) {
+            if (!entry.logicalPath().endsWith(".dae")) {
+                continue;
             }
-        } catch (Exception e) {
-            System.err.println("🚨 读取 ZIP 资产失败: " + zipFile.getName());
-        }
-    }
-
-    private static void scanFolderForSpecificDae(File folder, String targetVehicleName, boolean isCommon) {
-        try (Stream<Path> paths = Files.walk(folder.toPath())) {
-            paths.filter(Files::isRegularFile).forEach(path -> {
-                String filePath = path.toString().replace("\\", "/");
-                boolean isTarget = isCommon || filePath.contains("/vehicles/" + targetVehicleName + "/");
-
-                if (isTarget && filePath.toLowerCase().endsWith(".dae")) {
-                    loadMeshUsingAssimp(path.toAbsolutePath().toString(), targetVehicleName);
+            try {
+                Path path = entry.materializeForAssimp();
+                try {
+                    loadMeshUsingAssimp(path.toString(), namespace);
+                } finally {
+                    entry.deleteTemp();
                 }
-            });
-        } catch (Exception e) {
-            System.err.println("🚨 遍历目录失败: " + folder.getName());
+            } catch (Exception e) {
+                System.err.println("🚨 加载 DAE 资产失败: " + entry.sourceAddress());
+            }
         }
     }
 
@@ -377,10 +340,8 @@ public class DaeMeshLoader {
 
                 // 完美映射：基于原生节点名与切片名进行双重全域覆盖
                 MESH_CACHE.put(namespace + ":" + cleanNodeName, unifiedGeometry);
-                // BeamCraft.LOGGER.info("cleanNodeName: " + namespace + ":" + cleanNodeName);
                 if (!cleanNodeName.equals(rawNodeName)) {
                     MESH_CACHE.put(namespace + ":" + rawNodeName, unifiedGeometry);
-                    // BeamCraft.LOGGER.info("rawNodeName: " + namespace + ":" + rawNodeName);
                 }
             }
         }

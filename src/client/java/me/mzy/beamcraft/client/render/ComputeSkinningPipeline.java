@@ -467,11 +467,7 @@ public class ComputeSkinningPipeline {
         if (flex.meshName[mesh].isEmpty()) {
             return null;
         }
-        String scopedKey = flex.vehicleNamespace + ":" + flex.meshName[mesh];
-        DaeMeshLoader.RawGeometry geometry = DaeMeshLoader.MESH_CACHE.get(scopedKey);
-        return geometry != null
-                ? geometry
-                : DaeMeshLoader.MESH_CACHE.get("common:" + flex.meshName[mesh]);
+        return DaeMeshLoader.resolveMesh(flex.vehicleNamespace, flex.meshName[mesh]);
     }
 
     private void uploadIndexBuffer(int[] indices, VertexFormat.IndexType indexType) {

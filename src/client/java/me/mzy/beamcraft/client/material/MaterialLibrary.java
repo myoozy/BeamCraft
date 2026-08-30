@@ -1,5 +1,9 @@
 package me.mzy.beamcraft.client.material;
 
+import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.assets.AssetSource;
+import me.mzy.beamcraft.client.assets.NamespaceScan;
+import me.mzy.beamcraft.client.assets.ResolvedEntry;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.texture.DecodedImage;
@@ -12,12 +16,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -25,19 +25,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 /**
  * Client-side material library for BeamNG {@code *.materials.json}.
  *
- * <p><b>Discovery scope</b> mirrors {@code DaeMeshLoader} exactly: the
- * {@code common.zip}/{@code common/} pair is scanned for the shared library,
- * then every file under the vehicles root whose name contains the requested
- * vehicle name (case-insensitive) is scanned as a ZIP archive or loose folder.
- * Only entries below {@code vehicles/&lt;namespace&gt;/} are considered for a
- * vehicle; {@code __MACOSX} junk and directories are skipped.
+ * <p><b>Discovery scope</b> is delegated to {@link AssetScanner}: every
+ * configured asset root is scanned for containers (folders and {@code .zip}
+ * archives) that hold entries below {@code vehicles/&lt;namespace&gt;/}; the
+ * shared common library is resolved the same way, with the legacy
+ * {@code common}/{@code common.zip} all-entries fallback. {@code __MACOSX} junk
+ * and directories are skipped, and path conflicts are resolved per the
+ * configured {@link me.mzy.beamcraft.client.assets.ConflictPolicy}.
  *
  * <p><b>Indexing rules</b>: each JSON material is indexed by its {@code mapTo}
  * (falling back to the material name when {@code mapTo} is absent). Lookups are
@@ -140,8 +138,28 @@ public final class MaterialLibrary {
      * locator. Safe to call repeatedly for the same vehicle.
      */
     public static void requireMaterials(File vehiclesRootDir, String targetVehicleName) {
-        if (vehiclesRootDir == null || !vehiclesRootDir.isDirectory()) {
+        requireMaterials(List.of(vehiclesRootDir), targetVehicleName);
+    }
+
+    /**
+     * Multi-root variant: scans every configured asset root for the vehicle's
+     * {@code *.materials.json} and {@code *.jbeam} files (plus the shared common
+     * library) via {@link AssetScanner}, and registers the contributing
+     * containers with the texture locator.
+     */
+    public static void requireMaterials(List<File> assetRoots, String targetVehicleName) {
+        if (assetRoots == null) {
             return;
+        }
+        boolean anyDirectory = false;
+        for (File root : assetRoots) {
+            if (root != null && root.isDirectory()) {
+                anyDirectory = true;
+                break;
+            }
+        }
+        if (!anyDirectory) {
+            return; // No usable root; nothing to index.
         }
         String ns = targetVehicleName.toLowerCase(Locale.ROOT);
         int count = REF_COUNTS.getOrDefault(ns, 0);
@@ -154,11 +172,11 @@ public final class MaterialLibrary {
             DECODED_TEXTURES.retainNamespace(ns);
         }
         if (!isCommonLoaded) {
-            scanCommon(vehiclesRootDir);
+            scanCommon(assetRoots);
             isCommonLoaded = true;
         }
         if (!ns.equals(COMMON_NS)) {
-            scanVehicle(vehiclesRootDir, targetVehicleName);
+            scanVehicle(assetRoots, ns);
         }
     }
 
@@ -436,54 +454,31 @@ public final class MaterialLibrary {
     // Scanning
     // ------------------------------------------------------------------
 
-    private static void scanCommon(File vehiclesRootDir) {
-        File commonZip = new File(vehiclesRootDir, COMMON_NS + ".zip");
-        File commonDir = new File(vehiclesRootDir, COMMON_NS);
-        if (commonZip.exists()) {
-            LOCATOR.registerSource(commonZip);
-            COMMON_SOURCE_IDS.add(canonicalPath(commonZip));
-            scanZipForMaterials(commonZip, COMMON_NS, true);
+    private static void scanCommon(List<File> roots) {
+        NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, COMMON_NS);
+        for (ResolvedEntry entry : scan.entries()) {
+            processScanEntry(entry, COMMON_NS, true);
         }
-        if (commonDir.isDirectory()) {
-            LOCATOR.registerSource(commonDir);
-            COMMON_SOURCE_IDS.add(canonicalPath(commonDir));
-            scanFolderForMaterials(commonDir, COMMON_NS, true);
+        for (AssetSource source : scan.sources()) {
+            LOCATOR.registerSource(source.file());
+            COMMON_SOURCE_IDS.add(canonicalPath(source.file()));
         }
     }
 
-    private static void scanVehicle(File vehiclesRootDir, String targetVehicleName) {
-        File[] files = vehiclesRootDir.listFiles();
-        if (files == null) {
-            return;
-        }
-        // Sort so material/alias collision resolution is deterministic: when two
-        // scanned files define the same mapTo or glowMap key, the later file in
-        // this (now sorted) order wins.
-        Arrays.sort(files, Comparator.comparing(File::getName));
+    private static void scanVehicle(List<File> roots, String ns) {
+        NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, ns);
         List<File> ownedSources = new ArrayList<>();
         Set<String> ownedSourceIds = new HashSet<>();
-        for (File file : files) {
-            String name = file.getName();
-            if (name.equals(COMMON_NS + ".zip") || name.equals(COMMON_NS)) {
-                continue;
-            }
-            if (!name.toLowerCase(Locale.ROOT).contains(targetVehicleName.toLowerCase(Locale.ROOT))) {
-                continue;
-            }
-            if (file.isDirectory()) {
-                LOCATOR.registerSource(file);
-                ownedSources.add(file);
-                ownedSourceIds.add(canonicalPath(file));
-                scanFolderForMaterials(file, targetVehicleName, false);
-            } else if (name.toLowerCase(Locale.ROOT).endsWith(".zip")) {
-                LOCATOR.registerSource(file);
-                ownedSources.add(file);
-                ownedSourceIds.add(canonicalPath(file));
-                scanZipForMaterials(file, targetVehicleName, false);
-            }
+        for (ResolvedEntry entry : scan.entries()) {
+            processScanEntry(entry, ns, false);
         }
-        NAMESPACE_SOURCES.put(targetVehicleName.toLowerCase(Locale.ROOT), ownedSources);
-        NAMESPACE_SOURCE_IDS.put(targetVehicleName.toLowerCase(Locale.ROOT), ownedSourceIds);
+        for (AssetSource source : scan.sources()) {
+            LOCATOR.registerSource(source.file());
+            ownedSources.add(source.file());
+            ownedSourceIds.add(canonicalPath(source.file()));
+        }
+        NAMESPACE_SOURCES.put(ns, ownedSources);
+        NAMESPACE_SOURCE_IDS.put(ns, ownedSourceIds);
     }
 
     /** Canonical absolute path, or null when not resolvable. */
@@ -496,67 +491,20 @@ public final class MaterialLibrary {
     }
 
     /**
-     * True when {@code path} (a ZIP entry name or a filesystem path) sits below
-     * a {@code vehicles/<namespace>/} directory. Matching is case-insensitive
-     * and backslashes are treated as path separators, mirroring how the texture
-     * locator resolves logical paths. The {@code vehicles/<namespace>/} segment
-     * requirement is unchanged from a literal match; only the segment boundary
-     * is enforced, so a {@code <something>vehicles/<namespace>/} entry does not
-     * qualify.
+     * Consumes one conflict-resolved entry into the material/alias index. The
+     * caller registers the entry's container with the locator separately, so a
+     * container that contributed only shadowed entries is never registered.
      */
-    private static boolean underVehiclesNamespace(String path, String namespace) {
-        String normalized = path.replace('\\', '/').toLowerCase(Locale.ROOT);
-        String ns = namespace.toLowerCase(Locale.ROOT);
-        return normalized.contains("/vehicles/" + ns + "/")
-                || normalized.startsWith("vehicles/" + ns + "/");
-    }
-
-    private static void scanZipForMaterials(File zipFile, String namespace, boolean isCommon) {
-        try (ZipFile zf = new ZipFile(zipFile)) {
-            List<? extends ZipEntry> entries = Collections.list(zf.entries());
-            entries.sort(Comparator.comparing(ZipEntry::getName));
-            for (ZipEntry entry : entries) {
-                String entryName = entry.getName();
-                if (entry.isDirectory() || entryName.contains("__MACOSX")) {
-                    continue;
-                }
-                boolean isTarget = isCommon || underVehiclesNamespace(entryName, namespace);
-                String lower = entryName.toLowerCase(Locale.ROOT);
-                if (!isTarget || !isIndexedFile(lower)) {
-                    continue;
-                }
-                String source = zipFile.getAbsolutePath() + "!" + entryName;
-                try (InputStream in = zf.getInputStream(entry)) {
-                    processIndexedFile(in, source, lower, namespace, isCommon);
-                } catch (Exception e) {
-                    System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("⚠️ [Materials] Failed to scan ZIP " + zipFile.getName() + ": " + e.getMessage());
+    private static void processScanEntry(ResolvedEntry entry, String namespace, boolean isCommon) {
+        String lower = entry.logicalPath();
+        if (!isIndexedFile(lower)) {
+            return;
         }
-    }
-
-    private static void scanFolderForMaterials(File folder, String namespace, boolean isCommon) {
-        try (Stream<Path> paths = Files.walk(folder.toPath())) {
-            // Sort so material/alias collision resolution is deterministic across
-            // filesystems; see scanVehicle.
-            paths.sorted().filter(Files::isRegularFile).forEach(path -> {
-                String filePath = path.toString().replace('\\', '/');
-                boolean isTarget = isCommon || underVehiclesNamespace(filePath, namespace);
-                String lower = filePath.toLowerCase(Locale.ROOT);
-                if (!isTarget || !isIndexedFile(lower)) {
-                    return;
-                }
-                String source = path.toAbsolutePath().toString();
-                try (InputStream in = Files.newInputStream(path)) {
-                    processIndexedFile(in, source, lower, namespace, isCommon);
-                } catch (Exception e) {
-                    System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
-                }
-            });
+        String source = entry.sourceAddress();
+        try (InputStream in = entry.open()) {
+            processIndexedFile(in, source, lower, namespace, isCommon);
         } catch (Exception e) {
-            System.err.println("⚠️ [Materials] Failed to walk folder " + folder.getName() + ": " + e.getMessage());
+            System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
         }
     }
 
