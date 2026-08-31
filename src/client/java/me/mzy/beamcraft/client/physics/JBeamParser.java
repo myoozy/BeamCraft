@@ -7,6 +7,8 @@ import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.physics.JBeamExpressionEvaluator.EvalOutcome;
 import me.mzy.beamcraft.client.physics.JBeamExpressionEvaluator.EvalStatus;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -174,7 +176,129 @@ public class JBeamParser {
         if (obj == null || !obj.has(key)) return defaultValue;
         JsonElement el = obj.get(key);
         if (el.isJsonNull()) return defaultValue;
-        return el.getAsBoolean();
+        if (!el.isJsonPrimitive()) return defaultValue;
+        com.google.gson.JsonPrimitive primitive = el.getAsJsonPrimitive();
+        if (primitive.isBoolean()) return primitive.getAsBoolean();
+        if (primitive.isNumber()) return primitive.getAsDouble() != 0.0;
+        String value = primitive.getAsString().trim();
+        if ("1".equals(value)) return true;
+        if ("0".equals(value)) return false;
+        return Boolean.parseBoolean(value);
+    }
+
+    /** Shared JBeam table-cell string conversion. */
+    public static String getStringCell(JsonElement cell) {
+        if (cell == null || !cell.isJsonPrimitive()) return null;
+        String value = cell.getAsString().trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    /** Shared JBeam table-cell integer conversion. */
+    public static int getIntCell(JsonElement cell, int defaultValue) {
+        if (cell == null || !cell.isJsonPrimitive()) return defaultValue;
+        try {
+            return (int) Double.parseDouble(cell.getAsString().trim());
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
+    }
+
+    /** Shared numeric cell conversion, including JBeam expressions. */
+    public static double getDoubleCell(JsonElement cell, double defaultValue, Map<String, Double> variables) {
+        if (cell == null || !cell.isJsonPrimitive()) return defaultValue;
+        com.google.gson.JsonPrimitive primitive = cell.getAsJsonPrimitive();
+        if (primitive.isNumber()) return primitive.getAsDouble();
+        String value = primitive.getAsString().trim();
+        if (value.isEmpty()) return defaultValue;
+        if (value.startsWith("$")) {
+            Float evaluated = evaluateBeamNGExpression(value, variables);
+            return evaluated != null ? evaluated : defaultValue;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
+    }
+
+    public static double getFirstDoubleSafe(JsonObject object, String firstKey, String secondKey,
+                                            double defaultValue, Map<String, Double> variables) {
+        return getFirstDoubleSafe(object, defaultValue, variables, firstKey, secondKey);
+    }
+
+    public static double getFirstDoubleSafe(JsonObject object, double defaultValue,
+                                            Map<String, Double> variables, String... keys) {
+        if (object == null) return defaultValue;
+        for (String key : keys) {
+            if (object.has(key)) return getDoubleSafe(object, key, defaultValue, variables);
+        }
+        return defaultValue;
+    }
+
+    public static List<String> getStringListSafe(JsonObject object, Map<String, Double> variables, String... keys) {
+        if (object == null) return List.of();
+        for (String key : keys) {
+            JsonElement element = object.get(key);
+            if (element != null && !element.isJsonNull()) return parseGroups(element, variables);
+        }
+        return List.of();
+    }
+
+    public static List<Double> getDoubleListSafe(JsonObject object, String key, Map<String, Double> variables) {
+        if (object == null) return List.of();
+        JsonElement element = object.get(key);
+        if (element == null || element.isJsonNull()) return List.of();
+        List<Double> result = new ArrayList<>();
+        if (element.isJsonArray()) {
+            for (JsonElement cell : element.getAsJsonArray()) {
+                double value = getDoubleCell(cell, Double.NaN, variables);
+                if (!Double.isNaN(value)) result.add(value);
+            }
+        } else {
+            double value = getDoubleCell(element, Double.NaN, variables);
+            if (!Double.isNaN(value)) result.add(value);
+        }
+        return result;
+    }
+
+    public static List<Integer> getIntListSafe(JsonObject object, String key) {
+        if (object == null) return List.of();
+        JsonElement element = object.get(key);
+        if (element == null || element.isJsonNull()) return List.of();
+        List<Integer> result = new ArrayList<>();
+        if (element.isJsonArray()) {
+            for (JsonElement cell : element.getAsJsonArray()) {
+                int value = getIntCell(cell, Integer.MIN_VALUE);
+                if (value != Integer.MIN_VALUE) result.add(value);
+            }
+        } else {
+            int value = getIntCell(element, Integer.MIN_VALUE);
+            if (value != Integer.MIN_VALUE) result.add(value);
+        }
+        return result;
+    }
+
+    public static boolean isHeaderRow(JsonArray row, String firstColumnName) {
+        return row != null && row.size() > 0
+                && firstColumnName.equalsIgnoreCase(getStringCell(row.get(0)));
+    }
+
+    public static JsonObject copyJsonObject(JsonObject source) {
+        return source == null ? new JsonObject() : source.deepCopy();
+    }
+
+    /** BeamNG-style recursive object merge; overlay values win. */
+    public static void mergeJsonObjectsRecursive(JsonObject base, JsonObject overlay) {
+        if (base == null || overlay == null) return;
+        for (Map.Entry<String, JsonElement> entry : overlay.entrySet()) {
+            JsonElement existing = base.get(entry.getKey());
+            JsonElement value = entry.getValue();
+            if (existing != null && existing.isJsonObject() && value.isJsonObject()) {
+                mergeJsonObjectsRecursive(existing.getAsJsonObject(), value.getAsJsonObject());
+            } else {
+                base.add(entry.getKey(), value.deepCopy());
+            }
+        }
     }
 
     public static java.util.List<String> parseGroups(JsonElement el) {

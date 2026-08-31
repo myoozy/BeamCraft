@@ -34,6 +34,8 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final boolean DEBUG_SHOW_BEAMS = true;
 	// 记录上一帧 G 键有没有被按下
 	private static boolean gWasPressed = false;
+	private static boolean shiftUpWasPressed = false;
+	private static boolean shiftDownWasPressed = false;
 	private static long lastOverrunNoticeNanos = 0L;
 	private static boolean physicsFailureReported = false;
 	public static final double DELTA_TIME = 0.05;
@@ -124,6 +126,21 @@ public class BeamCraftClient implements ClientModInitializer {
 			}
 			gWasPressed = isG;
 
+			// Temporary global binary controls until seat/input ownership exists.
+			long window = client.getWindow().getHandle();
+			float throttle = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_W) ? 1.0f : 0.0f;
+			float clutchPedal = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_LEFT_SHIFT) ? 1.0f : 0.0f;
+			boolean starter = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_V);
+			boolean shiftUp = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_X);
+			boolean shiftDown = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_Z);
+			for (SoftBodyVehicle vehicle : world.vehicles) {
+				vehicle.powertrain.setControls(throttle, clutchPedal, starter);
+				if (shiftUp && !shiftUpWasPressed) vehicle.powertrain.requestShiftUp();
+				if (shiftDown && !shiftDownWasPressed) vehicle.powertrain.requestShiftDown();
+			}
+			shiftUpWasPressed = shiftUp;
+			shiftDownWasPressed = shiftDown;
+
 			// World access happens synchronously in prepareStep; the 100 substeps
 			// then run independently until the next game-tick barrier.
 			if (!world.vehicles.isEmpty()) {
@@ -137,7 +154,34 @@ public class BeamCraftClient implements ClientModInitializer {
 			if (client.options.hudHidden) return; // 如果按了 F1 隐藏界面，就不画
 
 			String physicsStepText = String.format("BeamCraft Physics: %.2f ms", lastPhysicsMs);
+			SoftBodyVehicle debugVehicle = PHYSICS_WORLD.vehicles.isEmpty() ? null : PHYSICS_WORLD.vehicles.getFirst();
+			String powertrainState = debugVehicle == null ? "no vehicle" : debugVehicle.powertrain.diagnostic();
+			float engineRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugEngineRPM();
+			float throttleInput = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugThrottle();
+			float actualThrottle = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugActualThrottle();
+			float clutchEngagement = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugClutchEngagement();
+			float clutchTorque = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugClutchTorque();
+			float combustionTorque = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugCombustionTorque();
+			int torqueCurvePoints = debugVehicle == null ? 0 : debugVehicle.powertrain.debugTorqueCurveCount();
+			boolean starterActive = debugVehicle != null && debugVehicle.powertrain.debugStarterActive();
+			boolean sparkEnabled = debugVehicle != null && debugVehicle.powertrain.debugSparkEnabled();
+			boolean fuelEnabled = debugVehicle != null && debugVehicle.powertrain.debugFuelEnabled();
+			boolean limiterActive = debugVehicle != null && debugVehicle.powertrain.debugLimiterActive();
+			float limiterTime = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugLimiterCutRemaining();
+			String gearName = debugVehicle == null ? "?" : debugVehicle.powertrain.debugCurrentGearName();
+			float gearRatio = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugActiveRatio();
+			float shiftTime = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugShiftRemaining();
 			String[] lines = {
+					"powertrain: " + powertrainState,
+					String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
+							throttleInput * 100.0f, actualThrottle * 100.0f),
+					String.format("combustion: %.1f Nm | curve: %d | starter: %s", combustionTorque,
+							torqueCurvePoints, starterActive ? "on" : "off"),
+					String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
+							sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
+							limiterActive ? "cut" : "ready", limiterTime),
+					String.format("gear: %s | ratio: %.3f | shift: %.3fs", gearName, gearRatio, shiftTime),
+					String.format("clutch engagement: %.0f%% | torque: %.1f Nm", clutchEngagement * 100.0f, clutchTorque),
 					String.format("tickBarrierWait: %.2f ms", lastPhysicsWaitMs),
 					String.format("mcWorldScan: %.2f ms", lastPhysicsMsDetail[1]),
 					String.format("internalForce: %.2f ms", lastPhysicsMsDetail[2]),

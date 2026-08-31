@@ -270,23 +270,14 @@ public class JBeamPressureWheelsParser {
     }
 
     private static String getStr(JsonObject config, String key, String def) {
-        if (!config.has(key)) return def;
-        JsonElement el = config.get(key);
-        if (el.isJsonNull()) return def;
-        return el.getAsString();
+        return JBeamParser.getStringSafe(config, key, def);
     }
 
     private static double getFirstVal(JsonObject config, String key1, String key2, double def, Map<String, Double> vars) {
-        if (config.has(key1)) return JBeamParser.getDoubleSafe(config, key1, def, vars);
-        if (config.has(key2)) return JBeamParser.getDoubleSafe(config, key2, def, vars);
-        return def;
+        return JBeamParser.getFirstDoubleSafe(config, key1, key2, def, vars);
     }
 
     private static boolean getBool(JsonObject config, String key, boolean def) {
-        if (!config.has(key)) return def;
-        JsonElement el = config.get(key);
-        if (el.isJsonNull()) return def;
-        String val = el.getAsString().toLowerCase();
-        return val.equals("true") || val.equals("1");
+        return JBeamParser.getBooleanSafe(config, key, def);
     }
 }

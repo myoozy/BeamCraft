@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSystem;
 import me.mzy.beamcraft.utility.Utility;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
@@ -29,6 +30,7 @@ public class SoftBodyVehicle {
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
+    public final PowertrainSystem powertrain = new PowertrainSystem(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
 
@@ -52,7 +54,7 @@ public class SoftBodyVehicle {
 
     public SoftBodyVehicle(PhysicsVehicleEntity parentEntity) {
         this.parentEntity = parentEntity;
-        this.flexbodies.vehicleNamespace = parentEntity.getRootPartName();
+        this.flexbodies.vehicleNamespace = parentEntity != null ? parentEntity.getRootPartName() : "test";
         cacheEntityLocation();
     }
 
@@ -288,6 +290,7 @@ public class SoftBodyVehicle {
     }
 
     public void finalizePhysicsSetup() {
+        powertrain.finalizeSetup();
         flexbodies.compileGroupsCSR(nodes);
         triangles.buildBreakIndices();
 
@@ -502,6 +505,7 @@ public class SoftBodyVehicle {
         triangles.reset();
         torsionbars.reset();
         wheels.reset();
+        powertrain.reset();
         System.out.println("Vehicle reset.");
     }
 
@@ -519,6 +523,7 @@ public class SoftBodyVehicle {
         torsionbars.clear();
         slidenodes.clear();
         wheels.clear();
+        powertrain.clear();
         flexbodies.clear();
         renderTimeline.clear();
         breakGroupMap.clear();
@@ -1404,6 +1409,11 @@ public class SoftBodyVehicle {
         // ==========================================
         // ==========================================
         solveSlideNodes(dt, invDt);
+
+        // Powertrain only touches primitive physics state and is safe on the
+        // dedicated worker. Run it before node integration so driven-wheel
+        // torque participates in this substep.
+        powertrain.solve(dt);
 
         // ==========================================
         // ==========================================

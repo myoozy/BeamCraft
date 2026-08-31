@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.physics;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.mzy.beamcraft.client.physics.powertrain.JBeamPowertrainParser;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -169,6 +170,12 @@ public class JBeamAssembler {
                 }
             }
             System.out.println("✅ Pass 3 Complete: Wheels generated.");
+
+            // Powertrain specs are accumulated only after wheels exist, then
+            // compiled once in finalizePhysicsSetup into hot-loop SoA arrays.
+            for (PartEntry entry : activeParts) {
+                vehicle.powertrain.addSpecs(JBeamPowertrainParser.parsePart(entry.json, entry.variables));
+            }
 
             // Pass 4: Resolve Couplers
             System.out.println("====== 🔗 Resolving Couplers ======");

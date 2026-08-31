@@ -17,6 +17,7 @@ public class WheelContainer {
     public String[] name = new String[INIT_WHEEL_CAP];
     public int[] node1 = new int[INIT_WHEEL_CAP];
     public int[] node2 = new int[INIT_WHEEL_CAP];
+    public int[] wheelDir = new int[INIT_WHEEL_CAP];
     public int[] numRays = new int[INIT_WHEEL_CAP];
 
     // 物理参数
@@ -95,6 +96,7 @@ public class WheelContainer {
         name[wIdx] = wheelName;
         node1[wIdx] = n1;
         node2[wIdx] = n2;
+        this.wheelDir[wIdx] = wheelDir >= 0 ? 1 : -1;
         numRays[wIdx] = rays > 0 ? Math.min(rays, MAX_RAYS) : MAX_RAYS;
         hubRadius[wIdx] = (float) radius;
         this.isDeflated[wIdx] = false;
@@ -554,6 +556,7 @@ public class WheelContainer {
             name = Utility.expand(name, newSize);
             node1 = Utility.expand(node1, newSize);
             node2 = Utility.expand(node2, newSize);
+            wheelDir = Utility.expand(wheelDir, newSize);
             numRays = Utility.expand(numRays, newSize);
             hubRadius = Utility.expand(hubRadius, newSize);
             tireRadius = Utility.expand(tireRadius, newSize);
@@ -594,6 +597,165 @@ public class WheelContainer {
         if (idx >= 0 && idx < count) {
             if (!isDeflated[idx])isDeflated[idx] = true;
         }
+    }
+
+    /**
+     * Returns the angular velocity of the soft-body wheel hub about its current
+     * axle.  The sign is normalized with the JBeam wheelDir value, so wheels on
+     * opposite sides of the vehicle report the same sign while rolling forward.
+     */
+    public float getAngularVelocity(int wheelIdx) {
+        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
+
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return 0.0f;
+
+        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
+        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
+        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return 0.0f;
+        double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
+        ax = ax * direction / axisLength;
+        ay = ay * direction / axisLength;
+        az = az * direction / axisLength;
+
+        double totalMass = 0.0;
+        double cx = 0.0, cy = 0.0, cz = 0.0;
+        double cvx = 0.0, cvy = 0.0, cvz = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            double innerMass = Math.max(0.0, nodes.mass[inner]);
+            double outerMass = Math.max(0.0, nodes.mass[outer]);
+            totalMass += innerMass + outerMass;
+            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
+            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
+            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
+            cvx += nodes.velX[inner] * innerMass + nodes.velX[outer] * outerMass;
+            cvy += nodes.velY[inner] * innerMass + nodes.velY[outer] * outerMass;
+            cvz += nodes.velZ[inner] * innerMass + nodes.velZ[outer] * outerMass;
+        }
+        if (totalMass < 1e-9) return 0.0f;
+        cx /= totalMass; cy /= totalMass; cz /= totalMass;
+        cvx /= totalMass; cvy /= totalMass; cvz /= totalMass;
+
+        double angularMomentum = 0.0;
+        double inertia = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            angularMomentum += angularMomentum(nodes, inner, cx, cy, cz, cvx, cvy, cvz, ax, ay, az);
+            angularMomentum += angularMomentum(nodes, outer, cx, cy, cz, cvx, cvy, cvz, ax, ay, az);
+            inertia += polarInertia(nodes, inner, cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, outer, cx, cy, cz, ax, ay, az);
+        }
+        return inertia > 1e-9 ? (float) (angularMomentum / inertia) : 0.0f;
+    }
+
+    /** Returns the hub and tire nodes' instantaneous polar inertia. */
+    public float getRotationalInertia(int wheelIdx) {
+        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return 0.0f;
+
+        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
+        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
+        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return 0.0f;
+        ax /= axisLength; ay /= axisLength; az /= axisLength;
+
+        double cx = (nodes.posX[node1[wheelIdx]] + nodes.posX[node2[wheelIdx]]) * 0.5;
+        double cy = (nodes.posY[node1[wheelIdx]] + nodes.posY[node2[wheelIdx]]) * 0.5;
+        double cz = (nodes.posZ[node1[wheelIdx]] + nodes.posZ[node2[wheelIdx]]) * 0.5;
+        double inertia = 0.0;
+        boolean hasTire = tireRadius[wheelIdx] > 0.0f;
+        for (int ray = 0; ray < rays; ray++) {
+            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+            if (hasTire) {
+                inertia += polarInertia(nodes, tireInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+                inertia += polarInertia(nodes, tireOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+            }
+        }
+        return (float) inertia;
+    }
+
+    /** Applies a pure axle torque to the hub ring without adding net force. */
+    public void applyDriveTorque(int wheelIdx, float torque) {
+        if (wheelIdx < 0 || wheelIdx >= count || Math.abs(torque) < 1e-8f) return;
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return;
+
+        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
+        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
+        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return;
+        double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
+        ax = ax * direction / axisLength;
+        ay = ay * direction / axisLength;
+        az = az * direction / axisLength;
+
+        double totalMass = 0.0, cx = 0.0, cy = 0.0, cz = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            double innerMass = Math.max(0.0, nodes.mass[inner]);
+            double outerMass = Math.max(0.0, nodes.mass[outer]);
+            totalMass += innerMass + outerMass;
+            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
+            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
+            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
+        }
+        if (totalMass < 1e-9) return;
+        cx /= totalMass; cy /= totalMass; cz /= totalMass;
+
+        double inertia = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+        }
+        if (inertia < 1e-9) return;
+        double angularAcceleration = torque / inertia;
+        for (int ray = 0; ray < rays; ray++) {
+            applyAngularForce(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az, angularAcceleration);
+            applyAngularForce(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az, angularAcceleration);
+        }
+    }
+
+    private static double angularMomentum(NodeContainer nodes, int node, double cx, double cy, double cz,
+                                          double cvx, double cvy, double cvz,
+                                          double ax, double ay, double az) {
+        double rx = nodes.posX[node] - cx, ry = nodes.posY[node] - cy, rz = nodes.posZ[node] - cz;
+        double vx = nodes.velX[node] - cvx, vy = nodes.velY[node] - cvy, vz = nodes.velZ[node] - cvz;
+        double mass = Math.max(0.0, nodes.mass[node]);
+        return mass * (ax * (ry * vz - rz * vy)
+                + ay * (rz * vx - rx * vz) + az * (rx * vy - ry * vx));
+    }
+
+    private static double polarInertia(NodeContainer nodes, int node, double cx, double cy, double cz,
+                                       double ax, double ay, double az) {
+        double rx = nodes.posX[node] - cx, ry = nodes.posY[node] - cy, rz = nodes.posZ[node] - cz;
+        double axial = rx * ax + ry * ay + rz * az;
+        return Math.max(0.0, nodes.mass[node])
+                * Math.max(0.0, rx * rx + ry * ry + rz * rz - axial * axial);
+    }
+
+    private static void applyAngularForce(NodeContainer nodes, int node, double cx, double cy, double cz,
+                                          double ax, double ay, double az, double angularAcceleration) {
+        double rx = nodes.posX[node] - cx, ry = nodes.posY[node] - cy, rz = nodes.posZ[node] - cz;
+        double scale = angularAcceleration * Math.max(0.0, nodes.mass[node]);
+        nodes.forceX[node] += (float) ((ay * rz - az * ry) * scale);
+        nodes.forceY[node] += (float) ((az * rx - ax * rz) * scale);
+        nodes.forceZ[node] += (float) ((ax * ry - ay * rx) * scale);
     }
 
     public void reset() {
