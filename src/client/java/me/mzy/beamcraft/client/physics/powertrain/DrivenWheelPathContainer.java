@@ -14,11 +14,15 @@ public final class DrivenWheelPathContainer {
     public int[] pathWheel = new int[0];
     public float[] pathGain = new float[0];
 
+    public void allocate(int units, int paths) {
+        pathStart = new int[units];
+        pathCount = new short[units];
+        pathWheel = new int[paths];
+        pathGain = new float[paths];
+    }
+
     /** Resets every array so the container holds zero paths. */
     public void clear() {
-        pathStart = new int[0];
-        pathCount = new short[0];
-        pathWheel = new int[0];
-        pathGain = new float[0];
+        allocate(0, 0);
     }
 }

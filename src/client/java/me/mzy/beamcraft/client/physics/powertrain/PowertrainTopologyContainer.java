@@ -27,16 +27,24 @@ public final class PowertrainTopologyContainer {
     public int[] children = new int[0];
     public float[] deviceRatio = new float[0];
 
+    public void allocateDevices(int devices) {
+        deviceCount = devices;
+        deviceName = new String[devices];
+        deviceType = new byte[devices];
+        parentDevice = new int[devices];
+        parentPort = new int[devices];
+        childStart = new int[devices];
+        childCount = new short[devices];
+        deviceRatio = new float[devices];
+    }
+
+    public void allocateChildren(int childLinks) {
+        children = new int[childLinks];
+    }
+
     /** Resets every array so the container holds zero devices. */
     public void clear() {
-        deviceCount = 0;
-        deviceName = new String[0];
-        deviceType = new byte[0];
-        parentDevice = new int[0];
-        parentPort = new int[0];
-        childStart = new int[0];
-        childCount = new short[0];
-        children = new int[0];
-        deviceRatio = new float[0];
+        allocateDevices(0);
+        allocateChildren(0);
     }
 }

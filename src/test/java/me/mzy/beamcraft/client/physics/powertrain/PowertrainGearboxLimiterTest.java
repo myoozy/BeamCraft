@@ -40,7 +40,8 @@ class PowertrainGearboxLimiterTest {
         vehicle.powertrain.addSpecs(List.of(
                 new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
                         0.072, 850, 7500, 11.5, 0.024, 38, sunburstTorque(), List.of(), List.of(),
-                        88.8, 400, 100, revLimiterRPM, "time", revLimiterCutTime, revLimiterMaxRPMDrop),
+                        88.8, 400, 100, revLimiterRPM, "time", revLimiterCutTime, revLimiterMaxRPMDrop,
+                        0.01, 0.15),
                 new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
                         0, 0, 0.25, 0.15, 0.75, 1, List.of()),
                 new GearboxSpec("sequentialGearbox", "gearbox", "clutch", 1,
@@ -106,11 +107,11 @@ class PowertrainGearboxLimiterTest {
     @Test
     void shiftTimerDoesNotChangeWithoutSolveAndDisconnectsTorque() {
         SoftBodyVehicle vehicle = rig(List.of(-3.21, 0.0, 3.31, 2.38), 0.5, 7500, 0.15, 300);
-        assertEquals(2, vehicle.powertrain.gearboxes.initialGearIndex[0]);
-        assertEquals(3.31f, vehicle.powertrain.gearboxes.activeRatio[0], 1e-6f);
+        assertEquals(1, vehicle.powertrain.gearboxes.initialGearIndex[0]);
+        assertEquals(0.0f, vehicle.powertrain.gearboxes.activeRatio[0], 1e-6f);
 
         vehicle.powertrain.requestShiftUp();
-        assertEquals(3, vehicle.powertrain.gearboxes.pendingGearIndex[0]);
+        assertEquals(2, vehicle.powertrain.gearboxes.pendingGearIndex[0]);
         assertEquals(0.5f, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-6f);
         assertEquals(0.0f, vehicle.powertrain.gearboxes.activeRatio[0], 1e-6f,
                 "requesting a shift must disconnect the torque path immediately");
@@ -122,7 +123,7 @@ class PowertrainGearboxLimiterTest {
         assertEquals(frozen, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-6f);
         vehicle.powertrain.solve(DT);
         assertEquals(frozen - DT, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-5f);
-        assertEquals(2, vehicle.powertrain.gearboxes.currentGearIndex[0], "still in first gear");
+        assertEquals(1, vehicle.powertrain.gearboxes.currentGearIndex[0], "still in neutral");
     }
 
     @Test
@@ -137,7 +138,7 @@ class PowertrainGearboxLimiterTest {
         assertEquals(0.0f, vehicle.powertrain.debugClutchTorque(), 1e-6f,
                 "no clutch torque may flow while the ratio is disconnected");
         assertTrue(vehicle.powertrain.gearboxes.shiftRemaining[0] > 0.0f, "still shifting");
-        assertEquals(2, vehicle.powertrain.gearboxes.currentGearIndex[0], "gear not committed yet");
+        assertEquals(1, vehicle.powertrain.gearboxes.currentGearIndex[0], "gear not committed yet");
     }
 
     @Test
@@ -160,18 +161,14 @@ class PowertrainGearboxLimiterTest {
         }
         assertEquals(-1, vehicle.powertrain.gearboxes.pendingGearIndex[0],
                 "shift must commit once the accumulated physics time reaches the duration");
-        assertEquals(3, vehicle.powertrain.gearboxes.currentGearIndex[0]);
-        assertEquals(2.38f, vehicle.powertrain.debugActiveRatio(), 1e-4f);
+        assertEquals(2, vehicle.powertrain.gearboxes.currentGearIndex[0]);
+        assertEquals(3.31f, vehicle.powertrain.debugActiveRatio(), 1e-4f);
         assertEquals(0.0f, vehicle.powertrain.debugShiftRemaining(), 1e-6f);
     }
 
     @Test
     void neutralGearDisconnectsTorqueButEngineKeepsRunning() {
         SoftBodyVehicle vehicle = rig(List.of(-3.21, 0.0, 3.31, 2.38), 0.25, 7500, 0.15, 300);
-        vehicle.powertrain.requestShiftDown(); // 1st -> neutral
-        for (int step = 0; step < 600; step++) {
-            vehicle.powertrain.solve(DT); // 0.3 s > 0.25 s shift
-        }
         assertEquals(1, vehicle.powertrain.gearboxes.currentGearIndex[0]);
         assertEquals(0.0f, vehicle.powertrain.debugActiveRatio(), 1e-6f);
         assertEquals(0.0f, vehicle.powertrain.debugClutchTorque(), 1e-6f);
@@ -188,10 +185,6 @@ class PowertrainGearboxLimiterTest {
     @Test
     void reverseGearFlipsDriveTorqueSign() {
         SoftBodyVehicle vehicle = rig(List.of(-3.21, 0.0, 3.31), 0.25, 7500, 0.15, 300);
-        vehicle.powertrain.requestShiftDown(); // 1st -> neutral
-        for (int step = 0; step < 600; step++) {
-            vehicle.powertrain.solve(DT);
-        }
         vehicle.powertrain.requestShiftDown(); // neutral -> reverse
         for (int step = 0; step < 600; step++) {
             vehicle.powertrain.solve(DT);

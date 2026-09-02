@@ -60,7 +60,7 @@ class PowertrainSystemTest {
                 new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
                         300, 1000, 1, 0.2, 0.125, 1, List.of()),
                 new GearboxSpec("manualGearbox", "gearbox", "clutch", 1,
-                        List.of(-3.0, 0.0, 3.0, 2.0), false, 0, 0, 0, List.of()),
+                        List.of(-3.0, 0.0, 3.0, 2.0), true, 0, 0, 0, List.of()),
                 new DifferentialSpec("differential", "diff", "gearbox", 1,
                         4.0, 0.5, 0, 0, 0, "open", List.of()),
                 new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0,
@@ -78,6 +78,8 @@ class PowertrainSystemTest {
         assertArrayEquals(new int[]{0, 1}, system.wheelPaths.pathWheel);
         assertArrayEquals(new float[]{6.0f, 6.0f}, system.wheelPaths.pathGain, 1e-6f);
         assertEquals(3.0f, system.topology.deviceRatio[2], 1e-6f);
+        assertEquals(2, system.gearboxes.currentGearIndex[0]);
+        assertEquals(3.0f, system.gearboxes.activeRatio[0], 1e-6f);
         assertEquals(2.0f, system.engines.engineFriction[0], 1e-6f);
         assertEquals("ready; 1 detached device(s)", system.diagnostic());
         // The dangling branch (unusedSpindle references a missing axle) is isolated
@@ -146,13 +148,19 @@ class PowertrainSystemTest {
 
         assertEquals(1, system.gearboxes.unitCount);
         assertArrayEquals(new float[]{-3.0f, 0.0f, 3.0f, 2.0f}, system.gearboxes.gearRatios, 1e-6f);
-        assertEquals(2, system.gearboxes.initialGearIndex[0]); // first positive forward = 3.0
-        assertEquals(2, system.gearboxes.currentGearIndex[0]);
-        assertEquals(3.0f, system.gearboxes.activeRatio[0], 1e-6f);
-        assertEquals(3.0f, system.gearboxes.initialRatio[0], 1e-6f);
+        assertEquals(1, system.gearboxes.initialGearIndex[0]); // neutral
+        assertEquals(1, system.gearboxes.currentGearIndex[0]);
+        assertEquals(0.0f, system.gearboxes.activeRatio[0], 1e-6f);
+        assertEquals(3.0f, system.gearboxes.pathBaseRatio[0], 1e-6f);
         assertEquals(-1, system.gearboxes.pendingGearIndex[0]);
         assertEquals(2, system.gearboxes.device[0]); // gearbox device index in the topology
         assertEquals("gearbox", system.gearboxes.deviceName[0]);
         assertEquals(0.25, system.gearboxes.shiftDuration[0], 1e-6f); // manual default shift time
+
+        system.gearboxes.currentGearIndex[0] = 2;
+        system.gearboxes.activeRatio[0] = 3.0f;
+        system.reset();
+        assertEquals(1, system.gearboxes.currentGearIndex[0]);
+        assertEquals(0.0f, system.gearboxes.activeRatio[0], 1e-6f);
     }
 }

@@ -126,7 +126,7 @@ public final class JBeamPowertrainParser {
             "revLimiterCutTime", "revLimiterMaxRPMDrop", "revLimiterRPMChange",
             "lockTorque", "lockSpring", "lockSpringCoef", "lockDampRatio",
             "clutchFreePlay", "clutchStiffness", "gearChangeTime", "maxGearChangeTime",
-            "dctClutchTime");
+            "dctClutchTime", "idleControllerP", "maxIdleThrottle");
 
     // ---------------------------------------------------------------- row 解析
 
@@ -207,7 +207,9 @@ public final class JBeamPowertrainParser {
                 s(cfg, "revLimiterType", "time"),
                 d(cfg, "revLimiterCutTime", 0.15, vars),
                 cfg.has("revLimiterMaxRPMDrop") ? d(cfg, "revLimiterMaxRPMDrop", 0.0, vars)
-                        : d(cfg, "revLimiterRPMChange", 300.0, vars)
+                        : d(cfg, "revLimiterRPMChange", 300.0, vars),
+                d(cfg, "idleControllerP", 0.01, vars),
+                d(cfg, "maxIdleThrottle", 0.15, vars)
         );
     }
 
@@ -244,32 +246,43 @@ public final class JBeamPowertrainParser {
 
     private static ShaftSpec shaft(String type, String name, String inputName, int inputIndex,
                                    JsonObject cfg, Map<String, Double> vars) {
+        RigidDeviceFields fields = rigidDeviceFields(cfg, vars);
         return new ShaftSpec(
                 type, name, inputName, inputIndex,
-                d(cfg, "gearRatio", 1.0, vars),
-                s(cfg, "connectedWheel", null),
-                d(cfg, "friction", 0.0, vars),
-                d(cfg, "dynamicFriction", 0.0, vars),
-                d(cfg, "torqueLossCoef", 0.0, vars),
-                JBeamParser.getStringListSafe(cfg, vars, "torqueReactionNodes:", "torqueReactionNodes", "torqueReactionNodes_nodes"),
-                JBeamParser.getIntListSafe(cfg, "outputPortOverride"),
+                fields.gearRatio, fields.connectedWheel, fields.friction,
+                fields.dynamicFriction, fields.torqueLossCoef,
+                fields.torqueReactionNodes, fields.outputPortOverride,
                 valueModifiers(cfg, vars)
         );
     }
 
     private static TorsionReactorSpec torsionReactor(String type, String name, String inputName, int inputIndex,
                                                      JsonObject cfg, Map<String, Double> vars) {
+        RigidDeviceFields fields = rigidDeviceFields(cfg, vars);
         return new TorsionReactorSpec(
                 type, name, inputName, inputIndex,
+                fields.gearRatio, fields.connectedWheel, fields.friction,
+                fields.dynamicFriction, fields.torqueLossCoef,
+                fields.torqueReactionNodes, fields.outputPortOverride,
+                valueModifiers(cfg, vars)
+        );
+    }
+
+    private static RigidDeviceFields rigidDeviceFields(JsonObject cfg, Map<String, Double> vars) {
+        return new RigidDeviceFields(
                 d(cfg, "gearRatio", 1.0, vars),
                 s(cfg, "connectedWheel", null),
                 d(cfg, "friction", 0.0, vars),
                 d(cfg, "dynamicFriction", 0.0, vars),
                 d(cfg, "torqueLossCoef", 0.0, vars),
-                JBeamParser.getStringListSafe(cfg, vars, "torqueReactionNodes:", "torqueReactionNodes", "torqueReactionNodes_nodes"),
-                JBeamParser.getIntListSafe(cfg, "outputPortOverride"),
-                valueModifiers(cfg, vars)
-        );
+                JBeamParser.getStringListSafe(cfg, vars,
+                        "torqueReactionNodes:", "torqueReactionNodes", "torqueReactionNodes_nodes"),
+                JBeamParser.getIntListSafe(cfg, "outputPortOverride"));
+    }
+
+    private record RigidDeviceFields(double gearRatio, String connectedWheel, double friction,
+                                     double dynamicFriction, double torqueLossCoef,
+                                     List<String> torqueReactionNodes, List<Integer> outputPortOverride) {
     }
 
     private static DifferentialSpec differential(String type, String name, String inputName, int inputIndex,

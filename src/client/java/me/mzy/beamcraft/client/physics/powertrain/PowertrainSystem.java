@@ -23,8 +23,8 @@ import java.util.List;
  *       by the rev limiter) and crank speed is above {@code crankingAV};</li>
  *   <li>a starter motor (external torque, boolean input) cranks a stalled engine back up
  *       past the combustion threshold;</li>
- *   <li>a PI + feedforward idle controller separates the player throttle from the actual
- *       throttle; the top-screw feedforward at least covers idle losses;</li>
+ *   <li>a BeamNG-style proportional idle controller separates the player throttle from
+ *       the actual throttle; a calculated top-screw floor covers idle losses plus 5%;</li>
  *   <li>a time/soft rev limiter cuts spark+fuel for {@code revLimiterCutTime} and only
  *       retriggers while the crank is still above the hysteresis threshold — RPM is never
  *       clamped directly.</li>
@@ -40,10 +40,6 @@ import java.util.List;
 public final class PowertrainSystem {
     static final float RPM_TO_AV = (float) (Math.PI / 30.0);
     static final float AV_TO_RPM = 1.0f / RPM_TO_AV;
-
-    /** Idle-controller gains (well-damped proportional + light integral). */
-    private static final float IDLE_KP = 0.5f;
-    private static final float IDLE_KI = 1.0f;
 
     private final SoftBodyVehicle vehicle;
     private final List<DeviceSpec> pendingSpecs = new ArrayList<>();
@@ -119,8 +115,8 @@ public final class PowertrainSystem {
 
     /** Client-thread input handoff including the starter-motor request. */
     public void setControls(float throttle, float clutchPedal, boolean starter) {
-        this.throttle = clamp01(throttle);
-        this.clutchPedal = clamp01(clutchPedal);
+        this.throttle = Math.clamp(throttle, 0.0f, 1.0f);
+        this.clutchPedal = Math.clamp(clutchPedal, 0.0f, 1.0f);
         this.starter = starter;
         debugThrottle = this.throttle;
         debugClutchEngagement = 1.0f - this.clutchPedal;
@@ -153,7 +149,7 @@ public final class PowertrainSystem {
             boolean crankRunning = engines.engineAV[unit] >= engines.crankingAV[unit];
             boolean combustionEnabled = crankRunning
                     && engines.sparkEnabled[unit] && engines.fuelEnabled[unit];
-            float idleOutput = idleControllerOutput(unit, dt, crankRunning);
+            float idleOutput = idleControllerOutput(unit, crankRunning);
             float actualThrottle = Math.max(throttle, idleOutput);
             engines.playerThrottle[unit] = throttle;
             engines.actualThrottle[unit] = actualThrottle;
@@ -163,12 +159,23 @@ public final class PowertrainSystem {
             float starterTorque = engines.starterActive[unit] && engines.engineAV[unit] < engines.starterMaxAV[unit]
                     ? engines.starterTorque[unit] : 0.0f;
 
-            float sign = engines.engineAV[unit] < 0.0f ? -1.0f : 1.0f;
+            float engineAVBeforeExternal = Math.max(0.0f, engines.engineAV[unit]);
             float loss = engines.engineFriction[unit]
-                    + engines.engineDynamicFriction[unit] * Math.abs(engines.engineAV[unit])
-                    + engines.engineBrakeTorque[unit] * (1.0f - actualThrottle);
-            float externalTorque = combustionTorque + starterTorque - sign * Math.max(0.0f, loss);
-            engines.engineAV[unit] += dt * externalTorque / engines.engineInertia[unit];
+                    + engines.engineDynamicFriction[unit] * engineAVBeforeExternal;
+            // BeamNG's additional engineBrakeTorque depends on instantEngineLoad. Leave
+            // it inactive until BeamCraft has that intake/load model instead of inventing
+            // a throttle or clutch-load proxy.
+            float driveTorque = Math.max(0.0f, combustionTorque + starterTorque);
+            // Integrate driving torque first and preserve that no-loss result. Resistance
+            // is dissipative: if applying it crosses zero, the crank stopped during this
+            // substep and must not be accelerated in the opposite direction.
+            float drivenAV = engineAVBeforeExternal + dt * driveTorque / engines.engineInertia[unit];
+            float lossDeltaAV = dt * Math.max(0.0f, loss) / engines.engineInertia[unit];
+            float resistedAV = drivenAV - Math.copySign(lossDeltaAV, drivenAV);
+            engines.engineAV[unit] = Math.signum(drivenAV) != Math.signum(resistedAV)
+                    ? 0.0f : resistedAV;
+            float externalTorque = (engines.engineAV[unit] - engineAVBeforeExternal)
+                    * engines.engineInertia[unit] / dt;
 
             // Gearbox shift timer + dynamic ratio. activeRatio is 0 in neutral and during a
             // shift, which disconnects the torque path without skipping engine integration.
@@ -177,8 +184,8 @@ public final class PowertrainSystem {
 
             float clutchTorque = 0.0f;
             if (Math.abs(activeRatio) > 1e-6f) {
-                float initialRatio = gearboxes.initialRatio[unit];
-                float ratioFactor = initialRatio > 1e-6f ? activeRatio / initialRatio : 1.0f;
+                float pathBaseRatio = gearboxes.pathBaseRatio[unit];
+                float ratioFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
                 float drivelineAV = 0.0f;
                 float compliance = 0.0f;
                 int pStart = wheelPaths.pathStart[unit];
@@ -291,27 +298,23 @@ public final class PowertrainSystem {
         }
     }
 
-    /**
-     * Well-damped idle controller: top-screw feedforward covering idle losses plus
-     * proportional + integral error. Only active while the engine is running; the integral
-     * is reset when the engine stalls and only accumulates physical {@code dt}.
-     */
-    private float idleControllerOutput(int unit, float dt, boolean running) {
+    /** BeamNG-style positive-error idle controller with a current-speed loss feedforward. */
+    private float idleControllerOutput(int unit, boolean running) {
         float idle = engines.idleAV[unit];
-        if (idle <= 1e-6f) return 0.0f;
-        if (!running) {
-            engines.idleIntegral[unit] = 0.0f;
-            // Mechanical idle stop / top screw remains open even when the engine
-            // is stalled or the starter has not yet reached cranking speed.
-            return engines.idleLossThrottle[unit];
-        }
-        float errNorm = (idle - engines.engineAV[unit]) / idle;
-        errNorm = Math.max(-1.5f, Math.min(3.0f, errNorm));
-        float integral = engines.idleIntegral[unit] + errNorm * dt;
-        integral = Math.max(-0.5f, Math.min(1.5f, integral));
-        engines.idleIntegral[unit] = integral;
-        float output = engines.idleLossThrottle[unit] + IDLE_KP * errNorm + IDLE_KI * integral;
-        return clamp01(output);
+        float engineAV = Math.max(0.0f, engines.engineAV[unit]);
+        float torque = interpolateTorque(unit, engineAV * AV_TO_RPM);
+        float loss = engines.engineFriction[unit]
+                + engines.engineDynamicFriction[unit] * engineAV;
+        float feedforward = torque > 1e-3f
+                ? Math.clamp(loss / torque + 0.05f, 0.0f, 1.0f)
+                : (loss > 1e-3f ? 1.0f : 0.0f);
+        engines.idleLossThrottle[unit] = feedforward;
+        if (idle <= 1e-6f || !running) return feedforward;
+        float positiveError = Math.max(idle - engines.engineAV[unit], 0.0f);
+        if (positiveError <= 0.0f) return 0.0f;
+        float proportional = Math.min(positiveError * engines.idleControllerP[unit],
+                engines.maxIdleThrottle[unit]);
+        return Math.max(feedforward, proportional);
     }
 
     /**
@@ -376,13 +379,12 @@ public final class PowertrainSystem {
             engines.sparkEnabled[i] = true;
             engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
-            engines.idleIntegral[i] = 0.0f;
             engines.playerThrottle[i] = 0.0f;
             engines.actualThrottle[i] = engines.idleLossThrottle[i];
             engines.limiterCutRemaining[i] = 0.0f;
             gearboxes.currentGearIndex[i] = gearboxes.initialGearIndex[i];
             gearboxes.pendingGearIndex[i] = -1;
-            gearboxes.activeRatio[i] = gearboxes.initialRatio[i];
+            gearboxes.activeRatio[i] = gearboxRatio(i, gearboxes.initialGearIndex[i]);
             gearboxes.shiftRemaining[i] = 0.0f;
         }
         throttle = 0.0f;
@@ -483,7 +485,4 @@ public final class PowertrainSystem {
                 torque * ax / length, torque * ay / length, torque * az / length);
     }
 
-    private static float clamp01(float value) {
-        return Math.max(0.0f, Math.min(1.0f, value));
-    }
 }

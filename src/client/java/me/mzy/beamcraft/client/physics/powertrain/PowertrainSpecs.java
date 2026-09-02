@@ -100,7 +100,9 @@ public final class PowertrainSpecs {
             double revLimiterRPM,
             String revLimiterType,
             double revLimiterCutTime,
-            double revLimiterMaxRPMDrop
+            double revLimiterMaxRPMDrop,
+            double idleControllerP,
+            double maxIdleThrottle
     ) implements DeviceSpec {
         public CombustionEngineSpec {
             torqueCurve = List.copyOf(torqueCurve);
@@ -128,7 +130,8 @@ public final class PowertrainSpecs {
                 List<ValueModifier> valueModifiers) {
             this(type, name, inputName, inputIndex, inertia, idleRPM, maxRPM, friction, dynamicFriction,
                     engineBrakeTorque, torqueCurve, torqueReactionNodes, valueModifiers,
-                    0.0, 400.0, 100.0, maxRPM, "time", 0.15, 300.0);
+                    0.0, 400.0, 100.0, maxRPM, "time", 0.15, 300.0,
+                    0.01, 0.15);
         }
     }
 

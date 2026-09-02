@@ -523,7 +523,9 @@ class JBeamPowertrainParserTest {
                     "revLimiterRPM": 6200,
                     "revLimiterType": "soft",
                     "revLimiterCutTime": 0.1,
-                    "revLimiterMaxRPMDrop": 200
+                    "revLimiterMaxRPMDrop": 200,
+                    "idleControllerP": 0.02,
+                    "maxIdleThrottle": 0.25
                   },
                   "gearbox": {"gearChangeTime": 0.3, "gearRatios": [-3.0, 0, 3.2, 2.0]}
                 }
@@ -536,6 +538,8 @@ class JBeamPowertrainParserTest {
         assertEquals("soft", engine.revLimiterType());
         assertEquals(0.1, engine.revLimiterCutTime(), 1e-6);
         assertEquals(200.0, engine.revLimiterMaxRPMDrop(), 1e-6);
+        assertEquals(0.02, engine.idleControllerP(), 1e-6);
+        assertEquals(0.25, engine.maxIdleThrottle(), 1e-6);
 
         GearboxSpec gb = assertInstanceOf(GearboxSpec.class, specs.get(1));
         assertEquals(0.3, gb.shiftTime(), 1e-6);

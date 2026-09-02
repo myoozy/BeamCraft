@@ -1427,15 +1427,6 @@ public class SoftBodyVehicle {
             nodes.velY[i] += (nodes.forceY[i] * invMass) * dt;
             nodes.velZ[i] += (nodes.forceZ[i] * invMass) * dt;
 
-            float speedSq = nodes.velX[i]*nodes.velX[i] + nodes.velY[i]*nodes.velY[i] + nodes.velZ[i]*nodes.velZ[i];
-
-            final float K_V4 = 1.2e-7f;
-            float v4 = speedSq * speedSq;
-            float factor = 1.0f / (1.0f + K_V4 * v4 * dt);
-            nodes.velX[i] *= factor;
-            nodes.velY[i] *= factor;
-            nodes.velZ[i] *= factor;
-
             if (Float.isNaN(nodes.velX[i]) || Float.isNaN(nodes.velY[i]) || Float.isNaN(nodes.velZ[i])) {
                 nodes.velX[i] = 0.0f; nodes.velY[i] = 0.0f; nodes.velZ[i] = 0.0f;
             }

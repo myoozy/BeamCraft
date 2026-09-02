@@ -102,6 +102,20 @@ class PowertrainSolveTest {
                 new TorquePoint(9000, 122), new TorquePoint(9500, 108), new TorquePoint(10000, 90));
     }
 
+    /** Selects first gear directly when a test specifically exercises the connected driveline. */
+    private static void selectFirstForwardGear(SoftBodyVehicle vehicle) {
+        GearboxContainer gearboxes = vehicle.powertrain.gearboxes;
+        int start = gearboxes.gearStart[0];
+        int end = start + gearboxes.gearCount[0];
+        for (int i = start; i < end; i++) {
+            if (gearboxes.gearRatios[i] > 0.0f) {
+                gearboxes.currentGearIndex[0] = i - start;
+                gearboxes.activeRatio[0] = gearboxes.gearRatios[i];
+                return;
+            }
+        }
+    }
+
     /** Semi-implicit integration of the node forces, clearing them each substep. */
     private static void integrate(SoftBodyVehicle vehicle, float dt) {
         NodeContainer nodes = vehicle.nodes;
@@ -146,6 +160,7 @@ class PowertrainSolveTest {
     void fullThrottleWithSlippingClutchProducesCombustionTorqueAndRevvesEngine() {
         SoftBodyVehicle vehicle = sunburstLikeVehicle();
         addSunburstPowertrain(vehicle);
+        selectFirstForwardGear(vehicle);
         assertEquals("ready", vehicle.powertrain.diagnostic());
         assertEquals(21, vehicle.powertrain.debugTorqueCurveCount(),
                 "Sunburst engine torque table must compile 21 points");
@@ -184,6 +199,40 @@ class PowertrainSolveTest {
     }
 
     @Test
+    void engineReturnsToLiveIdleAfterThrottleBlip() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        addSunburstPowertrain(vehicle);
+        vehicle.powertrain.setControls(1.0f, 1.0f);
+        for (int step = 0; step < 1000; step++) vehicle.powertrain.solve(DT);
+        assertTrue(vehicle.powertrain.debugEngineRPM() > IDLE_RPM + 200.0f,
+                "throttle blip must first raise engine speed");
+
+        vehicle.powertrain.setControls(0.0f, 1.0f);
+        float minimumRpm = Float.POSITIVE_INFINITY;
+        for (int step = 0; step < 5000; step++) {
+            vehicle.powertrain.solve(DT);
+            minimumRpm = Math.min(minimumRpm, vehicle.powertrain.debugEngineRPM());
+        }
+        assertTrue(minimumRpm > 300.0f,
+                "return from a throttle blip must not overshoot into a stall, min " + minimumRpm);
+        assertTrue(vehicle.powertrain.debugEngineRPM() > 300.0f,
+                "engine must settle at a live idle after the blip");
+    }
+
+    @Test
+    void internalResistanceStopsAtZeroInsteadOfReversingCrank() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        addSunburstPowertrain(vehicle);
+        vehicle.powertrain.engines.engineAV[0] = 0.001f;
+        vehicle.powertrain.setControls(0.0f, 1.0f);
+
+        vehicle.powertrain.solve(DT);
+
+        assertEquals(0.0f, vehicle.powertrain.engines.engineAV[0], 0.0f,
+                "a resistance impulse crossing zero must stop the crank exactly");
+    }
+
+    @Test
     void stalledEngineWithThrottleButNoStarterStaysDead() {
         SoftBodyVehicle vehicle = sunburstLikeVehicle();
         addSunburstPowertrain(vehicle);
@@ -210,7 +259,7 @@ class PowertrainSolveTest {
         // Release the clutch so the starter only has to spin the crank, then hold V.
         vehicle.powertrain.setControls(0.0f, 1.0f, true);
         float peakRpm = 0f;
-        for (int step = 0; step < 600; step++) {
+        for (int step = 0; step < 800; step++) {
             vehicle.powertrain.solve(DT);
             peakRpm = Math.max(peakRpm, vehicle.powertrain.debugEngineRPM());
         }
@@ -227,6 +276,7 @@ class PowertrainSolveTest {
     void rollingWheelsBackDriveTheEngineAboveIdle() {
         SoftBodyVehicle vehicle = sunburstLikeVehicle();
         addSunburstPowertrain(vehicle);
+        selectFirstForwardGear(vehicle);
 
         // Push the car: wheels roll forward, so the driveline is faster than the idle
         // crank and the clutch back-drives the engine — this must keep working.
@@ -265,7 +315,7 @@ class PowertrainSolveTest {
                 new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
                         clutchCapacity, 0, 1, 0.15, 0.125, 1, List.of()),
                 new GearboxSpec("manualGearbox", "gearbox", "clutch", 1,
-                        List.of(-2.0, 0.0, (double) gearRatio), false, 0, 0, 0, List.of()),
+                        List.of((double) gearRatio), false, 0, 0, 0, List.of()),
                 new ShaftSpec("shaft", "s", "gearbox", 1, 1, "W", 0, 0, 0, List.of(), List.of(), List.of())
         ));
         vehicle.powertrain.finalizeSetup();
@@ -379,10 +429,10 @@ class PowertrainSolveTest {
         assertTrue(vehicle.powertrain.debugSparkEnabled() && vehicle.powertrain.debugFuelEnabled(),
                 "spark/fuel stay enabled below cranking (no limiter involvement)");
         assertTrue(vehicle.powertrain.debugActualThrottle() > 0.0f,
-                "the mechanical idle stop remains open even after the engine stalls");
+                "the idle controller keeps a restart feedforward after the engine stalls");
         assertEquals(0.0f, vehicle.powertrain.engines.playerThrottle[0], 1e-6f);
         assertTrue(vehicle.powertrain.engines.actualThrottle[0]
-                        >= vehicle.powertrain.engines.idleLossThrottle[0],
-                "physical throttle must never close below the idle stop");
+                >= vehicle.powertrain.engines.idleLossThrottle[0],
+                "physical throttle must include the calculated low-speed loss feedforward");
     }
 }

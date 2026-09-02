@@ -15,14 +15,18 @@ public final class DifferentialContainer {
     public float[] dynamicFriction = new float[0];
     public float[] torqueLossCoef = new float[0];
 
+    public void allocate(int size) {
+        count = size;
+        device = new int[size];
+        gearRatio = new float[size];
+        diffTorqueSplit = new float[size];
+        diffType = new String[size];
+        friction = new float[size];
+        dynamicFriction = new float[size];
+        torqueLossCoef = new float[size];
+    }
+
     public void clear() {
-        count = 0;
-        device = new int[0];
-        gearRatio = new float[0];
-        diffTorqueSplit = new float[0];
-        diffType = new String[0];
-        friction = new float[0];
-        dynamicFriction = new float[0];
-        torqueLossCoef = new float[0];
+        allocate(0);
     }
 }

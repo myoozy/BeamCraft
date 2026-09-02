@@ -24,35 +24,39 @@ public final class GearboxContainer {
     public short[] gearCount = new short[0];
     /** Flattened gear ratios in JBeam order (reverse, neutral, forward…). */
     public float[] gearRatios = new float[0];
-    /** Index of the first positive forward gear (the starting gear). */
+    /** Gear selected when the vehicle is created or reset (normally neutral). */
     public int[] initialGearIndex = new int[0];
     public int[] currentGearIndex = new int[0];
     /** Target gear during a shift; -1 when idle. */
     public int[] pendingGearIndex = new int[0];
     /** Ratio currently applied to the driveline (0 while shifting or in neutral). */
     public float[] activeRatio = new float[0];
-    /** Ratio of the starting gear, the denominator of the dynamic-ratio factor. */
-    public float[] initialRatio = new float[0];
+    /** First-forward ratio baked into path gains; denominator of the dynamic-ratio factor. */
+    public float[] pathBaseRatio = new float[0];
     public float[] shiftRemaining = new float[0];
     public float[] shiftDuration = new float[0];
     public boolean[] fixedFirstGear = new boolean[0];
 
+    public void allocate(int units, int ratioCount) {
+        unitCount = units;
+        device = new int[units];
+        deviceName = new String[units];
+        gearboxType = new String[units];
+        gearStart = new int[units];
+        gearCount = new short[units];
+        gearRatios = new float[ratioCount];
+        initialGearIndex = new int[units];
+        currentGearIndex = new int[units];
+        pendingGearIndex = new int[units];
+        activeRatio = new float[units];
+        pathBaseRatio = new float[units];
+        shiftRemaining = new float[units];
+        shiftDuration = new float[units];
+        fixedFirstGear = new boolean[units];
+    }
+
     /** Resets every array so the container holds zero units. */
     public void clear() {
-        unitCount = 0;
-        device = new int[0];
-        deviceName = new String[0];
-        gearboxType = new String[0];
-        gearStart = new int[0];
-        gearCount = new short[0];
-        gearRatios = new float[0];
-        initialGearIndex = new int[0];
-        currentGearIndex = new int[0];
-        pendingGearIndex = new int[0];
-        activeRatio = new float[0];
-        initialRatio = new float[0];
-        shiftRemaining = new float[0];
-        shiftDuration = new float[0];
-        fixedFirstGear = new boolean[0];
+        allocate(0, 0);
     }
 }

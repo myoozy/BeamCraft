@@ -21,7 +21,7 @@ public final class ImplicitClutchSolver {
     public static boolean solveInto(float dt, float slip, float engineInertia, float drivelineInertia,
                                     float stiffness, float dampingRatio, float capacity, float engagement,
                                     float[] torqueState, float[] angleState, int index) {
-        float lock = clamp(engagement, 0.0f, 1.0f);
+        float lock = Math.clamp(engagement, 0.0f, 1.0f);
         if (dt <= 0.0f || lock <= 0.0f || capacity <= 0.0f) {
             torqueState[index] = 0.0f;
             angleState[index] = 0.0f;
@@ -39,7 +39,7 @@ public final class ImplicitClutchSolver {
         float denominator = 1.0f + implicitCoefficient * dt / reducedInertia;
         float unconstrainedTorque = (spring * angleState[index] + implicitCoefficient * scaledSlip) / denominator;
         float currentCapacity = capacity * lock;
-        float torque = clamp(unconstrainedTorque, -currentCapacity, currentCapacity);
+        float torque = Math.clamp(unconstrainedTorque, -currentCapacity, currentCapacity);
         boolean saturated = Math.abs(unconstrainedTorque) > currentCapacity;
 
         // Match the KinetiForge spring model: do not wind up the virtual spring
@@ -51,10 +51,6 @@ public final class ImplicitClutchSolver {
         torqueState[index] = torque;
         angleState[index] = nextAngle;
         return saturated;
-    }
-
-    private static float clamp(float value, float min, float max) {
-        return Math.max(min, Math.min(max, value));
     }
 
     public record Result(float torque, float angleDifference, boolean saturated) {

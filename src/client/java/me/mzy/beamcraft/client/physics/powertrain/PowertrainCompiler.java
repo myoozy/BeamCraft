@@ -11,7 +11,6 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_CLUTCH;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_DIFFERENTIAL;
@@ -39,8 +38,6 @@ import org.slf4j.LoggerFactory;
  */
 final class PowertrainCompiler {
     private static final Logger LOGGER = LoggerFactory.getLogger("BeamCraft/Powertrain");
-    private static final float RPM_TO_AV = (float) (Math.PI / 30.0);
-
     private PowertrainCompiler() {
     }
 
@@ -54,17 +51,10 @@ final class PowertrainCompiler {
             return;
         }
 
-        List<DeviceSpec> specs = normalizeSpecs(rawSpecs);
+        List<DeviceSpec> specs = PowertrainSpecNormalizer.normalize(rawSpecs);
         PowertrainTopologyContainer topology = data.topology;
         int deviceCount = specs.size();
-        topology.deviceCount = deviceCount;
-        topology.deviceName = new String[deviceCount];
-        topology.deviceType = new byte[deviceCount];
-        topology.parentDevice = new int[deviceCount];
-        topology.parentPort = new int[deviceCount];
-        topology.childStart = new int[deviceCount];
-        topology.childCount = new short[deviceCount];
-        topology.deviceRatio = new float[deviceCount];
+        topology.allocateDevices(deviceCount);
         Arrays.fill(topology.parentDevice, -1);
 
         Map<String, Integer> names = new HashMap<>();
@@ -123,7 +113,7 @@ final class PowertrainCompiler {
             topology.childCount[i] = (short) childSizes[i];
             totalChildren += childSizes[i];
         }
-        topology.children = new int[totalChildren];
+        topology.allocateChildren(totalChildren);
         int[] cursors = topology.childStart.clone();
         for (int i = 0; i < deviceCount; i++) {
             int parent = topology.parentDevice[i];
@@ -171,25 +161,9 @@ final class PowertrainCompiler {
             }
         }
         // Gearboxes are compiled per-unit as runtime SoA in compileUnits, not here.
-        data.shafts.device = new int[data.shafts.count];
-        data.shafts.gearRatio = new float[data.shafts.count];
-        data.shafts.connectedWheel = new String[data.shafts.count];
-        data.shafts.friction = new float[data.shafts.count];
-        data.shafts.dynamicFriction = new float[data.shafts.count];
-        data.shafts.torqueLossCoef = new float[data.shafts.count];
-        data.differentials.device = new int[data.differentials.count];
-        data.differentials.gearRatio = new float[data.differentials.count];
-        data.differentials.diffTorqueSplit = new float[data.differentials.count];
-        data.differentials.diffType = new String[data.differentials.count];
-        data.differentials.friction = new float[data.differentials.count];
-        data.differentials.dynamicFriction = new float[data.differentials.count];
-        data.differentials.torqueLossCoef = new float[data.differentials.count];
-        data.torsionReactors.device = new int[data.torsionReactors.count];
-        data.torsionReactors.gearRatio = new float[data.torsionReactors.count];
-        data.torsionReactors.connectedWheel = new String[data.torsionReactors.count];
-        data.torsionReactors.friction = new float[data.torsionReactors.count];
-        data.torsionReactors.dynamicFriction = new float[data.torsionReactors.count];
-        data.torsionReactors.torqueLossCoef = new float[data.torsionReactors.count];
+        data.shafts.allocate(data.shafts.count);
+        data.differentials.allocate(data.differentials.count);
+        data.torsionReactors.allocate(data.torsionReactors.count);
 
         int shaft = 0, differential = 0, reactor = 0;
         for (int i = 0; i < specs.size(); i++) {
@@ -297,7 +271,7 @@ final class PowertrainCompiler {
             int child = topology.children[topology.childStart[device] + i];
             float split = 1.0f;
             if (topology.deviceType[device] == TYPE_DIFFERENTIAL) {
-                float configured = clamp01((float) ((DifferentialSpec) spec).diffTorqueSplit());
+                float configured = Math.clamp((float) ((DifferentialSpec) spec).diffTorqueSplit(), 0.0f, 1.0f);
                 split = topology.parentPort[child] <= 1 ? configured : 1.0f - configured;
             } else if (count > 1) {
                 split = 1.0f / count;
@@ -316,38 +290,6 @@ final class PowertrainCompiler {
         PowertrainTopologyContainer topology = data.topology;
 
         int n = units.size();
-        engines.unitCount = n;
-        engines.engineDevice = new int[n]; engines.clutchDevice = new int[n];
-        engines.engineInertia = new float[n]; engines.engineAV = new float[n];
-        engines.idleAV = new float[n];
-        engines.engineFriction = new float[n]; engines.engineDynamicFriction = new float[n];
-        engines.engineBrakeTorque = new float[n];
-        engines.starterTorque = new float[n]; engines.starterMaxAV = new float[n];
-        engines.crankingAV = new float[n];
-        engines.idleLossThrottle = new float[n];
-        engines.playerThrottle = new float[n]; engines.actualThrottle = new float[n];
-        engines.revLimiterRPM = new float[n]; engines.revLimiterType = new byte[n];
-        engines.revLimiterCutTime = new float[n]; engines.revLimiterMaxRPMDrop = new float[n];
-        engines.sparkEnabled = new boolean[n]; engines.fuelEnabled = new boolean[n];
-        engines.starterActive = new boolean[n];
-        engines.idleIntegral = new float[n];
-        engines.limiterCutRemaining = new float[n];
-        engines.curveStart = new int[n]; engines.curveCount = new short[n];
-        clutches.clutchCapacity = new float[n]; clutches.clutchSpring = new float[n];
-        clutches.clutchDampingRatio = new float[n];
-        clutches.clutchAngle = new float[n]; clutches.clutchTorque = new float[n];
-        wheelPaths.pathStart = new int[n]; wheelPaths.pathCount = new short[n];
-        reactions.reactionStart = new int[n]; reactions.reactionCount = new byte[n];
-        reactions.reactorStart = new int[n]; reactions.reactorCount = new short[n];
-        gearboxes.unitCount = n;
-        gearboxes.device = new int[n]; gearboxes.deviceName = new String[n]; gearboxes.gearboxType = new String[n];
-        gearboxes.gearStart = new int[n]; gearboxes.gearCount = new short[n];
-        gearboxes.initialGearIndex = new int[n]; gearboxes.currentGearIndex = new int[n];
-        gearboxes.pendingGearIndex = new int[n];
-        gearboxes.activeRatio = new float[n]; gearboxes.initialRatio = new float[n];
-        gearboxes.shiftRemaining = new float[n]; gearboxes.shiftDuration = new float[n];
-        gearboxes.fixedFirstGear = new boolean[n];
-
         int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, gearSlots = 0;
         for (UnitBuild unit : units) {
             curves += unit.engine.torqueCurve().size();
@@ -357,12 +299,11 @@ final class PowertrainCompiler {
             for (ReactorBuild reactor : unit.reactors) reactionTotal += reactor.nodes.size();
             gearSlots += gearRatiosOf(unit).size();
         }
-        engines.curveRPM = new float[curves]; engines.curveTorque = new float[curves];
-        wheelPaths.pathWheel = new int[paths]; wheelPaths.pathGain = new float[paths];
-        reactions.reactionNodes = new int[reactionTotal];
-        reactions.reactorGain = new float[reactors];
-        reactions.reactorNodeStart = new int[reactors]; reactions.reactorNodeCount = new byte[reactors];
-        gearboxes.gearRatios = new float[Math.max(1, gearSlots)];
+        engines.allocate(n, curves);
+        clutches.allocate(n);
+        wheelPaths.allocate(n, paths);
+        reactions.allocate(n, reactionTotal, reactors);
+        gearboxes.allocate(n, Math.max(1, gearSlots));
 
         int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, gearCursor = 0;
         for (int i = 0; i < n; i++) {
@@ -370,16 +311,18 @@ final class PowertrainCompiler {
             CombustionEngineSpec engine = unit.engine;
             engines.engineDevice[i] = unit.engineDevice; engines.clutchDevice[i] = unit.clutchDevice;
             engines.engineInertia[i] = Math.max(1e-5f, (float) engine.inertia());
-            engines.idleAV[i] = Math.max(0.0f, (float) engine.idleRPM()) * RPM_TO_AV;
+            engines.idleAV[i] = Math.max(0.0f, (float) engine.idleRPM()) * PowertrainSystem.RPM_TO_AV;
             engines.engineAV[i] = engines.idleAV[i];
             engines.engineFriction[i] = Math.max(0.0f, (float) engine.friction());
             engines.engineDynamicFriction[i] = Math.max(0.0f, (float) engine.dynamicFriction());
             engines.engineBrakeTorque[i] = Math.max(0.0f, (float) engine.engineBrakeTorque());
-            engines.starterMaxAV[i] = Math.max(0.0f, (float) engine.starterMaxRPM()) * RPM_TO_AV;
-            engines.crankingAV[i] = Math.max(0.0f, (float) engine.crankingRPM()) * RPM_TO_AV;
+            engines.starterMaxAV[i] = Math.max(0.0f, (float) engine.starterMaxRPM()) * PowertrainSystem.RPM_TO_AV;
+            engines.crankingAV[i] = Math.max(0.0f, (float) engine.crankingRPM()) * PowertrainSystem.RPM_TO_AV;
             float peakTorque = peakTorqueOf(engine);
             engines.starterTorque[i] = Math.max(0.0f, starterTorqueOf(engine, peakTorque));
             engines.idleLossThrottle[i] = idleLossThrottleOf(engine, engines.idleAV[i]);
+            engines.idleControllerP[i] = Math.max(0.0f, (float) engine.idleControllerP());
+            engines.maxIdleThrottle[i] = Math.clamp((float) engine.maxIdleThrottle(), 0.0f, 1.0f);
             engines.playerThrottle[i] = 0.0f;
             engines.actualThrottle[i] = engines.idleLossThrottle[i];
             engines.revLimiterRPM[i] = Math.max(0.0f, (float) engine.revLimiterRPM());
@@ -390,7 +333,6 @@ final class PowertrainCompiler {
             engines.revLimiterMaxRPMDrop[i] = Math.max(0.0f, (float) engine.revLimiterMaxRPMDrop());
             engines.sparkEnabled[i] = true; engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
-            engines.idleIntegral[i] = 0.0f;
             engines.limiterCutRemaining[i] = 0.0f;
             clutches.clutchCapacity[i] = unit.capacity; clutches.clutchSpring[i] = unit.spring;
             clutches.clutchDampingRatio[i] = Math.max(0.0f, (float) unit.clutch.lockDampRatio());
@@ -404,19 +346,21 @@ final class PowertrainCompiler {
             gearboxes.gearStart[i] = gearCursor;
             gearboxes.gearCount[i] = (short) ratios.size();
             for (double ratio : ratios) gearboxes.gearRatios[gearCursor++] = (float) ratio;
-            int initial = firstPositiveGearIndex(ratios);
-            if (initial < 0) {
-                int neutral = ratios.indexOf(0.0);
-                initial = neutral >= 0 ? neutral : 0;
-            }
+            int firstForward = firstPositiveGearIndex(ratios);
+            int neutral = neutralGearIndex(ratios);
+            boolean fixedFirst = realGearbox && unit.gearbox.fixedFirstGear();
+            int initial = realGearbox && !fixedFirst && neutral >= 0 ? neutral : firstForward;
+            if (initial < 0) initial = neutral >= 0 ? neutral : 0;
             gearboxes.initialGearIndex[i] = initial;
             gearboxes.currentGearIndex[i] = initial;
             gearboxes.pendingGearIndex[i] = -1;
-            gearboxes.initialRatio[i] = gearboxes.gearRatios[gearboxes.gearStart[i] + initial];
-            gearboxes.activeRatio[i] = gearboxes.initialRatio[i];
+            gearboxes.pathBaseRatio[i] = firstForward >= 0
+                    ? gearboxes.gearRatios[gearboxes.gearStart[i] + firstForward]
+                    : 1.0f;
+            gearboxes.activeRatio[i] = gearboxes.gearRatios[gearboxes.gearStart[i] + initial];
             gearboxes.shiftRemaining[i] = 0.0f;
             gearboxes.shiftDuration[i] = realGearbox ? Math.max(0.0f, (float) unit.gearbox.shiftTime()) : 0.0f;
-            gearboxes.fixedFirstGear[i] = realGearbox && unit.gearbox.fixedFirstGear();
+            gearboxes.fixedFirstGear[i] = fixedFirst;
 
             engines.curveStart[i] = curveCursor; engines.curveCount[i] = (short) engine.torqueCurve().size();
             for (TorquePoint point : engine.torqueCurve()) {
@@ -462,22 +406,21 @@ final class PowertrainCompiler {
     }
 
     /**
-     * Closed-throttle/top-screw idle feedforward throttle: the throttle fraction that just
-     * covers the idle losses (friction + dynamic friction + engine brake at idle).
+     * Initial idle feedforward throttle. The solver recalculates the same loss balance at
+     * the current crank speed whenever RPM falls below the idle target.
      */
     private static float idleLossThrottleOf(CombustionEngineSpec engine, float idleAV) {
         float friction = Math.max(0.0f, (float) engine.friction());
         float dynamic = Math.max(0.0f, (float) engine.dynamicFriction());
-        float brake = Math.max(0.0f, (float) engine.engineBrakeTorque());
         float idleRPM = Math.max(0.0f, (float) engine.idleRPM());
         float torqueAtIdle = interpolateCurve(engine.torqueCurve(), idleRPM);
-        float denominator = torqueAtIdle + brake;
-        if (denominator <= 1e-3f) {
+        if (torqueAtIdle <= 1e-3f) {
             return (friction + dynamic * idleAV) > 1e-3f ? 1.0f : 0.0f;
         }
-        // Solve ff*T_idle = friction + dynamic*idleAV + brake*(1 - ff).
-        float feedforward = (friction + dynamic * idleAV + brake) / denominator;
-        return Math.max(0.0f, Math.min(1.0f, feedforward));
+        // Solve ff*T_idle = friction + dynamic*idleAV. Additional engine braking is
+        // load-dependent in BeamNG and stays inactive until that model exists here.
+        float feedforward = (friction + dynamic * idleAV) / torqueAtIdle;
+        return Math.clamp(feedforward + 0.05f, 0.0f, 1.0f);
     }
 
     private static float interpolateCurve(List<TorquePoint> curve, float rpm) {
@@ -505,6 +448,13 @@ final class PowertrainCompiler {
     private static int firstPositiveGearIndex(List<Double> ratios) {
         for (int i = 0; i < ratios.size(); i++) {
             if (ratios.get(i) > 0.0) return i;
+        }
+        return -1;
+    }
+
+    private static int neutralGearIndex(List<Double> ratios) {
+        for (int i = 0; i < ratios.size(); i++) {
+            if (Math.abs(ratios.get(i)) < 1e-9) return i;
         }
         return -1;
     }
@@ -566,174 +516,6 @@ final class PowertrainCompiler {
             case ShaftSpec shaft -> shaft.connectedWheel();
             case TorsionReactorSpec reactor -> reactor.connectedWheel();
             default -> null;
-        };
-    }
-
-    private static float clamp01(float value) {
-        return Math.max(0.0f, Math.min(1.0f, value));
-    }
-
-    // ---------------------------------------------------------------- value modifiers
-
-    /** Applies native JBeam $*, $+, $-, $/ modifiers in active-part order. */
-    private static List<DeviceSpec> normalizeSpecs(List<DeviceSpec> rawSpecs) {
-        List<DeviceSpec> result = new ArrayList<>();
-        Map<String, Integer> byName = new HashMap<>();
-        Map<String, List<ValueModifier>> pendingPatches = new HashMap<>();
-        for (DeviceSpec spec : rawSpecs) {
-            if (spec instanceof DevicePatchSpec patch) {
-                Integer existing = byName.get(patch.name());
-                if (existing != null) {
-                    result.set(existing, applyModifiers(result.get(existing), patch.valueModifiers()));
-                } else {
-                    pendingPatches.computeIfAbsent(patch.name(), ignored -> new ArrayList<>())
-                            .addAll(patch.valueModifiers());
-                }
-                continue;
-            }
-            Integer existing = byName.get(spec.name());
-            if (existing == null) {
-                byName.put(spec.name(), result.size());
-                DeviceSpec normalized = applyModifiers(spec, spec.valueModifiers());
-                List<ValueModifier> pending = pendingPatches.remove(spec.name());
-                if (pending != null) normalized = applyModifiers(normalized, pending);
-                result.add(normalized);
-            } else if (!spec.valueModifiers().isEmpty()
-                    && result.get(existing).type().equalsIgnoreCase(spec.type())) {
-                result.set(existing, applyModifiers(result.get(existing), spec.valueModifiers()));
-            } else {
-                // Preserve the duplicate so the normal topology validation emits
-                // a clear warning instead of silently selecting an arbitrary row.
-                result.add(spec);
-            }
-        }
-        return List.copyOf(result);
-    }
-
-    private static DeviceSpec applyModifiers(DeviceSpec spec, List<ValueModifier> modifiers) {
-        DeviceSpec current = spec;
-        for (ValueModifier modifier : modifiers) current = applyModifier(current, modifier);
-        return current;
-    }
-
-    private static DeviceSpec applyModifier(DeviceSpec spec, ValueModifier modifier) {
-        String key = modifier.targetKey();
-        if (spec instanceof CombustionEngineSpec e) {
-            double inertia = e.inertia(), idle = e.idleRPM(), max = e.maxRPM(), friction = e.friction();
-            double dynamic = e.dynamicFriction(), brake = e.engineBrakeTorque();
-            double starterTorque = e.starterTorque(), starterMaxRPM = e.starterMaxRPM();
-            double crankingRPM = e.crankingRPM(), revLimiterRPM = e.revLimiterRPM();
-            double revLimiterCutTime = e.revLimiterCutTime(), revLimiterMaxRPMDrop = e.revLimiterMaxRPMDrop();
-            List<TorquePoint> curve = e.torqueCurve();
-            switch (key) {
-                case "inertia" -> inertia = modify(inertia, modifier);
-                case "idleRPM" -> idle = modify(idle, modifier);
-                case "maxRPM" -> max = modify(max, modifier);
-                case "friction" -> friction = modify(friction, modifier);
-                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
-                case "engineBrakeTorque" -> brake = modify(brake, modifier);
-                case "starterTorque" -> starterTorque = modify(starterTorque, modifier);
-                case "starterMaxRPM", "starterRPM", "startRPM" -> starterMaxRPM = modify(starterMaxRPM, modifier);
-                case "crankingRPM" -> crankingRPM = modify(crankingRPM, modifier);
-                case "revLimiterRPM" -> revLimiterRPM = modify(revLimiterRPM, modifier);
-                case "revLimiterCutTime" -> revLimiterCutTime = modify(revLimiterCutTime, modifier);
-                case "revLimiterMaxRPMDrop", "revLimiterRPMChange" -> revLimiterMaxRPMDrop = modify(revLimiterMaxRPMDrop, modifier);
-                case "torque" -> {
-                    List<TorquePoint> changed = new ArrayList<>(curve.size());
-                    for (TorquePoint point : curve) changed.add(new TorquePoint(point.rpm(), modify(point.torque(), modifier)));
-                    curve = changed;
-                }
-                default -> { return spec; }
-            }
-            return new CombustionEngineSpec(e.type(), e.name(), e.inputName(), e.inputIndex(), inertia, idle, max,
-                    friction, dynamic, brake, curve, e.torqueReactionNodes(), List.of(),
-                    starterTorque, starterMaxRPM, crankingRPM, revLimiterRPM, e.revLimiterType(),
-                    revLimiterCutTime, revLimiterMaxRPMDrop);
-        }
-        if (spec instanceof FrictionClutchSpec c) {
-            double capacity = c.lockTorque(), spring = c.lockSpring(), coefficient = c.lockSpringCoef();
-            double damping = c.lockDampRatio(), freePlay = c.clutchFreePlay(), stiffness = c.clutchStiffness();
-            switch (key) {
-                case "lockTorque" -> capacity = modify(capacity, modifier);
-                case "lockSpring" -> spring = modify(spring, modifier);
-                case "lockSpringCoef" -> coefficient = modify(coefficient, modifier);
-                case "lockDampRatio" -> damping = modify(damping, modifier);
-                case "clutchFreePlay" -> freePlay = modify(freePlay, modifier);
-                case "clutchStiffness" -> stiffness = modify(stiffness, modifier);
-                default -> { return spec; }
-            }
-            return new FrictionClutchSpec(c.type(), c.name(), c.inputName(), c.inputIndex(), capacity, spring,
-                    coefficient, damping, freePlay, stiffness, List.of());
-        }
-        if (spec instanceof GearboxSpec g) {
-            double friction = g.friction(), dynamic = g.dynamicFriction(), loss = g.torqueLossCoef();
-            double shiftTime = g.shiftTime();
-            List<Double> ratios = g.gearRatios();
-            switch (key) {
-                case "friction" -> friction = modify(friction, modifier);
-                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
-                case "torqueLossCoef" -> loss = modify(loss, modifier);
-                case "gearChangeTime", "maxGearChangeTime", "dctClutchTime" ->
-                        shiftTime = modify(shiftTime, modifier);
-                case "gearRatios" -> {
-                    List<Double> changed = new ArrayList<>(ratios.size());
-                    for (double ratio : ratios) changed.add(modify(ratio, modifier));
-                    ratios = changed;
-                }
-                default -> { return spec; }
-            }
-            return new GearboxSpec(g.type(), g.name(), g.inputName(), g.inputIndex(), ratios, g.fixedFirstGear(),
-                    friction, dynamic, loss, List.of(), shiftTime);
-        }
-        if (spec instanceof ShaftSpec s) {
-            double ratio = s.gearRatio(), friction = s.friction(), dynamic = s.dynamicFriction(), loss = s.torqueLossCoef();
-            switch (key) {
-                case "gearRatio" -> ratio = modify(ratio, modifier);
-                case "friction" -> friction = modify(friction, modifier);
-                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
-                case "torqueLossCoef" -> loss = modify(loss, modifier);
-                default -> { return spec; }
-            }
-            return new ShaftSpec(s.type(), s.name(), s.inputName(), s.inputIndex(), ratio, s.connectedWheel(),
-                    friction, dynamic, loss, s.torqueReactionNodes(), s.outputPortOverride(), List.of());
-        }
-        if (spec instanceof TorsionReactorSpec r) {
-            double ratio = r.gearRatio(), friction = r.friction(), dynamic = r.dynamicFriction(), loss = r.torqueLossCoef();
-            switch (key) {
-                case "gearRatio" -> ratio = modify(ratio, modifier);
-                case "friction" -> friction = modify(friction, modifier);
-                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
-                case "torqueLossCoef" -> loss = modify(loss, modifier);
-                default -> { return spec; }
-            }
-            return new TorsionReactorSpec(r.type(), r.name(), r.inputName(), r.inputIndex(), ratio, r.connectedWheel(),
-                    friction, dynamic, loss, r.torqueReactionNodes(), r.outputPortOverride(), List.of());
-        }
-        if (spec instanceof DifferentialSpec d) {
-            double ratio = d.gearRatio(), split = d.diffTorqueSplit(), friction = d.friction();
-            double dynamic = d.dynamicFriction(), loss = d.torqueLossCoef();
-            switch (key) {
-                case "gearRatio" -> ratio = modify(ratio, modifier);
-                case "diffTorqueSplit" -> split = modify(split, modifier);
-                case "friction" -> friction = modify(friction, modifier);
-                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
-                case "torqueLossCoef" -> loss = modify(loss, modifier);
-                default -> { return spec; }
-            }
-            return new DifferentialSpec(d.type(), d.name(), d.inputName(), d.inputIndex(), ratio, split,
-                    friction, dynamic, loss, d.diffType(), List.of());
-        }
-        return spec;
-    }
-
-    private static double modify(double base, ValueModifier modifier) {
-        return switch (modifier.operation()) {
-            case '*' -> base * modifier.value();
-            case '+' -> base + modifier.value();
-            case '-' -> base - modifier.value();
-            case '/' -> Math.abs(modifier.value()) > 1e-12 ? base / modifier.value() : base;
-            case '=' -> modifier.value();
-            default -> base;
         };
     }
 

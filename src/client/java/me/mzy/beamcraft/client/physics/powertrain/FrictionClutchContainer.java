@@ -14,12 +14,16 @@ public final class FrictionClutchContainer {
     public float[] clutchAngle = new float[0];
     public float[] clutchTorque = new float[0];
 
+    public void allocate(int units) {
+        clutchCapacity = new float[units];
+        clutchSpring = new float[units];
+        clutchDampingRatio = new float[units];
+        clutchAngle = new float[units];
+        clutchTorque = new float[units];
+    }
+
     /** Resets every array so the container holds zero units. */
     public void clear() {
-        clutchCapacity = new float[0];
-        clutchSpring = new float[0];
-        clutchDampingRatio = new float[0];
-        clutchAngle = new float[0];
-        clutchTorque = new float[0];
+        allocate(0);
     }
 }

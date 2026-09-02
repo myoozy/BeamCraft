@@ -19,15 +19,19 @@ public final class TorqueReactionContainer {
     public int[] reactorNodeStart = new int[0];
     public byte[] reactorNodeCount = new byte[0];
 
+    public void allocate(int units, int reactionNodeCount, int reactors) {
+        reactionStart = new int[units];
+        reactionCount = new byte[units];
+        reactionNodes = new int[reactionNodeCount];
+        reactorStart = new int[units];
+        reactorCount = new short[units];
+        reactorGain = new float[reactors];
+        reactorNodeStart = new int[reactors];
+        reactorNodeCount = new byte[reactors];
+    }
+
     /** Resets every array so the container holds zero reactions. */
     public void clear() {
-        reactionStart = new int[0];
-        reactionCount = new byte[0];
-        reactionNodes = new int[0];
-        reactorStart = new int[0];
-        reactorCount = new short[0];
-        reactorGain = new float[0];
-        reactorNodeStart = new int[0];
-        reactorNodeCount = new byte[0];
+        allocate(0, 0, 0);
     }
 }

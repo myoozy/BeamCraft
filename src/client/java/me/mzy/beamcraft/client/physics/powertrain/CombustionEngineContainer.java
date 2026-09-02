@@ -38,6 +38,9 @@ public final class CombustionEngineContainer {
     public float[] crankingAV = new float[0];
     // Closed-throttle/top-screw idle feedforward (0..1 throttle) that covers idle losses.
     public float[] idleLossThrottle = new float[0];
+    /** BeamNG-compatible proportional idle controller parameters. */
+    public float[] idleControllerP = new float[0];
+    public float[] maxIdleThrottle = new float[0];
     /** Player pedal command and physical throttle opening are deliberately separate. */
     public float[] playerThrottle = new float[0];
     public float[] actualThrottle = new float[0];
@@ -52,38 +55,43 @@ public final class CombustionEngineContainer {
     public boolean[] sparkEnabled = new boolean[0];
     public boolean[] fuelEnabled = new boolean[0];
     public boolean[] starterActive = new boolean[0];
-    public float[] idleIntegral = new float[0];
     public float[] limiterCutRemaining = new float[0];
+
+    /** Allocates the per-unit rows and flattened torque-curve storage. */
+    public void allocate(int units, int curvePoints) {
+        unitCount = units;
+        engineDevice = new int[units];
+        clutchDevice = new int[units];
+        engineInertia = new float[units];
+        engineAV = new float[units];
+        idleAV = new float[units];
+        engineFriction = new float[units];
+        engineDynamicFriction = new float[units];
+        engineBrakeTorque = new float[units];
+        curveStart = new int[units];
+        curveCount = new short[units];
+        curveRPM = new float[curvePoints];
+        curveTorque = new float[curvePoints];
+        starterTorque = new float[units];
+        starterMaxAV = new float[units];
+        crankingAV = new float[units];
+        idleLossThrottle = new float[units];
+        idleControllerP = new float[units];
+        maxIdleThrottle = new float[units];
+        playerThrottle = new float[units];
+        actualThrottle = new float[units];
+        revLimiterRPM = new float[units];
+        revLimiterType = new byte[units];
+        revLimiterCutTime = new float[units];
+        revLimiterMaxRPMDrop = new float[units];
+        sparkEnabled = new boolean[units];
+        fuelEnabled = new boolean[units];
+        starterActive = new boolean[units];
+        limiterCutRemaining = new float[units];
+    }
 
     /** Resets every array so the container holds zero units. */
     public void clear() {
-        unitCount = 0;
-        engineDevice = new int[0];
-        clutchDevice = new int[0];
-        engineInertia = new float[0];
-        engineAV = new float[0];
-        idleAV = new float[0];
-        engineFriction = new float[0];
-        engineDynamicFriction = new float[0];
-        engineBrakeTorque = new float[0];
-        curveStart = new int[0];
-        curveCount = new short[0];
-        curveRPM = new float[0];
-        curveTorque = new float[0];
-        starterTorque = new float[0];
-        starterMaxAV = new float[0];
-        crankingAV = new float[0];
-        idleLossThrottle = new float[0];
-        playerThrottle = new float[0];
-        actualThrottle = new float[0];
-        revLimiterRPM = new float[0];
-        revLimiterType = new byte[0];
-        revLimiterCutTime = new float[0];
-        revLimiterMaxRPMDrop = new float[0];
-        sparkEnabled = new boolean[0];
-        fuelEnabled = new boolean[0];
-        starterActive = new boolean[0];
-        idleIntegral = new float[0];
-        limiterCutRemaining = new float[0];
+        allocate(0, 0);
     }
 }
