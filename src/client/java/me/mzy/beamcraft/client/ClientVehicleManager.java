@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client;
 
+import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
 import me.mzy.beamcraft.client.material.MaterialLibrary;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
@@ -15,7 +16,9 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.Box;
 
+import java.io.File;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public final class ClientVehicleManager {
@@ -71,16 +74,17 @@ public final class ClientVehicleManager {
         SoftBodyVehicle softBody = new SoftBodyVehicle(vehicleEntity);
         Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
         Map<String, String> localConfig = new HashMap<>();
+        List<File> assetRoots = BeamCraftConfigManager.assetRoots();
         JBeamLoader.loadVehicle(
-                BeamCraftClient.ASSET_ROOTS,
+                assetRoots,
                 rootPart,
                 vehicleEntity.getPcFileName(),
                 localRegistry,
                 localConfig
         );
 
-        DaeMeshLoader.requireVehicleModels(BeamCraftClient.ASSET_ROOTS, rootPart);
-        MaterialLibrary.requireMaterials(BeamCraftClient.ASSET_ROOTS, rootPart);
+        DaeMeshLoader.requireVehicleModels(assetRoots, rootPart);
+        MaterialLibrary.requireMaterials(assetRoots, rootPart);
         boolean assembled = new JBeamAssembler().assembleVehicle(
                 rootPart,
                 localConfig,

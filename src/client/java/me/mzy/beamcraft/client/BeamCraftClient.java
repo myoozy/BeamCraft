@@ -2,8 +2,9 @@ package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.assets.AssetScanner;
-import me.mzy.beamcraft.client.assets.BeamCraftConfig;
-import me.mzy.beamcraft.client.model.DaeMeshLoader;
+import me.mzy.beamcraft.client.config.BeamCraftConfig;
+import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
+import me.mzy.beamcraft.client.input.VehicleInputHandler;
 import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
 import me.mzy.beamcraft.client.render.VehicleTextureUploader;
 import me.mzy.beamcraft.client.physics.AsyncPhysicsScheduler;
@@ -20,22 +21,15 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
-import org.lwjgl.glfw.GLFW;
 
 import java.io.File;
-import java.util.List;
 
 public class BeamCraftClient implements ClientModInitializer {
 	private static final boolean DEBUG_DRAW = false;
 	private static final boolean DEBUG_SHOW_BEAMS = true;
-	// 记录上一帧 G 键有没有被按下
-	private static boolean gWasPressed = false;
-	private static boolean shiftUpWasPressed = false;
-	private static boolean shiftDownWasPressed = false;
 	private static long lastOverrunNoticeNanos = 0L;
 	private static boolean physicsFailureReported = false;
 	public static final double DELTA_TIME = 0.05;
@@ -43,9 +37,6 @@ public class BeamCraftClient implements ClientModInitializer {
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
 	public static final AsyncPhysicsScheduler PHYSICS_SCHEDULER = new AsyncPhysicsScheduler(PHYSICS_WORLD);
 	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
-	public static final File VEHICLES_DIR = new File(GAME_DIR, "mods/beamcraft/vehicles");
-	// 资产根列表，来自 config/beamcraft.json；默认仍指向 VEHICLES_DIR
-	public static volatile List<File> ASSET_ROOTS = List.of(VEHICLES_DIR);
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
@@ -57,10 +48,11 @@ public class BeamCraftClient implements ClientModInitializer {
 	public void onInitializeClient() {
 
 		// 加载配置文件，确定资产根列表并确保目录存在
-		BeamCraftConfig config = BeamCraftConfig.load(FabricLoader.getInstance().getConfigDir());
-		ASSET_ROOTS = config.resolveAssetRoots(GAME_DIR);
+		BeamCraftConfig config = BeamCraftConfigManager.initialize(
+				FabricLoader.getInstance().getConfigDir(), GAME_DIR);
+		VehicleInputHandler inputHandler = new VehicleInputHandler(config.input);
 		AssetScanner.INSTANCE.configure(config.policy());
-		for (File root : ASSET_ROOTS) {
+		for (File root : BeamCraftConfigManager.assetRoots()) {
 			if (!root.exists()) root.mkdirs();
 		}
 
@@ -113,33 +105,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			ClientVehicleManager.update(client);
 			if (client.player == null || client.world == null || PHYSICS_SCHEDULER.failure() != null) return;
 
-			// 检测 G 键 (调试功能：瞬间重置所有现存车辆，并传送到玩家头顶)
-			boolean isG = InputUtil.isKeyPressed(client.getWindow().getHandle(), GLFW.GLFW_KEY_G);
-			if (isG && !gWasPressed) {
-				double HEIGHT_OFFSET = 1;
-				for (SoftBodyVehicle vehicle : world.vehicles) {
-					vehicle.reset();
-					// 把 MC 实体强行瞬移过来
-					vehicle.parentEntity.setPosition(client.player.getX(), client.player.getY() + HEIGHT_OFFSET, client.player.getZ());
-					vehicle.nodes.rotateNodes(client.player.getYaw(), 0, 0);
-				}
-			}
-			gWasPressed = isG;
-
-			// Temporary global binary controls until seat/input ownership exists.
-			long window = client.getWindow().getHandle();
-			float throttle = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_W) ? 1.0f : 0.0f;
-			float clutchPedal = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_LEFT_SHIFT) ? 1.0f : 0.0f;
-			boolean starter = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_V);
-			boolean shiftUp = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_X);
-			boolean shiftDown = InputUtil.isKeyPressed(window, GLFW.GLFW_KEY_Z);
-			for (SoftBodyVehicle vehicle : world.vehicles) {
-				vehicle.powertrain.setControls(throttle, clutchPedal, starter);
-				if (shiftUp && !shiftUpWasPressed) vehicle.powertrain.requestShiftUp();
-				if (shiftDown && !shiftDownWasPressed) vehicle.powertrain.requestShiftDown();
-			}
-			shiftUpWasPressed = shiftUp;
-			shiftDownWasPressed = shiftDown;
+			inputHandler.tick(client, world);
 
 			// World access happens synchronously in prepareStep; the 100 substeps
 			// then run independently until the next game-tick barrier.
