@@ -14,6 +14,9 @@ import java.util.List;
 public class SoftBodyVehicle {
     public static final float KINDA_SMALL_NUMBER = PhysicsWorld.KINDA_SMALL_NUMBER;
     public static final int MAX_AABB_SIZE = PhysicsWorld.MAX_AABB_SIZE;
+    /** Numerical safety ceiling; Minecraft blocks and physics distances are treated as metres. */
+    public static final float MAX_NODE_SPEED = 343.0f;
+    private static final float MAX_NODE_SPEED_SQ = MAX_NODE_SPEED * MAX_NODE_SPEED;
 
     public final PhysicsVehicleEntity parentEntity;
     public final float[] localCOM = new float[3];
@@ -1427,8 +1430,18 @@ public class SoftBodyVehicle {
             nodes.velY[i] += (nodes.forceY[i] * invMass) * dt;
             nodes.velZ[i] += (nodes.forceZ[i] * invMass) * dt;
 
-            if (Float.isNaN(nodes.velX[i]) || Float.isNaN(nodes.velY[i]) || Float.isNaN(nodes.velZ[i])) {
+            if (!Float.isFinite(nodes.velX[i]) || !Float.isFinite(nodes.velY[i]) || !Float.isFinite(nodes.velZ[i])) {
                 nodes.velX[i] = 0.0f; nodes.velY[i] = 0.0f; nodes.velZ[i] = 0.0f;
+            } else {
+                float speedSq = nodes.velX[i] * nodes.velX[i]
+                        + nodes.velY[i] * nodes.velY[i]
+                        + nodes.velZ[i] * nodes.velZ[i];
+                if (speedSq > MAX_NODE_SPEED_SQ) {
+                    float scale = MAX_NODE_SPEED / (float) Math.sqrt(speedSq);
+                    nodes.velX[i] *= scale;
+                    nodes.velY[i] *= scale;
+                    nodes.velZ[i] *= scale;
+                }
             }
 
             nodes.posX[i] += nodes.velX[i] * dt;
