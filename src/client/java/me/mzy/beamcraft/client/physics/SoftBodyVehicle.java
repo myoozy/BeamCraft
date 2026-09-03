@@ -42,6 +42,7 @@ public class SoftBodyVehicle {
     public final WheelContainer wheels = new WheelContainer(this);
     public final PowertrainSystem powertrain = new PowertrainSystem(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
+    public final VehicleCameraData cameras = new VehicleCameraData();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
 
     // Bounding box cache array for independent part culling
@@ -555,6 +556,7 @@ public class SoftBodyVehicle {
         wheels.clear();
         powertrain.clear();
         flexbodies.clear();
+        cameras.clear();
         renderTimeline.clear();
         breakGroupMap.clear();
         triggeredBreakGroups.clear();

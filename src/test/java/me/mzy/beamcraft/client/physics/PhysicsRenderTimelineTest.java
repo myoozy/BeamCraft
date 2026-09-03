@@ -45,6 +45,10 @@ class PhysicsRenderTimelineTest {
         assertArrayEquals(new float[]{15.0f, 25.0f}, outX, 0.0001f);
         assertArrayEquals(new float[]{16.0f, 26.0f}, outY, 0.0001f);
         assertArrayEquals(new float[]{17.0f, 27.0f}, outZ, 0.0001f);
+
+        float[] oneNode = new float[3];
+        assertTrue(timeline.sampleNode(startNanos + 7_500_000L, 1, oneNode));
+        assertArrayEquals(new float[]{25.0f, 26.0f, 27.0f}, oneNode, 0.0001f);
     }
 
     @Test

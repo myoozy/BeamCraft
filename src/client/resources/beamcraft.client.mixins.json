@@ -3,7 +3,11 @@
 	"package": "me.mzy.beamcraft.client.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"ExampleClientMixin"
+		"ExampleClientMixin",
+		"VehicleCameraMixin",
+		"VehicleKeyboardInputMixin",
+		"VehicleRiderRenderMixin",
+		"VehicleUseMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

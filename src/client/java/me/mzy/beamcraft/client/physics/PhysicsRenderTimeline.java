@@ -98,6 +98,44 @@ public final class PhysicsRenderTimeline {
         return true;
     }
 
+    /** Samples one node without allocating full-vehicle interpolation buffers. */
+    public boolean sampleNode(long nowNanos, int node, float[] out) {
+        int available = publishedCount.get();
+        if (available == 0 || node < 0 || node >= nodeCount || out.length < AXIS_COUNT) {
+            return false;
+        }
+
+        long elapsedNanos = Math.max(0L, nowNanos - startedNanos);
+        long targetNanos = Math.min(elapsedNanos, durationNanos);
+        int upper = 0;
+        while (upper < available && offsetsNanos[upper] < targetNanos) {
+            upper++;
+        }
+
+        if (upper == 0) {
+            copyNode(positions[0], node, out);
+        } else if (upper >= available) {
+            copyNode(positions[available - 1], node, out);
+        } else {
+            int lower = upper - 1;
+            long lowerTime = offsetsNanos[lower];
+            long upperTime = offsetsNanos[upper];
+            float alpha = upperTime > lowerTime
+                    ? (float) ((double) (targetNanos - lowerTime) / (double) (upperTime - lowerTime))
+                    : 0.0f;
+            out[0] = lerp(positions[lower][node], positions[upper][node], alpha);
+            out[1] = lerp(positions[lower][nodeCount + node], positions[upper][nodeCount + node], alpha);
+            out[2] = lerp(positions[lower][nodeCount * 2 + node], positions[upper][nodeCount * 2 + node], alpha);
+        }
+        return true;
+    }
+
+    private void copyNode(float[] snapshot, int node, float[] out) {
+        out[0] = snapshot[node];
+        out[1] = snapshot[nodeCount + node];
+        out[2] = snapshot[nodeCount * 2 + node];
+    }
+
     public void clear() {
         publishedCount.set(0);
         generation++;

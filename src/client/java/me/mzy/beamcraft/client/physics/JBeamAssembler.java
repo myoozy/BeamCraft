@@ -126,6 +126,15 @@ public class JBeamAssembler {
                     JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry, couplerRegistry);
                 }
             }
+            // Internal camera rows define their own nodes and link to ordinary
+            // nodes from any active part, so parse them after the node pass.
+            for (PartEntry entry : activeParts) {
+                if (entry.json.has("camerasInternal") && entry.json.get("camerasInternal").isJsonArray()) {
+                    JBeamCameraParser.parseInternal(
+                            entry.json.getAsJsonArray("camerasInternal"), vehicle, entry);
+                }
+                JBeamCameraParser.parseMetadata(entry.json, vehicle, entry);
+            }
             System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
 
             // Pass 2: Build all structural connections (beams, surfaces, joints)

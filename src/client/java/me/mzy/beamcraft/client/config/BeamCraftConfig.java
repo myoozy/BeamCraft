@@ -33,17 +33,21 @@ public final class BeamCraftConfig {
         public String strategy = "later-root";
     }
 
-    /** Keyboard translation keys consumed by the client input handler. */
+    /**
+     * Physical input translation keys consumed by the client input handler.
+     * Empty strings intentionally mean "use BeamCraft's current built-in default".
+     */
     public static final class Input {
-        public String steerLeft = "key.keyboard.left";
-        public String steerRight = "key.keyboard.right";
-        public String throttle = "key.keyboard.up";
-        public String brake = "key.keyboard.down";
-        public String clutch = "key.keyboard.left.shift";
-        public String starter = "key.keyboard.v";
-        public String shiftUp = "key.keyboard.x";
-        public String shiftDown = "key.keyboard.z";
-        public String resetVehicle = "key.keyboard.g";
+        public String exitVehicle = "";
+        public String steerLeft = "";
+        public String steerRight = "";
+        public String throttle = "";
+        public String brake = "";
+        public String clutch = "";
+        public String starter = "";
+        public String shiftUp = "";
+        public String shiftDown = "";
+        public String resetVehicle = "";
     }
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
