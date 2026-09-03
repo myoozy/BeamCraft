@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.physics.powertrain;
 import me.mzy.beamcraft.client.physics.NodeContainer;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.client.physics.WheelContainer;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
@@ -105,25 +106,41 @@ class PowertrainGearboxLimiterTest {
     // ---------------------------------------------------------------- gearbox shifts
 
     @Test
-    void shiftTimerDoesNotChangeWithoutSolveAndDisconnectsTorque() {
+    void shiftEventWaitsForPhysicsAndThenDisconnectsTorque() {
         SoftBodyVehicle vehicle = rig(List.of(-3.21, 0.0, 3.31, 2.38), 0.5, 7500, 0.15, 300);
         assertEquals(1, vehicle.powertrain.gearboxes.initialGearIndex[0]);
         assertEquals(0.0f, vehicle.powertrain.gearboxes.activeRatio[0], 1e-6f);
 
         vehicle.powertrain.requestShiftUp();
-        assertEquals(2, vehicle.powertrain.gearboxes.pendingGearIndex[0]);
-        assertEquals(0.5f, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-6f);
-        assertEquals(0.0f, vehicle.powertrain.gearboxes.activeRatio[0], 1e-6f,
-                "requesting a shift must disconnect the torque path immediately");
+        assertEquals(-1, vehicle.powertrain.gearboxes.pendingGearIndex[0],
+                "client input must not mutate physics state before solve");
 
-        // Timer is decremented only by solve(dt), never wall/game time.
-        float frozen = vehicle.powertrain.gearboxes.shiftRemaining[0];
-        assertEquals(frozen, vehicle.powertrain.gearboxes.shiftRemaining[0], 0f);
-        vehicle.powertrain.solve(0.0f); // dt == 0 must not move the timer
-        assertEquals(frozen, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-6f);
+        vehicle.powertrain.solve(0.0f);
+        assertEquals(-1, vehicle.powertrain.gearboxes.pendingGearIndex[0],
+                "a zero-duration solve must not consume the event");
         vehicle.powertrain.solve(DT);
-        assertEquals(frozen - DT, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-5f);
+        assertEquals(2, vehicle.powertrain.gearboxes.pendingGearIndex[0]);
+        assertEquals(0.5f - DT, vehicle.powertrain.gearboxes.shiftRemaining[0], 1e-5f);
+        assertEquals(0.0f, vehicle.powertrain.gearboxes.activeRatio[0], 1e-6f,
+                "consuming the shift event must disconnect the torque path");
         assertEquals(1, vehicle.powertrain.gearboxes.currentGearIndex[0], "still in neutral");
+    }
+
+    @Test
+    void shiftEventsAreConsumedOnceFromTheElectricBus() {
+        SoftBodyVehicle vehicle = rig(List.of(-3.21, 0.0, 3.31, 2.38), 0.5, 7500, 0.15, 300);
+        vehicle.electrics.set(ElectricSignals.SHIFT_UP_EVENT, 1.0);
+
+        vehicle.powertrain.solve(DT);
+        assertEquals(2, vehicle.powertrain.gearboxes.pendingGearIndex[0]);
+
+        vehicle.powertrain.solve(DT);
+        assertEquals(2, vehicle.powertrain.gearboxes.pendingGearIndex[0],
+                "one event snapshot must not be consumed once per substep");
+
+        vehicle.electrics.set(ElectricSignals.SHIFT_UP_EVENT, 2.0);
+        vehicle.powertrain.solve(DT);
+        assertEquals(3, vehicle.powertrain.gearboxes.pendingGearIndex[0]);
     }
 
     @Test

@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSystem;
 import me.mzy.beamcraft.utility.Utility;
@@ -19,6 +20,7 @@ public class SoftBodyVehicle {
     /** Numerical safety ceiling; Minecraft blocks and physics distances are treated as metres. */
     public static final float MAX_NODE_SPEED = 343.0f;
     private static final float MAX_NODE_SPEED_SQ = MAX_NODE_SPEED * MAX_NODE_SPEED;
+    private final int brakeInputSignalId;
 
     public final PhysicsVehicleEntity parentEntity;
     public final float[] localCOM = new float[3];
@@ -61,6 +63,8 @@ public class SoftBodyVehicle {
 
     public SoftBodyVehicle(PhysicsVehicleEntity parentEntity) {
         this.parentEntity = parentEntity;
+        electrics.register(ElectricSignals.STEERING_INPUT);
+        brakeInputSignalId = electrics.register(ElectricSignals.BRAKE_INPUT);
         this.flexbodies.vehicleNamespace = parentEntity != null ? parentEntity.getRootPartName() : "test";
         cacheEntityLocation();
     }
@@ -1446,7 +1450,10 @@ public class SoftBodyVehicle {
         // Powertrain only touches primitive physics state and is safe on the
         // dedicated worker. Run it before node integration so driven-wheel
         // torque participates in this substep.
-        powertrain.solve(dt);
+        powertrain.solve(dt, electricSnapshot);
+        wheels.applyServiceBrakes(
+                (float) electricSnapshot.get(brakeInputSignalId),
+                dt);
 
         // ==========================================
         // ==========================================

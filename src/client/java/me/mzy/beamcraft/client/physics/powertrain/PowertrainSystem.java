@@ -2,6 +2,8 @@ package me.mzy.beamcraft.client.physics.powertrain;
 
 import me.mzy.beamcraft.client.physics.NodeContainer;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 
 import java.util.ArrayList;
@@ -56,9 +58,13 @@ public final class PowertrainSystem {
     public final DifferentialContainer differentials = data.differentials;
     public final TorsionReactorContainer torsionReactors = data.torsionReactors;
 
-    private float throttle;
-    private float clutchPedal;
-    private boolean starter;
+    private final int throttleSignalId;
+    private final int clutchSignalId;
+    private final int starterSignalId;
+    private final int shiftUpSignalId;
+    private final int shiftDownSignalId;
+    private long lastShiftUpEvent;
+    private long lastShiftDownEvent;
     private volatile float debugEngineRPM;
     private volatile float debugThrottle;
     private volatile float debugActualThrottle;
@@ -78,6 +84,11 @@ public final class PowertrainSystem {
 
     public PowertrainSystem(SoftBodyVehicle vehicle) {
         this.vehicle = vehicle;
+        throttleSignalId = vehicle.electrics.register(ElectricSignals.THROTTLE_INPUT);
+        clutchSignalId = vehicle.electrics.register(ElectricSignals.CLUTCH_INPUT);
+        starterSignalId = vehicle.electrics.register(ElectricSignals.STARTER_INPUT);
+        shiftUpSignalId = vehicle.electrics.register(ElectricSignals.SHIFT_UP_EVENT);
+        shiftDownSignalId = vehicle.electrics.register(ElectricSignals.SHIFT_DOWN_EVENT);
     }
 
     public void addSpecs(List<DeviceSpec> specs) {
@@ -108,37 +119,44 @@ public final class PowertrainSystem {
         debugShiftRemaining = 0.0f;
     }
 
-    /** Client-thread input handoff; the async step starts only after this call. */
+    /** Compatibility helper for tests and tools; production input writes the same bus directly. */
     public void setControls(float throttle, float clutchPedal) {
         setControls(throttle, clutchPedal, false);
     }
 
-    /** Client-thread input handoff including the starter-motor request. */
+    /** Compatibility helper including the starter-motor request. */
     public void setControls(float throttle, float clutchPedal, boolean starter) {
-        this.throttle = Math.clamp(throttle, 0.0f, 1.0f);
-        this.clutchPedal = Math.clamp(clutchPedal, 0.0f, 1.0f);
-        this.starter = starter;
-        debugThrottle = this.throttle;
-        debugClutchEngagement = 1.0f - this.clutchPedal;
+        vehicle.electrics.set(throttleSignalId, Math.clamp(throttle, 0.0f, 1.0f));
+        vehicle.electrics.set(clutchSignalId, Math.clamp(clutchPedal, 0.0f, 1.0f));
+        vehicle.electrics.set(starterSignalId, starter ? 1.0 : 0.0);
     }
 
     /** Requests an upshift on every compiled gearbox (next forward gear, else no-op). */
     public void requestShiftUp() {
-        for (int unit = 0; unit < gearboxes.unitCount; unit++) {
-            requestShift(unit, gearboxes.currentGearIndex[unit] + 1);
-        }
+        vehicle.electrics.set(shiftUpSignalId, vehicle.electrics.get(shiftUpSignalId) + 1.0);
     }
 
     /** Requests a downshift on every compiled gearbox (toward reverse, else no-op). */
     public void requestShiftDown() {
-        for (int unit = 0; unit < gearboxes.unitCount; unit++) {
-            requestShift(unit, gearboxes.currentGearIndex[unit] - 1);
-        }
+        vehicle.electrics.set(shiftDownSignalId, vehicle.electrics.get(shiftDownSignalId) + 1.0);
     }
 
     /** Adds wheel and reaction forces for the current substep. */
     public void solve(float dt) {
+        solve(dt, vehicle.electrics.snapshot());
+    }
+
+    /** Adds wheel and reaction forces using the electric snapshot for this substep block. */
+    public void solve(float dt, ElectricSnapshot electrics) {
+        if (dt <= 0.0f) return;
+        ElectricSnapshot input = electrics == null ? ElectricSnapshot.EMPTY : electrics;
+        consumeShiftEvents(input);
         if (engines.unitCount == 0 || dt <= 0.0f) return;
+        float throttle = Math.clamp((float) input.get(throttleSignalId), 0.0f, 1.0f);
+        float clutchPedal = Math.clamp((float) input.get(clutchSignalId), 0.0f, 1.0f);
+        boolean starter = input.get(starterSignalId) >= 0.5;
+        debugThrottle = throttle;
+        debugClutchEngagement = 1.0f - clutchPedal;
         float engagement = 1.0f - clutchPedal;
         for (int unit = 0; unit < engines.unitCount; unit++) {
             engines.starterActive[unit] = starter;
@@ -350,6 +368,39 @@ public final class PowertrainSystem {
         }
     }
 
+    private void consumeShiftEvents(ElectricSnapshot input) {
+        long up = eventSequence(input.get(shiftUpSignalId));
+        long down = eventSequence(input.get(shiftDownSignalId));
+        int upCount = eventCount(lastShiftUpEvent, up);
+        int downCount = eventCount(lastShiftDownEvent, down);
+        lastShiftUpEvent = up;
+        lastShiftDownEvent = down;
+
+        for (int event = 0; event < upCount; event++) {
+            for (int unit = 0; unit < gearboxes.unitCount; unit++) {
+                int base = gearboxes.pendingGearIndex[unit] >= 0
+                        ? gearboxes.pendingGearIndex[unit] : gearboxes.currentGearIndex[unit];
+                requestShift(unit, base + 1);
+            }
+        }
+        for (int event = 0; event < downCount; event++) {
+            for (int unit = 0; unit < gearboxes.unitCount; unit++) {
+                int base = gearboxes.pendingGearIndex[unit] >= 0
+                        ? gearboxes.pendingGearIndex[unit] : gearboxes.currentGearIndex[unit];
+                requestShift(unit, base - 1);
+            }
+        }
+    }
+
+    private static long eventSequence(double value) {
+        return Double.isFinite(value) && value > 0.0 ? (long) Math.floor(value) : 0L;
+    }
+
+    private static int eventCount(long previous, long current) {
+        if (current <= previous) return 0;
+        return (int) Math.min(current - previous, 32L);
+    }
+
     private float gearboxRatio(int unit, int index) {
         int start = gearboxes.gearStart[unit];
         int count = gearboxes.gearCount[unit];
@@ -387,9 +438,13 @@ public final class PowertrainSystem {
             gearboxes.activeRatio[i] = gearboxRatio(i, gearboxes.initialGearIndex[i]);
             gearboxes.shiftRemaining[i] = 0.0f;
         }
-        throttle = 0.0f;
-        clutchPedal = 0.0f;
-        starter = false;
+        lastShiftUpEvent = 0L;
+        lastShiftDownEvent = 0L;
+        vehicle.electrics.set(throttleSignalId, 0.0);
+        vehicle.electrics.set(clutchSignalId, 0.0);
+        vehicle.electrics.set(starterSignalId, 0.0);
+        vehicle.electrics.set(shiftUpSignalId, 0.0);
+        vehicle.electrics.set(shiftDownSignalId, 0.0);
         debugEngineRPM = engines.unitCount > 0 ? engines.engineAV[0] * AV_TO_RPM : 0.0f;
         debugThrottle = 0.0f;
         debugActualThrottle = engines.unitCount > 0 ? engines.actualThrottle[0] : 0.0f;
@@ -411,9 +466,8 @@ public final class PowertrainSystem {
     public void clear() {
         pendingSpecs.clear();
         data.clear();
-        throttle = 0.0f;
-        clutchPedal = 0.0f;
-        starter = false;
+        lastShiftUpEvent = 0L;
+        lastShiftDownEvent = 0L;
         debugEngineRPM = 0.0f;
         debugThrottle = 0.0f;
         debugActualThrottle = 0.0f;

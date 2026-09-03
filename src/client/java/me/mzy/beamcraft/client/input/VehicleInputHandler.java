@@ -4,12 +4,17 @@ import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.config.BeamCraftConfig;
 import me.mzy.beamcraft.client.physics.PhysicsWorld;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.util.InputUtil;
 
 /** Polls configured vehicle controls and owns their edge-triggered state. */
 public final class VehicleInputHandler {
+    private final InputUtil.Key steerLeft;
+    private final InputUtil.Key steerRight;
     private final InputUtil.Key throttle;
+    private final InputUtil.Key brake;
     private final InputUtil.Key clutch;
     private final InputUtil.Key starter;
     private final InputUtil.Key shiftUp;
@@ -23,7 +28,10 @@ public final class VehicleInputHandler {
     public VehicleInputHandler(BeamCraftConfig.Input input) {
         BeamCraftConfig.Input defaults = new BeamCraftConfig.Input();
         BeamCraftConfig.Input configured = input == null ? defaults : input;
+        steerLeft = resolve(configured.steerLeft, defaults.steerLeft, "steerLeft");
+        steerRight = resolve(configured.steerRight, defaults.steerRight, "steerRight");
         throttle = resolve(configured.throttle, defaults.throttle, "throttle");
+        brake = resolve(configured.brake, defaults.brake, "brake");
         clutch = resolve(configured.clutch, defaults.clutch, "clutch");
         starter = resolve(configured.starter, defaults.starter, "starter");
         shiftUp = resolve(configured.shiftUp, defaults.shiftUp, "shiftUp");
@@ -36,7 +44,10 @@ public final class VehicleInputHandler {
         boolean resetPressed = pressed(window, resetVehicle);
         boolean shiftUpPressed = pressed(window, shiftUp);
         boolean shiftDownPressed = pressed(window, shiftDown);
+        float steeringValue = (pressed(window, steerLeft) ? 1.0f : 0.0f)
+                - (pressed(window, steerRight) ? 1.0f : 0.0f);
         float throttleValue = pressed(window, throttle) ? 1.0f : 0.0f;
+        float brakeValue = pressed(window, brake) ? 1.0f : 0.0f;
         float clutchValue = pressed(window, clutch) ? 1.0f : 0.0f;
         boolean starterPressed = pressed(window, starter);
 
@@ -45,12 +56,17 @@ public final class VehicleInputHandler {
         }
 
         for (SoftBodyVehicle vehicle : world.vehicles) {
-            vehicle.powertrain.setControls(throttleValue, clutchValue, starterPressed);
+            ElectricBus electrics = vehicle.electrics;
+            electrics.set(ElectricSignals.STEERING_INPUT, steeringValue);
+            electrics.set(ElectricSignals.THROTTLE_INPUT, throttleValue);
+            electrics.set(ElectricSignals.BRAKE_INPUT, brakeValue);
+            electrics.set(ElectricSignals.CLUTCH_INPUT, clutchValue);
+            electrics.set(ElectricSignals.STARTER_INPUT, starterPressed ? 1.0 : 0.0);
             if (shiftUpPressed && !shiftUpWasPressed) {
-                vehicle.powertrain.requestShiftUp();
+                incrementEvent(electrics, ElectricSignals.SHIFT_UP_EVENT);
             }
             if (shiftDownPressed && !shiftDownWasPressed) {
-                vehicle.powertrain.requestShiftDown();
+                incrementEvent(electrics, ElectricSignals.SHIFT_DOWN_EVENT);
             }
         }
 
@@ -72,6 +88,10 @@ public final class VehicleInputHandler {
 
     private static boolean pressed(long window, InputUtil.Key key) {
         return InputUtil.isKeyPressed(window, key.getCode());
+    }
+
+    private static void incrementEvent(ElectricBus electrics, String signal) {
+        electrics.set(signal, electrics.get(signal) + 1.0);
     }
 
     private static InputUtil.Key resolve(String configured, String fallback, String action) {

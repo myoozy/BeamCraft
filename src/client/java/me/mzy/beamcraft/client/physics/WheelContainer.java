@@ -26,6 +26,14 @@ public class WheelContainer {
     public float[] tireWidth = new float[INIT_WHEEL_CAP];
     public float[] pressurePSI = new float[INIT_WHEEL_CAP];
 
+    // Service-brake configuration and per-wheel pressure state.
+    public float[] brakeTorque = new float[INIT_WHEEL_CAP];
+    public float[] brakeInputSplit = new float[INIT_WHEEL_CAP];
+    public float[] brakeSplitCoef = new float[INIT_WHEEL_CAP];
+    public float[] brakePressureInDelay = new float[INIT_WHEEL_CAP];
+    public float[] brakePressureOutDelay = new float[INIT_WHEEL_CAP];
+    public float[] serviceBrakeTorque = new float[INIT_WHEEL_CAP];
+
     // 轮胎节点摩擦参数
     public float[] frictionCoef         = new float[INIT_WHEEL_CAP];
     public float[] slidingFrictionCoef  = new float[INIT_WHEEL_CAP];
@@ -273,6 +281,12 @@ public class WheelContainer {
         this.loadSensitivitySlope[wIdx] = (float) loadSensitivitySlope;
         this.fullLoadCoef[wIdx] = (float) fullLoadCoef;
         this.softnessCoef[wIdx] = (float) softnessCoef;
+        this.brakeTorque[wIdx] = Math.max(0.0f, (float) spec.brakeTorque());
+        this.brakeInputSplit[wIdx] = Math.clamp((float) spec.brakeInputSplit(), 0.0f, 1.0f);
+        this.brakeSplitCoef[wIdx] = Math.clamp((float) spec.brakeSplitCoef(), 0.0f, 1.0f);
+        this.brakePressureInDelay[wIdx] = Math.max(0.0f, (float) spec.brakePressureInDelay());
+        this.brakePressureOutDelay[wIdx] = Math.max(0.0f, (float) spec.brakePressureOutDelay());
+        this.serviceBrakeTorque[wIdx] = 0.0f;
 
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
@@ -562,6 +576,12 @@ public class WheelContainer {
             tireRadius = Utility.expand(tireRadius, newSize);
             tireWidth = Utility.expand(tireWidth, newSize);
             pressurePSI = Utility.expand(pressurePSI, newSize);
+            brakeTorque = Utility.expand(brakeTorque, newSize);
+            brakeInputSplit = Utility.expand(brakeInputSplit, newSize);
+            brakeSplitCoef = Utility.expand(brakeSplitCoef, newSize);
+            brakePressureInDelay = Utility.expand(brakePressureInDelay, newSize);
+            brakePressureOutDelay = Utility.expand(brakePressureOutDelay, newSize);
+            serviceBrakeTorque = Utility.expand(serviceBrakeTorque, newSize);
 
             frictionCoef = Utility.expand(frictionCoef, newSize);
             slidingFrictionCoef = Utility.expand(slidingFrictionCoef, newSize);
@@ -731,6 +751,81 @@ public class WheelContainer {
         }
     }
 
+    /** Applies the JBeam service brake curve and pressure delays to every wheel. */
+    public void applyServiceBrakes(float brakeInput, float dt) {
+        if (dt <= 0.0f) return;
+        float input = Math.clamp(brakeInput, 0.0f, 1.0f);
+        for (int wheel = 0; wheel < count; wheel++) {
+            float maximum = brakeTorque[wheel];
+            float target = calculateServiceBrakeTorque(maximum, input,
+                    brakeInputSplit[wheel], brakeSplitCoef[wheel]);
+            float delay = target > serviceBrakeTorque[wheel]
+                    ? brakePressureInDelay[wheel] : brakePressureOutDelay[wheel];
+            float rate = delay > 1.0e-6f ? maximum / delay : Float.POSITIVE_INFINITY;
+            serviceBrakeTorque[wheel] = moveTowards(serviceBrakeTorque[wheel], target, rate * dt);
+
+            float angularVelocity = getAngularVelocity(wheel);
+            if (serviceBrakeTorque[wheel] <= 1.0e-8f || Math.abs(angularVelocity) <= 1.0e-8f) continue;
+            float stoppingTorque = Math.abs(angularVelocity) * getHubRotationalInertia(wheel) / dt;
+            float appliedTorque = Math.min(serviceBrakeTorque[wheel], stoppingTorque);
+            applyDriveTorque(wheel, -Math.copySign(appliedTorque, angularVelocity));
+        }
+    }
+
+    static float calculateServiceBrakeTorque(float maximum, float input, float split, float splitCoef) {
+        float clampedInput = Math.clamp(input, 0.0f, 1.0f);
+        float clampedSplit = Math.clamp(split, 0.0f, 1.0f);
+        float clampedCoef = Math.clamp(splitCoef, 0.0f, 1.0f);
+        return Math.max(0.0f, maximum) * (Math.min(clampedInput, clampedSplit)
+                + Math.max(clampedInput - clampedSplit, 0.0f) * clampedCoef);
+    }
+
+    private float getHubRotationalInertia(int wheelIdx) {
+        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return 0.0f;
+
+        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
+        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
+        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return 0.0f;
+        ax /= axisLength;
+        ay /= axisLength;
+        az /= axisLength;
+
+        double totalMass = 0.0;
+        double cx = 0.0, cy = 0.0, cz = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            double innerMass = Math.max(0.0, nodes.mass[inner]);
+            double outerMass = Math.max(0.0, nodes.mass[outer]);
+            totalMass += innerMass + outerMass;
+            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
+            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
+            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
+        }
+        if (totalMass < 1e-9) return 0.0f;
+        cx /= totalMass;
+        cy /= totalMass;
+        cz /= totalMass;
+        double inertia = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+        }
+        return (float) inertia;
+    }
+
+    private static float moveTowards(float current, float target, float maximumDelta) {
+        if (maximumDelta == Float.POSITIVE_INFINITY) return target;
+        if (current < target) return Math.min(current + maximumDelta, target);
+        return Math.max(current - maximumDelta, target);
+    }
+
     private static double angularMomentum(NodeContainer nodes, int node, double cx, double cy, double cz,
                                           double cvx, double cvy, double cvz,
                                           double ax, double ay, double az) {
@@ -761,6 +856,7 @@ public class WheelContainer {
     public void reset() {
         for (int i = 0; i < count; i++) {
             isDeflated[i] = false;
+            serviceBrakeTorque[i] = 0.0f;
         }
     }
 

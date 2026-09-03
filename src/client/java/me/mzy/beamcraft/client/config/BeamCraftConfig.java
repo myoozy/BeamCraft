@@ -35,7 +35,10 @@ public final class BeamCraftConfig {
 
     /** Keyboard translation keys consumed by the client input handler. */
     public static final class Input {
+        public String steerLeft = "key.keyboard.a";
+        public String steerRight = "key.keyboard.d";
         public String throttle = "key.keyboard.w";
+        public String brake = "key.keyboard.s";
         public String clutch = "key.keyboard.left.shift";
         public String starter = "key.keyboard.v";
         public String shiftUp = "key.keyboard.x";
