@@ -28,11 +28,14 @@ public class WheelContainer {
 
     // Service-brake configuration and per-wheel pressure state.
     public float[] brakeTorque = new float[INIT_WHEEL_CAP];
+    public float[] parkingTorque = new float[INIT_WHEEL_CAP];
+    public float[] brakeSpring = new float[INIT_WHEEL_CAP];
     public float[] brakeInputSplit = new float[INIT_WHEEL_CAP];
     public float[] brakeSplitCoef = new float[INIT_WHEEL_CAP];
     public float[] brakePressureInDelay = new float[INIT_WHEEL_CAP];
     public float[] brakePressureOutDelay = new float[INIT_WHEEL_CAP];
     public float[] serviceBrakeTorque = new float[INIT_WHEEL_CAP];
+    public float[] brakeAngle = new float[INIT_WHEEL_CAP];
 
     // 轮胎节点摩擦参数
     public float[] frictionCoef         = new float[INIT_WHEEL_CAP];
@@ -282,11 +285,14 @@ public class WheelContainer {
         this.fullLoadCoef[wIdx] = (float) fullLoadCoef;
         this.softnessCoef[wIdx] = (float) softnessCoef;
         this.brakeTorque[wIdx] = Math.max(0.0f, (float) spec.brakeTorque());
+        this.parkingTorque[wIdx] = Math.max(0.0f, (float) spec.parkingTorque());
+        this.brakeSpring[wIdx] = Math.max(0.0f, (float) spec.brakeSpring());
         this.brakeInputSplit[wIdx] = Math.clamp((float) spec.brakeInputSplit(), 0.0f, 1.0f);
         this.brakeSplitCoef[wIdx] = Math.clamp((float) spec.brakeSplitCoef(), 0.0f, 1.0f);
         this.brakePressureInDelay[wIdx] = Math.max(0.0f, (float) spec.brakePressureInDelay());
         this.brakePressureOutDelay[wIdx] = Math.max(0.0f, (float) spec.brakePressureOutDelay());
         this.serviceBrakeTorque[wIdx] = 0.0f;
+        this.brakeAngle[wIdx] = 0.0f;
 
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
@@ -577,11 +583,14 @@ public class WheelContainer {
             tireWidth = Utility.expand(tireWidth, newSize);
             pressurePSI = Utility.expand(pressurePSI, newSize);
             brakeTorque = Utility.expand(brakeTorque, newSize);
+            parkingTorque = Utility.expand(parkingTorque, newSize);
+            brakeSpring = Utility.expand(brakeSpring, newSize);
             brakeInputSplit = Utility.expand(brakeInputSplit, newSize);
             brakeSplitCoef = Utility.expand(brakeSplitCoef, newSize);
             brakePressureInDelay = Utility.expand(brakePressureInDelay, newSize);
             brakePressureOutDelay = Utility.expand(brakePressureOutDelay, newSize);
             serviceBrakeTorque = Utility.expand(serviceBrakeTorque, newSize);
+            brakeAngle = Utility.expand(brakeAngle, newSize);
 
             frictionCoef = Utility.expand(frictionCoef, newSize);
             slidingFrictionCoef = Utility.expand(slidingFrictionCoef, newSize);
@@ -753,8 +762,14 @@ public class WheelContainer {
 
     /** Applies the JBeam service brake curve and pressure delays to every wheel. */
     public void applyServiceBrakes(float brakeInput, float dt) {
+        applyBrakes(brakeInput, 0.0f, dt);
+    }
+
+    /** Applies service and parking-brake inputs; parking input is intentionally unbound for now. */
+    public void applyBrakes(float brakeInput, float parkingBrakeInput, float dt) {
         if (dt <= 0.0f) return;
         float input = Math.clamp(brakeInput, 0.0f, 1.0f);
+        float parkingInput = Math.clamp(parkingBrakeInput, 0.0f, 1.0f);
         for (int wheel = 0; wheel < count; wheel++) {
             float maximum = brakeTorque[wheel];
             float target = calculateServiceBrakeTorque(maximum, input,
@@ -764,10 +779,24 @@ public class WheelContainer {
             float rate = delay > 1.0e-6f ? maximum / delay : Float.POSITIVE_INFINITY;
             serviceBrakeTorque[wheel] = moveTowards(serviceBrakeTorque[wheel], target, rate * dt);
 
+            float capacity = Math.max(serviceBrakeTorque[wheel], parkingTorque[wheel] * parkingInput);
+            if (capacity <= 1.0e-8f) {
+                brakeAngle[wheel] = 0.0f;
+                continue;
+            }
+
             float angularVelocity = getAngularVelocity(wheel);
-            if (serviceBrakeTorque[wheel] <= 1.0e-8f || Math.abs(angularVelocity) <= 1.0e-8f) continue;
+            if (Math.abs(angularVelocity) <= 1.0e-8f) continue;
+            if (brakeAngle[wheel] * angularVelocity < 0.0f) {
+                brakeAngle[wheel] = 0.0f;
+            }
+            brakeAngle[wheel] += angularVelocity * dt;
+
+            float stiffness = Math.max(Math.max(brakeTorque[wheel], parkingTorque[wheel]), 1.0f)
+                    * brakeSpring[wheel];
+            float compliantTorque = Math.min(capacity, Math.abs(brakeAngle[wheel]) * stiffness);
             float stoppingTorque = Math.abs(angularVelocity) * getHubRotationalInertia(wheel) / dt;
-            float appliedTorque = Math.min(serviceBrakeTorque[wheel], stoppingTorque);
+            float appliedTorque = Math.min(compliantTorque, stoppingTorque);
             applyDriveTorque(wheel, -Math.copySign(appliedTorque, angularVelocity));
         }
     }
@@ -857,6 +886,7 @@ public class WheelContainer {
         for (int i = 0; i < count; i++) {
             isDeflated[i] = false;
             serviceBrakeTorque[i] = 0.0f;
+            brakeAngle[i] = 0.0f;
         }
     }
 

@@ -44,8 +44,7 @@ public final class VehicleInputHandler {
         boolean resetPressed = pressed(window, resetVehicle);
         boolean shiftUpPressed = pressed(window, shiftUp);
         boolean shiftDownPressed = pressed(window, shiftDown);
-        float steeringValue = (pressed(window, steerLeft) ? 1.0f : 0.0f)
-                - (pressed(window, steerRight) ? 1.0f : 0.0f);
+        float steeringValue = steeringValue(pressed(window, steerLeft), pressed(window, steerRight));
         float throttleValue = pressed(window, throttle) ? 1.0f : 0.0f;
         float brakeValue = pressed(window, brake) ? 1.0f : 0.0f;
         float clutchValue = pressed(window, clutch) ? 1.0f : 0.0f;
@@ -88,6 +87,10 @@ public final class VehicleInputHandler {
 
     private static boolean pressed(long window, InputUtil.Key key) {
         return InputUtil.isKeyPressed(window, key.getCode());
+    }
+
+    static float steeringValue(boolean leftPressed, boolean rightPressed) {
+        return (rightPressed ? 1.0f : 0.0f) - (leftPressed ? 1.0f : 0.0f);
     }
 
     private static void incrementEvent(ElectricBus electrics, String signal) {

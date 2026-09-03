@@ -166,8 +166,8 @@ public class JBeamPressureWheelsParser {
                 boolean enableABS = getBool(activeConfig, "enableABS", false);
                 double absSlipRatioTarget = getVal(activeConfig, "absSlipRatioTarget", 0.18, entry.variables);
                 double absHz = getVal(activeConfig, "absHz", 100, entry.variables);
-                double brakePressureInDelay = getVal(activeConfig, "brakePressureInDelay", 0.05, entry.variables);
-                double brakePressureOutDelay = getVal(activeConfig, "brakePressureOutDelay", 0.1, entry.variables);
+                double brakePressureInDelay = getVal(activeConfig, "brakePressureInDelay", 0.04, entry.variables);
+                double brakePressureOutDelay = getVal(activeConfig, "brakePressureOutDelay", 0.04, entry.variables);
 
                 // ----- 轮毂盖参数 -----
                 boolean enableHubcaps = getBool(activeConfig, "enableHubcaps", false);

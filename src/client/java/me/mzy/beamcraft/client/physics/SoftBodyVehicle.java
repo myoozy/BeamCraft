@@ -21,6 +21,7 @@ public class SoftBodyVehicle {
     public static final float MAX_NODE_SPEED = 343.0f;
     private static final float MAX_NODE_SPEED_SQ = MAX_NODE_SPEED * MAX_NODE_SPEED;
     private final int brakeInputSignalId;
+    private final int parkingBrakeInputSignalId;
 
     public final PhysicsVehicleEntity parentEntity;
     public final float[] localCOM = new float[3];
@@ -65,6 +66,7 @@ public class SoftBodyVehicle {
         this.parentEntity = parentEntity;
         electrics.register(ElectricSignals.STEERING_INPUT);
         brakeInputSignalId = electrics.register(ElectricSignals.BRAKE_INPUT);
+        parkingBrakeInputSignalId = electrics.register(ElectricSignals.PARKING_BRAKE_INPUT);
         this.flexbodies.vehicleNamespace = parentEntity != null ? parentEntity.getRootPartName() : "test";
         cacheEntityLocation();
     }
@@ -1451,8 +1453,9 @@ public class SoftBodyVehicle {
         // dedicated worker. Run it before node integration so driven-wheel
         // torque participates in this substep.
         powertrain.solve(dt, electricSnapshot);
-        wheels.applyServiceBrakes(
+        wheels.applyBrakes(
                 (float) electricSnapshot.get(brakeInputSignalId),
+                (float) electricSnapshot.get(parkingBrakeInputSignalId),
                 dt);
 
         // ==========================================

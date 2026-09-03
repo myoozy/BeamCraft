@@ -46,6 +46,38 @@ class WheelBrakeTest {
         assertTrue(after < before, "service brake must remove wheel angular velocity");
     }
 
+    @Test
+    void parkingBrakeUsesItsOwnTorqueThroughTheSharedCompliantConstraint() {
+        SoftBodyVehicle vehicle = rotatingWheel();
+        WheelContainer wheels = vehicle.wheels;
+        wheels.brakeTorque[0] = 0.0f;
+        wheels.parkingTorque[0] = 1000.0f;
+        float before = wheels.getAngularVelocity(0);
+
+        wheels.applyBrakes(0.0f, 1.0f, 0.01f);
+        integrateForces(vehicle.nodes, 0.01f);
+
+        assertTrue(wheels.brakeAngle[0] > 0.0f);
+        assertTrue(wheels.getAngularVelocity(0) < before);
+    }
+
+    @Test
+    void brakeSpringControlsHowQuicklyConstraintTorqueBuilds() {
+        SoftBodyVehicle softVehicle = rotatingWheel();
+        SoftBodyVehicle stiffVehicle = rotatingWheel();
+        softVehicle.wheels.brakeSpring[0] = 0.1f;
+        stiffVehicle.wheels.brakeSpring[0] = 10.0f;
+
+        softVehicle.wheels.applyServiceBrakes(1.0f, 0.01f);
+        stiffVehicle.wheels.applyServiceBrakes(1.0f, 0.01f);
+        integrateForces(softVehicle.nodes, 0.01f);
+        integrateForces(stiffVehicle.nodes, 0.01f);
+
+        assertTrue(stiffVehicle.wheels.getAngularVelocity(0)
+                        < softVehicle.wheels.getAngularVelocity(0),
+                "higher brakeSpring must build more constraint torque for the same angular travel");
+    }
+
     private static SoftBodyVehicle rotatingWheel() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         NodeContainer nodes = vehicle.nodes;
@@ -75,6 +107,8 @@ class WheelBrakeTest {
         wheels.hubInnerNodes[1] = 4;
         wheels.hubOuterNodes[1] = 5;
         wheels.brakeTorque[0] = 10_000.0f;
+        wheels.parkingTorque[0] = 0.0f;
+        wheels.brakeSpring[0] = 10.0f;
         wheels.brakeInputSplit[0] = 1.0f;
         wheels.brakeSplitCoef[0] = 1.0f;
         return vehicle;
