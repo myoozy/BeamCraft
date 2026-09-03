@@ -780,21 +780,24 @@ public class WheelContainer {
             serviceBrakeTorque[wheel] = moveTowards(serviceBrakeTorque[wheel], target, rate * dt);
 
             float capacity = Math.max(serviceBrakeTorque[wheel], parkingTorque[wheel] * parkingInput);
-            if (capacity <= 1.0e-8f) {
+            float stiffness = Math.max(Math.max(brakeTorque[wheel], parkingTorque[wheel]), 1.0f)
+                    * brakeSpring[wheel];
+            if (capacity <= 1.0e-8f || stiffness <= 1.0e-8f) {
                 brakeAngle[wheel] = 0.0f;
                 continue;
             }
 
             float angularVelocity = getAngularVelocity(wheel);
-            if (Math.abs(angularVelocity) <= 1.0e-8f) continue;
             if (brakeAngle[wheel] * angularVelocity < 0.0f) {
                 brakeAngle[wheel] = 0.0f;
             }
-            brakeAngle[wheel] += angularVelocity * dt;
+            float angleLimit = capacity / stiffness;
+            brakeAngle[wheel] = Math.clamp(
+                    brakeAngle[wheel] + angularVelocity * dt,
+                    -angleLimit,
+                    angleLimit);
 
-            float stiffness = Math.max(Math.max(brakeTorque[wheel], parkingTorque[wheel]), 1.0f)
-                    * brakeSpring[wheel];
-            float compliantTorque = Math.min(capacity, Math.abs(brakeAngle[wheel]) * stiffness);
+            float compliantTorque = Math.abs(brakeAngle[wheel]) * stiffness;
             float stoppingTorque = Math.abs(angularVelocity) * getHubRotationalInertia(wheel) / dt;
             float appliedTorque = Math.min(compliantTorque, stoppingTorque);
             applyDriveTorque(wheel, -Math.copySign(appliedTorque, angularVelocity));

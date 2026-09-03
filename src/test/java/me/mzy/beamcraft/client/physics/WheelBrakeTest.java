@@ -78,6 +78,20 @@ class WheelBrakeTest {
                 "higher brakeSpring must build more constraint torque for the same angular travel");
     }
 
+    @Test
+    void brakeSpringAngleStopsAccumulatingWhileTheBrakeIsSlipping() {
+        SoftBodyVehicle vehicle = rotatingWheel();
+        WheelContainer wheels = vehicle.wheels;
+
+        wheels.applyServiceBrakes(1.0f, 0.01f);
+        float saturatedAngle = wheels.brakeAngle[0];
+        wheels.applyServiceBrakes(1.0f, 0.01f);
+
+        assertEquals(1.0f / wheels.brakeSpring[0], saturatedAngle, 1.0e-6f);
+        assertEquals(saturatedAngle, wheels.brakeAngle[0], 1.0e-6f,
+                "slipping must not keep winding up the compliant brake constraint");
+    }
+
     private static SoftBodyVehicle rotatingWheel() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         NodeContainer nodes = vehicle.nodes;
