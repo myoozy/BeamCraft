@@ -453,8 +453,18 @@ public class JBeamParser {
 
     // --- 2. Beam Parsing ---
     public static void parseBeams(JsonArray beams, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
+        parseBeamRows(beams, vehicle, entry, false);
+    }
+
+    public static void parseHydros(JsonArray hydros, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
+        parseBeamRows(hydros, vehicle, entry, true);
+    }
+
+    private static void parseBeamRows(JsonArray beams, SoftBodyVehicle vehicle,
+                                      JBeamAssembler.PartEntry entry, boolean hydroSection) {
         boolean isHeader = true;
-        int currentType = BeamContainer.BEAM_NORMAL;
+        int currentType = hydroSection ? BeamContainer.BEAM_HYDRO : BeamContainer.BEAM_NORMAL;
+        JsonObject currentProperties = new JsonObject();
 
         float currentPrecomp = 1.0f, currentPrecompRange = 0.0f, currentPrecompTime = 0.0f;
         float currentSpring = 9000000.0f, currentDamp = 12000.0f;
@@ -478,8 +488,11 @@ public class JBeamParser {
         for (JsonElement element : beams) {
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
+                if (hydroSection) {
+                    mergeJsonObjectsRecursive(currentProperties, modifier);
+                }
                 String bt = getStringSafe(modifier, "beamType", "");
-                if (!bt.isEmpty()) {
+                if (!hydroSection && !bt.isEmpty()) {
                     if (bt.equals("|NORMAL")) currentType = BeamContainer.BEAM_NORMAL;
                     else if (bt.equals("|SUPPORT")) currentType = BeamContainer.BEAM_SUPPORT;
                     else if (bt.equals("|BOUNDED")) currentType = BeamContainer.BEAM_BOUNDED;
@@ -526,6 +539,7 @@ public class JBeamParser {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 2) {
+                    JsonObject rowProperties = hydroSection ? copyJsonObject(currentProperties) : null;
                     int inlineType = currentType;
                     float inlineSpring = currentSpring, inlineDamp = currentDamp;
                     float inlineDeform = currentDeform, inlineStrength = currentStrength;
@@ -545,6 +559,9 @@ public class JBeamParser {
 
                     if (row.size() >= 3 && row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
+                        if (hydroSection) {
+                            mergeJsonObjectsRecursive(rowProperties, inline);
+                        }
 
                         inlineSpring = getFloatSafe(inline, "beamSpring", inlineSpring, entry.variables);
                         inlineDamp = getFloatSafe(inline, "beamDamp", inlineDamp, entry.variables);
@@ -579,7 +596,7 @@ public class JBeamParser {
                                 inline, "disableTriangleBreaking", inlineDisableTriangleBreaking);
 
                         String bt = getStringSafe(inline, "beamType", "");
-                        if (!bt.isEmpty()) {
+                        if (!hydroSection && !bt.isEmpty()) {
                             if (bt.equals("|NORMAL")) inlineType = BeamContainer.BEAM_NORMAL;
                             else if (bt.equals("|SUPPORT")) inlineType = BeamContainer.BEAM_SUPPORT;
                             else if (bt.equals("|BOUNDED")) inlineType = BeamContainer.BEAM_BOUNDED;
@@ -592,7 +609,7 @@ public class JBeamParser {
 
                     String id1 = row.get(0).getAsString();
                     String id2 = row.get(1).getAsString();
-                    vehicle.addBeam(new PhysicsSpecs.BeamSpec(
+                    PhysicsSpecs.BeamSpec beamSpec = new PhysicsSpecs.BeamSpec(
                             inlineType, id1, id2, inlineId3,
                             inlineBreakGroups, inlineBreakGroupType, inlineDisableTriangleBreaking,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
@@ -601,10 +618,56 @@ public class JBeamParser {
                             inlineLimitS, inlineLimitD, inlineDampVelSplit, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone,
                             inlineDeformLimitStress
-                    ));
+                    );
+                    if (hydroSection) {
+                        vehicle.addHydro(buildHydroSpec(beamSpec, rowProperties, entry.variables));
+                    } else {
+                        vehicle.addBeam(beamSpec);
+                    }
                 }
             }
         }
+    }
+
+    static PhysicsSpecs.HydroSpec buildHydroSpec(PhysicsSpecs.BeamSpec beam, JsonObject properties,
+                                                  Map<String, Double> variables) {
+        float inLimit = getFloatSafe(properties, "inLimit", 1.0f, variables);
+        float outLimit = getFloatSafe(properties, "outLimit", 2.0f, variables);
+        float inputFactor = getFloatSafe(properties, "inputFactor", 1.0f, variables);
+
+        if (properties.has("factor") && !properties.get("factor").isJsonNull()) {
+            float factor = getFloatSafe(properties, "factor", Float.NaN, variables);
+            if (Float.isFinite(factor)) {
+                float extent = Math.abs(factor);
+                inLimit = 1.0f - extent;
+                outLimit = 1.0f + extent;
+                inputFactor = factor < 0.0f ? -1.0f : 1.0f;
+            }
+        }
+
+        float inRate = Math.max(0.0f, getFloatSafe(properties, "inRate", 2.0f, variables));
+        float outRate = Math.max(0.0f, getFloatSafe(properties, "outRate", inRate, variables));
+        float autoCenterRate = Math.max(0.0f,
+                getFloatSafe(properties, "autoCenterRate", inRate, variables));
+        Float steeringWheelLock = properties.has("steeringWheelLock")
+                && !properties.get("steeringWheelLock").isJsonNull()
+                ? getFloatSafe(properties, "steeringWheelLock", 0.0f, variables)
+                : null;
+
+        return new PhysicsSpecs.HydroSpec(
+                beam,
+                getStringSafe(properties, "inputSource", "steering_input"),
+                inLimit,
+                outLimit,
+                inputFactor,
+                getFloatSafe(properties, "inputCenter", 0.0f, variables),
+                getFloatSafe(properties, "inputInLimit", -1.0f, variables),
+                getFloatSafe(properties, "inputOutLimit", 1.0f, variables),
+                inRate,
+                outRate,
+                autoCenterRate,
+                steeringWheelLock
+        );
     }
 
     // --- 3. Triangle Parsing ---

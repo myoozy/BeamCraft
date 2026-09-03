@@ -25,6 +25,7 @@ public class SoftBodyVehicle {
 
     public final NodeContainer nodes = new NodeContainer();
     public final BeamContainer normalBeams = new BeamContainer();
+    public final HydroContainer hydros = new HydroContainer();
     public final BeamContainer supportBeams = new BeamContainer();
     public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
     public final LBeamContainer lBeams = new LBeamContainer();
@@ -133,6 +134,17 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(PhysicsSpecs.BeamSpec spec) {
+        addBeamInternal(spec);
+    }
+
+    public void addHydro(PhysicsSpecs.HydroSpec spec) {
+        BeamPointer beam = addBeamInternal(spec.beam());
+        if (beam != null) {
+            hydros.addHydro(spec, beam.index, normalBeams);
+        }
+    }
+
+    private BeamPointer addBeamInternal(PhysicsSpecs.BeamSpec spec) {
         String name1 = spec.name1();
         String name2 = spec.name2();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
@@ -195,7 +207,9 @@ public class SoftBodyVehicle {
                             .add(new BeamPointer(container, beamIdx));
                 }
             }
+            return new BeamPointer(container, beamIdx);
         }
+        return null;
     }
 
     /**
@@ -501,6 +515,7 @@ public class SoftBodyVehicle {
         triggeredBreakGroups.clear();
         nodes.reset();
         normalBeams.reset();
+        hydros.reset(normalBeams);
         supportBeams.reset();
         boundedBeams.reset();
         lBeams.reset();
@@ -518,6 +533,7 @@ public class SoftBodyVehicle {
     public void clear() {
         nodes.clear();
         normalBeams.clear();
+        hydros.clear();
         supportBeams.clear();
         boundedBeams.clear();
         lBeams.clear();
@@ -790,7 +806,8 @@ public class SoftBodyVehicle {
             float dist = (float) Math.sqrt(distSq);
             float invDist = 1.0f / dist;
 
-            float restL = normalBeams.restLength[i];
+            float actuationRatio = Math.max(KINDA_SMALL_NUMBER, normalBeams.actuationRatio[i]);
+            float restL = normalBeams.effectiveRestLength(i);
             float activeSpring = normalBeams.spring[i];
             float springForce = normalBeams.spring[i] * (dist - restL);
 
@@ -817,9 +834,10 @@ public class SoftBodyVehicle {
                         normalBeams.deform[i], maxDeform,
                         activeSpring, plasticRelaxation);
                 if (permanentDelta > 0.0f) {
+                    float neutralRestLength = normalBeams.restLength[i];
                     float newRestLength = Math.max(KINDA_SMALL_NUMBER,
-                            restL + Math.signum(springForce) * permanentDelta);
-                    float appliedDelta = Math.abs(newRestLength - restL);
+                            neutralRestLength + Math.signum(springForce) * permanentDelta / actuationRatio);
+                    float appliedDelta = Math.abs(newRestLength - neutralRestLength) * actuationRatio;
                     normalBeams.restLength[i] = newRestLength;
                     normalBeams.deform[i] = hardenDeform(normalBeams.deform[i], maxDeform,
                             activeSpring, appliedDelta);
@@ -1376,6 +1394,8 @@ public class SoftBodyVehicle {
 
     public void solveInternalForces(float dt, float plasticRelaxation){
         float invDt = 1.0f / dt;
+
+        hydros.update(dt, normalBeams);
 
         for (int i = 0; i < nodes.count; i++) {
             nodes.forceX[i] = 0.0f;

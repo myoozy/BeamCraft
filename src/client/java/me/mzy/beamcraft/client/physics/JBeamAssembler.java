@@ -134,7 +134,7 @@ public class JBeamAssembler {
                     JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry);
                 }
                 if (entry.json.has("hydros")) {
-                    JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry);
+                    JBeamParser.parseHydros(entry.json.getAsJsonArray("hydros"), vehicle, entry);
                 }
                 if (entry.json.has("triangles")) {
                     JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry);

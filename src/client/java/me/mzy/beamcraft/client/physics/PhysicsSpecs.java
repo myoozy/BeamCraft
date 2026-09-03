@@ -50,6 +50,22 @@ public final class PhysicsSpecs {
             float deformLimitStress
     ) {}
 
+    /** A normal beam plus the BeamNG hydro actuator properties attached to it. */
+    public record HydroSpec(
+            BeamSpec beam,
+            String inputSource,
+            float inLimit,
+            float outLimit,
+            float inputFactor,
+            float inputCenter,
+            float inputInLimit,
+            float inputOutLimit,
+            float inRate,
+            float outRate,
+            float autoCenterRate,
+            Float steeringWheelLock
+    ) {}
+
     public record TriangleSpec(
             String name1,
             String name2,

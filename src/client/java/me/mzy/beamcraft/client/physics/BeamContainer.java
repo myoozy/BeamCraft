@@ -23,6 +23,8 @@ public class BeamContainer {
     public float[] restLength;
     public float[] baseRestLength;
     public float[] targetRestLength;
+    /** Runtime multiplier supplied by an attached actuator; 1 for ordinary beams. */
+    public float[] actuationRatio;
     public float[] precompTimeTotal;
     public float[] precompTimer;
     public float[] spring;
@@ -43,6 +45,7 @@ public class BeamContainer {
         restLength = new float[INIT_BEAM_CAP];
         baseRestLength = new float[INIT_BEAM_CAP];
         targetRestLength = new float[INIT_BEAM_CAP];
+        actuationRatio = new float[INIT_BEAM_CAP];
         precompTimeTotal = new float[INIT_BEAM_CAP];
         precompTimer = new float[INIT_BEAM_CAP];
         spring = new float[INIT_BEAM_CAP];
@@ -74,6 +77,7 @@ public class BeamContainer {
         restLength = Utility.expand(restLength, newSize);
         baseRestLength = Utility.expand(baseRestLength, newSize);
         targetRestLength = Utility.expand(targetRestLength, newSize);
+        actuationRatio = Utility.expand(actuationRatio, newSize);
         precompTimeTotal = Utility.expand(precompTimeTotal, newSize);
         precompTimer = Utility.expand(precompTimer, newSize);
         spring = Utility.expand(spring, newSize);
@@ -116,6 +120,7 @@ public class BeamContainer {
         }
 
         this.baseRestLength[idx] = this.restLength[idx];
+        this.actuationRatio[idx] = 1.0f;
         this.spring[idx] = spec.spring();
         this.damp[idx] = spec.damp();
         this.deform[idx] = spec.deform();
@@ -152,9 +157,14 @@ public class BeamContainer {
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             restLength[i] = baseRestLength[i];
+            actuationRatio[i] = 1.0f;
             deform[i] = baseDeform[i];
             precompTimer[i] = precompTimeTotal[i];
         }
+    }
+
+    public float effectiveRestLength(int beamIndex) {
+        return restLength[beamIndex] * actuationRatio[beamIndex];
     }
 
     public void updatePrecompression(float mcDt) {
