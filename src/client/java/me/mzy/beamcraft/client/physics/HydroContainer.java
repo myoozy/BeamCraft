@@ -1,9 +1,9 @@
 package me.mzy.beamcraft.client.physics;
 
+import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import me.mzy.beamcraft.utility.Utility;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * SoA runtime state for BeamNG-style hydros. The linked normal beam retains all
@@ -15,6 +15,7 @@ public final class HydroContainer {
 
     public int count;
     public int[] beamIndex = new int[INITIAL_CAPACITY];
+    public int[] inputSignalId = new int[INITIAL_CAPACITY];
     public String[] inputSource = new String[INITIAL_CAPACITY];
     public float[] inLimit = new float[INITIAL_CAPACITY];
     public float[] outLimit = new float[INITIAL_CAPACITY];
@@ -35,14 +36,14 @@ public final class HydroContainer {
     private float[] multOut = new float[INITIAL_CAPACITY];
     private float[] offsetIn = new float[INITIAL_CAPACITY];
     private float[] offsetOut = new float[INITIAL_CAPACITY];
-    private final Map<String, Float> inputs = new ConcurrentHashMap<>();
-
-    public int addHydro(PhysicsSpecs.HydroSpec spec, int linkedBeamIndex, BeamContainer beams) {
+    public int addHydro(PhysicsSpecs.HydroSpec spec, int linkedBeamIndex,
+                        BeamContainer beams, ElectricBus electrics) {
         ensureCapacity();
         int index = count++;
 
         beamIndex[index] = linkedBeamIndex;
         inputSource[index] = normalizeInputSource(spec.inputSource());
+        inputSignalId[index] = electrics.register(inputSource[index]);
         inLimit[index] = spec.inLimit();
         outLimit[index] = spec.outLimit();
         inputFactor[index] = spec.inputFactor();
@@ -66,19 +67,8 @@ public final class HydroContainer {
         return index;
     }
 
-    public void setInput(String source, float value) {
-        if (source == null || source.isBlank()) {
-            return;
-        }
-        inputs.put(normalizeInputSource(source), Float.isFinite(value) ? value : 0.0f);
-    }
-
-    public float getInput(String source) {
-        return inputs.getOrDefault(normalizeInputSource(source), 0.0f);
-    }
-
     /** Advances all actuator states by one physics substep. */
-    public void update(float dt, BeamContainer beams) {
+    public void update(float dt, BeamContainer beams, ElectricSnapshot electrics) {
         float safeDt = Math.max(0.0f, dt);
         for (int i = 0; i < count; i++) {
             int linkedBeam = beamIndex[i];
@@ -86,7 +76,7 @@ public final class HydroContainer {
                 continue;
             }
 
-            float raw = clamp(getInput(inputSource[i]), inputInLimit[i], inputOutLimit[i]);
+            float raw = clamp((float) electrics.get(inputSignalId[i]), inputInLimit[i], inputOutLimit[i]);
             float scaledInput = raw * inputFactor[i];
             scaledInput = clamp(scaledInput, inputInLimit[i], inputOutLimit[i]);
             float target = mapInputToRatio(i, scaledInput);
@@ -105,7 +95,6 @@ public final class HydroContainer {
     }
 
     public void reset(BeamContainer beams) {
-        inputs.clear();
         for (int i = 0; i < count; i++) {
             state[i] = centerRatio[i];
             command[i] = centerRatio[i];
@@ -118,7 +107,6 @@ public final class HydroContainer {
 
     public void clear() {
         count = 0;
-        inputs.clear();
     }
 
     private void initializeMapping(int i) {
@@ -149,6 +137,7 @@ public final class HydroContainer {
         }
         int size = beamIndex.length * 2;
         beamIndex = Utility.expand(beamIndex, size);
+        inputSignalId = Utility.expand(inputSignalId, size);
         inputSource = java.util.Arrays.copyOf(inputSource, size);
         inLimit = Utility.expand(inLimit, size);
         outLimit = Utility.expand(outLimit, size);
@@ -171,7 +160,7 @@ public final class HydroContainer {
 
     private static String normalizeInputSource(String source) {
         if (source == null || source.isBlank() || source.equals("steering")) {
-            return "steering_input";
+            return ElectricSignals.STEERING_INPUT;
         }
         return source;
     }

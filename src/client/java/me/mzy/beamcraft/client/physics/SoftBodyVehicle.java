@@ -1,6 +1,8 @@
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
+import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSystem;
 import me.mzy.beamcraft.utility.Utility;
 import net.minecraft.util.math.BlockPos;
@@ -24,6 +26,7 @@ public class SoftBodyVehicle {
     public int globalNodeOffset = 0;
 
     public final NodeContainer nodes = new NodeContainer();
+    public final ElectricBus electrics = new ElectricBus();
     public final BeamContainer normalBeams = new BeamContainer();
     public final HydroContainer hydros = new HydroContainer();
     public final BeamContainer supportBeams = new BeamContainer();
@@ -140,7 +143,7 @@ public class SoftBodyVehicle {
     public void addHydro(PhysicsSpecs.HydroSpec spec) {
         BeamPointer beam = addBeamInternal(spec.beam());
         if (beam != null) {
-            hydros.addHydro(spec, beam.index, normalBeams);
+            hydros.addHydro(spec, beam.index, normalBeams, electrics);
         }
     }
 
@@ -513,6 +516,7 @@ public class SoftBodyVehicle {
      */
     public void reset() {
         triggeredBreakGroups.clear();
+        electrics.resetValues();
         nodes.reset();
         normalBeams.reset();
         hydros.reset(normalBeams);
@@ -532,6 +536,7 @@ public class SoftBodyVehicle {
      */
     public void clear() {
         nodes.clear();
+        electrics.clear();
         normalBeams.clear();
         hydros.clear();
         supportBeams.clear();
@@ -1393,9 +1398,14 @@ public class SoftBodyVehicle {
     }
 
     public void solveInternalForces(float dt, float plasticRelaxation){
+        solveInternalForces(dt, plasticRelaxation, electrics.snapshot());
+    }
+
+    public void solveInternalForces(float dt, float plasticRelaxation, ElectricSnapshot electricSnapshot){
         float invDt = 1.0f / dt;
 
-        hydros.update(dt, normalBeams);
+        hydros.update(dt, normalBeams,
+                electricSnapshot == null ? ElectricSnapshot.EMPTY : electricSnapshot);
 
         for (int i = 0; i < nodes.count; i++) {
             nodes.forceX[i] = 0.0f;

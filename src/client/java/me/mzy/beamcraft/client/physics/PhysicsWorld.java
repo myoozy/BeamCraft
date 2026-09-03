@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.physics;
 
+import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
 import me.mzy.beamcraft.network.VehicleSyncPayload;
@@ -7,7 +8,9 @@ import me.mzy.beamcraft.network.VehicleSyncPayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.stream.IntStream;
 
 /**
  * Core physical world controller for beam-based vehicle simulation
@@ -29,6 +32,8 @@ public class PhysicsWorld {
     public static final float invPhysicsDT = 2000.0f;
     /** Publish one render snapshot per this many 2000 Hz physics substeps. */
     public static final int RENDER_SNAPSHOT_SUBSTEP_INTERVAL = 10;
+    /** Refresh cross-thread electric inputs at 200 Hz of simulated time. */
+    public static final int ELECTRIC_SNAPSHOT_SUBSTEP_INTERVAL = 10;
 
     public final VoxelSnapshot voxelSnapshot = new VoxelSnapshot();
     BlockPos.Mutable mutablePos = new BlockPos.Mutable();
@@ -90,7 +95,9 @@ public class PhysicsWorld {
         int renderSnapshotCount = 1 + Math.ceilDiv(subSteps, RENDER_SNAPSHOT_SUBSTEP_INTERVAL);
         long stepDurationNanos = Math.round(dt * 1_000_000_000.0);
         List<PhysicsRenderTimeline.Writer> renderWriters = new ArrayList<>(activeVehicles.size());
+        List<ElectricSnapshot> electricSnapshots = new ArrayList<>(activeVehicles.size());
         for (SoftBodyVehicle vehicle : activeVehicles) {
+            electricSnapshots.add(vehicle.electrics.snapshot());
             NodeContainer nodes = vehicle.nodes;
             renderWriters.add(vehicle.renderTimeline.beginStep(
                     startedNanos,
@@ -104,7 +111,8 @@ public class PhysicsWorld {
         }
 
         double mcWorldScanMs = (System.nanoTime() - startedNanos) / 1_000_000.0;
-        return new PreparedStep(activeVehicles, renderWriters, dt, subSteps, startedNanos, mcWorldScanMs);
+        return new PreparedStep(activeVehicles, renderWriters, electricSnapshots,
+                dt, subSteps, startedNanos, mcWorldScanMs);
     }
 
     /**
@@ -119,15 +127,21 @@ public class PhysicsWorld {
         float plasticRelaxation = (float) (1.0 - Math.exp(-PLASTIC_RELAXATION_RATE * subDt));
         int broadphaseRate = 10;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
+        List<ElectricSnapshot> electricSnapshots = new ArrayList<>(preparedStep.electricSnapshots());
 
         int nextRenderSnapshotIndex = 1;
         for (int s = 0; s < subSteps; s++) {
+            if (s > 0 && s % ELECTRIC_SNAPSHOT_SUBSTEP_INTERVAL == 0) {
+                for (int i = 0; i < activeVehicles.size(); i++) {
+                    electricSnapshots.set(i, activeVehicles.get(i).electrics.snapshot());
+                }
+            }
 
             long ti1 = System.nanoTime();
 
-            activeVehicles.parallelStream().forEach(vehicle -> {
-                vehicle.solveInternalForces(subDt, plasticRelaxation);
-            });
+            IntStream.range(0, activeVehicles.size()).parallel().forEach(index ->
+                    activeVehicles.get(index).solveInternalForces(
+                            subDt, plasticRelaxation, electricSnapshots.get(index)));
 
             long ti2 = System.nanoTime();
             internalForceMs += (ti2 - ti1) / 1_000_000.0;
@@ -248,11 +262,19 @@ public class PhysicsWorld {
     public record PreparedStep(
             List<SoftBodyVehicle> activeVehicles,
             List<PhysicsRenderTimeline.Writer> renderWriters,
+            List<ElectricSnapshot> electricSnapshots,
             double dt,
             int subSteps,
             long startedNanos,
             double mcWorldScanMs
     ) {
+        public PreparedStep(List<SoftBodyVehicle> activeVehicles,
+                            List<PhysicsRenderTimeline.Writer> renderWriters,
+                            double dt, int subSteps, long startedNanos, double mcWorldScanMs) {
+            this(activeVehicles, renderWriters,
+                    Collections.nCopies(activeVehicles.size(), ElectricSnapshot.EMPTY),
+                    dt, subSteps, startedNanos, mcWorldScanMs);
+        }
     }
 
     public record StepResult(PreparedStep preparedStep, double[] timings, long finishedNanos) {

@@ -3,6 +3,8 @@ package me.mzy.beamcraft.client.physics;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -44,6 +46,7 @@ class JBeamHydroTest {
         assertEquals(1.25f, vehicle.hydros.inRate[0]);
         assertEquals(1.25f, vehicle.hydros.outRate[0]);
         assertEquals("door", vehicle.hydros.inputSource[1]);
+        assertEquals(vehicle.electrics.signalId("door"), vehicle.hydros.inputSignalId[1]);
         assertEquals(-1.0f, vehicle.hydros.inputFactor[1]);
         assertEquals(0.5f, vehicle.hydros.outRate[1]);
         assertEquals(0.4f, vehicle.hydros.inLimit[2]);
@@ -72,14 +75,15 @@ class JBeamHydroTest {
     @Test
     void factorControlsDirectionAndRatesLimitActuatorMotion() {
         BeamContainer beams = new BeamContainer();
+        ElectricBus electrics = new ElectricBus();
         int positiveBeam = beams.addBeam(beamSpec(), 0, 1, 2.0f);
         int negativeBeam = beams.addBeam(beamSpec(), 0, 1, 2.0f);
         HydroContainer hydros = new HydroContainer();
-        hydros.addHydro(hydroSpec(0.5f, 0.25f, 0.5f, 0.1f), positiveBeam, beams);
-        hydros.addHydro(hydroSpec(-0.5f, 0.25f, 0.5f, 0.1f), negativeBeam, beams);
+        hydros.addHydro(hydroSpec(0.5f, 0.25f, 0.5f, 0.1f), positiveBeam, beams, electrics);
+        hydros.addHydro(hydroSpec(-0.5f, 0.25f, 0.5f, 0.1f), negativeBeam, beams, electrics);
 
-        hydros.setInput("steering_input", 1.0f);
-        hydros.update(1.0f, beams);
+        electrics.set("steering_input", 1.0f);
+        hydros.update(1.0f, beams, electrics.snapshot());
 
         assertEquals(1.5f, hydros.command[0]);
         assertEquals(1.5f, hydros.state[0]);
@@ -90,8 +94,8 @@ class JBeamHydroTest {
         assertEquals(2.0f, beams.restLength[positiveBeam],
                 "actuation must not overwrite the beam's neutral/deformed rest length");
 
-        hydros.setInput("steering_input", 0.0f);
-        hydros.update(1.0f, beams);
+        electrics.set("steering_input", 0.0f);
+        hydros.update(1.0f, beams, electrics.snapshot());
         assertEquals(1.4f, hydros.state[0], 1.0e-6f,
                 "autoCenterRate must be used while returning to the configured center");
         assertEquals(0.85f, hydros.state[1], 1.0e-6f);
@@ -100,19 +104,38 @@ class JBeamHydroTest {
     @Test
     void brokenHydroStopsUpdatingAndResetRestoresItsCenter() {
         BeamContainer beams = new BeamContainer();
+        ElectricBus electrics = new ElectricBus();
         int beam = beams.addBeam(beamSpec(), 0, 1, 2.0f);
         HydroContainer hydros = new HydroContainer();
-        hydros.addHydro(hydroSpec(0.5f, 1.0f, 1.0f, 1.0f), beam, beams);
+        hydros.addHydro(hydroSpec(0.5f, 1.0f, 1.0f, 1.0f), beam, beams, electrics);
         beams.broken[beam] = true;
 
-        hydros.setInput("steering_input", 1.0f);
-        hydros.update(1.0f, beams);
+        electrics.set("steering_input", 1.0f);
+        hydros.update(1.0f, beams, electrics.snapshot());
         assertEquals(1.0f, hydros.state[0]);
 
         beams.reset();
         hydros.reset(beams);
         assertFalse(beams.broken[beam]);
         assertEquals(1.0f, beams.actuationRatio[beam]);
+    }
+
+    @Test
+    void hydroUsesTheFrozenSnapshotForOneElectricUpdateBlock() {
+        BeamContainer beams = new BeamContainer();
+        ElectricBus electrics = new ElectricBus();
+        int beam = beams.addBeam(beamSpec(), 0, 1, 2.0f);
+        HydroContainer hydros = new HydroContainer();
+        hydros.addHydro(hydroSpec(0.5f, 1.0f, 1.0f, 1.0f), beam, beams, electrics);
+
+        electrics.set("steering_input", 1.0);
+        ElectricSnapshot preparedSnapshot = electrics.snapshot();
+        electrics.set("steering_input", -1.0);
+
+        hydros.update(1.0f, beams, preparedSnapshot);
+
+        assertEquals(1.5f, hydros.state[0]);
+        assertEquals(-1.0, electrics.get("steering_input"));
     }
 
     private static SoftBodyVehicle vehicleWithThreeNodes() {
