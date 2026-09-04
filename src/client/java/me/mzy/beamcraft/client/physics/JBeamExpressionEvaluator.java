@@ -13,15 +13,15 @@ import java.util.Random;
  * {@code - not #}, comparisons {@code == ~= < > <= >=}, {@code and or}, string
  * concatenation {@code ..}, parentheses, variables ({@code $name}, dotted component access
  * like {@code $components.foo.bar}), function calls, and the {@code case()} selector form.
- * {@code and}/{@code or} return their operands and are lazy (Lua semantics). {@code case()}
- * follows expressionParser.lua exactly: it evaluates all of its arguments eagerly (Lua
- * evaluates function arguments before the call) and dispatches on the first argument —
+ * {@code and}/{@code or} return their operands and are lazy (Lua semantics). The documented
+ * JBeam {@code case()} function evaluates all of its arguments eagerly (Lua evaluates function
+ * arguments before the call) and dispatches on the first argument —
  * a {@code boolean} behaves as a ternary, a {@code number} indexes into the remaining
  * arguments (1 = second parameter), and any other / out-of-range / nil-selected index falls
  * back to the last argument. It is <em>not</em> a key-value switch and is not lazy.
  *
- * <p>Exposed builtins mirror the BeamNG expression context (expressionParser.lua {@code math}
- * table + mathlib.lua helpers): the Lua {@code math} library ({@code abs ceil floor sqrt sin cos
+ * <p>Exposed builtins mirror the documented JBeam expression context: the Lua {@code math}
+ * library ({@code abs ceil floor sqrt sin cos
  * tan exp log log10 acos asin atan atan2 cosh sinh tanh deg rad fmod frexp ldexp modf pow huge
  * max min random randomseed pi ...}) plus {@code round clamp square smoothstep smootherstep
  * smootheststep smoothmin sign case concat print vec3 quat include}. {@code log} accepts an
@@ -598,7 +598,7 @@ public final class JBeamExpressionEvaluator {
             case "smoothstep": a = asNumber(evalSingleArg(name, args, ctx)); return smoothstep(a);
             case "smootherstep": a = asNumber(evalSingleArg(name, args, ctx)); return smootherstep(a);
             case "smootheststep": a = asNumber(evalSingleArg(name, args, ctx)); return smootheststep(a);
-            case "sign": a = asNumber(evalSingleArg(name, args, ctx)); return Math.max(-1.0, Math.min(1.0, (a * 1e200) * 1e200));
+            case "sign": a = asNumber(evalSingleArg(name, args, ctx)); return Math.signum(a);
             case "acos": a = asNumber(evalSingleArg(name, args, ctx)); return Math.acos(a);
             case "asin": a = asNumber(evalSingleArg(name, args, ctx)); return Math.asin(a);
             case "atan": // Lua 5.1 math.atan is single-argument (two-arg lives in atan2)
@@ -731,8 +731,8 @@ public final class JBeamExpressionEvaluator {
     }
 
     /**
-     * {@code case()} per expressionParser.lua:13-27. Lua evaluates every argument before the
-     * call, so all branches are evaluated eagerly (no short-circuit). A boolean selector is a
+     * Implements the documented JBeam {@code case()} behavior. Lua evaluates every argument
+     * before the call, so all branches are evaluated eagerly (no short-circuit). A boolean selector is a
      * ternary (true → 2nd parameter, false → 3rd); a number selector indexes into the remaining
      * parameters ({@code floor} applied); a nil/string/table selector, or an index that is
      * out of range or selects a falsy value, falls back to the last parameter.
@@ -759,29 +759,29 @@ public final class JBeamExpressionEvaluator {
     }
 
     // ------------------------------------------------------------------
-    // mathlib.lua helpers
+    // JBeam-compatible interpolation helpers
     // ------------------------------------------------------------------
 
-    /** mathlib {@code smoothstep(x)}: clamp to [0,1], {@code x*x*(3-2x)}. */
+    /** {@code smoothstep(x)}: clamp to [0,1], then apply {@code x*x*(3-2x)}. */
     static double smoothstep(double x) {
         x = Math.max(0, Math.min(1, x));
         return x * x * (3 - 2 * x);
     }
 
-    /** mathlib {@code smootherstep(x)}: {@code x^3*(x*(x*6-15)+10)} clamped to [0,1]. */
+    /** {@code smootherstep(x)}: {@code x^3*(x*(x*6-15)+10)} clamped to [0,1]. */
     static double smootherstep(double x) {
         double t = x * x * x * (x * (x * 6 - 15) + 10);
         return Math.max(0, Math.min(1, t));
     }
 
-    /** mathlib {@code smootheststep(x)}: clamp to [0,1], {@code (x^2)^2*(35 - x*(x*(x*20-70)+84))}. */
+    /** {@code smootheststep(x)}: clamp to [0,1], {@code (x^2)^2*(35 - x*(x*(x*20-70)+84))}. */
     static double smootheststep(double x) {
         x = Math.max(0, Math.min(1, x));
         double x2 = x * x;
         return x2 * x2 * (35 - x * (x * (x * 20 - 70) + 84));
     }
 
-    /** mathlib {@code smoothmin(a, b, k)} with {@code k} defaulting to 0.1. */
+    /** {@code smoothmin(a, b, k)} with {@code k} defaulting to 0.1. */
     static double smoothmin(double a, double b, double k) {
         double h = Math.max(0, Math.min(1, 0.5 + (b - a) / k));
         return h * a + (1 - h) * (b - h * k * 0.5);

@@ -89,6 +89,9 @@ jar {
 	from("LICENSE") {
 		rename { "${it}_${project.name}"}
 	}
+	from("THIRD_PARTY_NOTICES.md") {
+		rename { "THIRD_PARTY_NOTICES_${project.name}.md" }
+	}
 }
 
 // configure the maven publication

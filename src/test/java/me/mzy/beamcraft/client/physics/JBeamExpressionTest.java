@@ -240,7 +240,7 @@ class JBeamExpressionTest {
     }
 
     // ------------------------------------------------------------------
-    // case() — boolean ternary / numeric index selection (expressionParser.lua:13-27)
+    // Documented case() behavior: boolean ternary / numeric index selection
     // ------------------------------------------------------------------
 
     @Test
@@ -329,7 +329,7 @@ class JBeamExpressionTest {
     }
 
     // ------------------------------------------------------------------
-    // mathlib.lua / expressionParser.lua builtins
+    // Documented JBeam expression builtins
     // ------------------------------------------------------------------
 
     /** Table-driven coverage of every scalar builtin (first return value where Lua returns multiple). */
@@ -387,7 +387,7 @@ class JBeamExpressionTest {
 
     @Test
     void smoothstepFamilyBoundaries() {
-        // per mathlib.lua: smoothstep clamps the input, smootherstep clamps the output,
+        // JBeam compatibility: smoothstep clamps the input, smootherstep clamps the output,
         // smootheststep clamps the input; all three equal 0.5 at x=0.5
         assertFloat(0, eval("$=smoothstep(-1)"), "smoothstep(-1) → 0");
         assertFloat(1, eval("$=smoothstep(2)"), "smoothstep(2) → 1");

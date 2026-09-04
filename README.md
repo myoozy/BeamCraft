@@ -1,6 +1,7 @@
 # BeamCraft
 
-BeamCraft is an experimental Minecraft mod exploring soft-body vehicle simulation inspired by BeamNG-style physics.
+BeamCraft is an experimental Minecraft mod exploring node-and-beam soft-body
+vehicle simulation.
 
 ## Videos and Channels
 
@@ -15,11 +16,15 @@ BeamCraft is an experimental Minecraft mod exploring soft-body vehicle simulatio
 
 ### 1. User-provided vehicle data
 
-BeamCraft does not include or distribute vehicle data. Compatibility testing
-requires user-provided JBeam, DAE, material, and texture data that the user is
-legally entitled to use.
+BeamCraft does not include or distribute vehicle data, and it does not grant
+permission to extract or reuse any third-party content. Compatibility testing
+requires user-provided JBeam, DAE, material, and texture data that the user has
+the legal right to use with BeamCraft.
 
-Do not redistribute third-party game assets with BeamCraft.
+Purchasing or possessing a copy of a game does not necessarily grant the right
+to use its assets in another program. Use only data that you created yourself,
+or data whose license or copyright holder explicitly permits this use. Do not
+circumvent technical protection measures or redistribute third-party content.
 
 ---
 
@@ -68,11 +73,10 @@ folder inside a vehicle container, or a container literally named `common` or
 `common.zip` placed directly under an asset root — so no extraction or special
 placement is needed.
 
-BeamCraft does not provide `common` or any other game asset. If you already
-own the data, load it in place: add an asset root that points at a folder you
-own which contains such a container, or point one directly at the `common`
-container itself. Keep game assets for your own use — do not redistribute or
-republish them.
+BeamCraft does not provide `common` or any other third-party game asset. If you
+have permission to use a compatible data set, add an asset root that points at
+its containing folder, or point one directly at its `common` container. This
+technical capability does not grant or expand any license to the loaded data.
 
 ---
 
@@ -187,12 +191,16 @@ Other versions not tested.
 
 ## Asset Notice
 
-This project does not include or distribute any assets from BeamNG.drive.
+This project does not include or distribute any assets from BeamNG.drive®.
 
-BeamCraft is an independent interoperability experiment. Users are responsible
-for ensuring that they have the right to use any data they load.
+BeamCraft is an independent, unofficial Minecraft mod and interoperability
+experiment. It is not approved by, endorsed by, associated with, supported by,
+or connected to Mojang, Microsoft, or BeamNG GmbH. Users are responsible for
+ensuring that they have the right to use any data they load.
 
-BeamNG.drive is a product of BeamNG GmbH. This project is not affiliated with or endorsed by BeamNG GmbH.
+Minecraft is a trademark of the Microsoft group of companies. BeamNG.drive® is
+a registered trademark of BeamNG GmbH. All other trademarks belong to their
+respective owners.
 
 ---
 
@@ -202,4 +210,6 @@ Copyright (C) 2026 M1AO.
 
 BeamCraft's original code is licensed under the [MIT License](LICENSE).
 
-Portions derived from the Fabric Example Mod remain available under CC0. Third-party components retain their respective licenses.
+Portions derived from the Fabric Example Mod remain available under CC0 1.0.
+Bundled third-party components retain their respective licenses; see
+[Third-Party Notices](THIRD_PARTY_NOTICES.md) for copyright and license details.
