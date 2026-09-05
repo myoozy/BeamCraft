@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.utility.Utility;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -60,6 +61,11 @@ public class NodeContainer {
     public int[] sleepRate = new int[INIT_NODE_CAP];
 
     public int[] degree = new int[INIT_NODE_CAP];
+
+    // Physics-thread scratch used only by getMedianPosition(). Keeping it per
+    // vehicle avoids allocations and avoids sharing mutable sort storage across
+    // vehicles processed in parallel.
+    private float[] medianScratch = new float[INIT_NODE_CAP];
 
     private void ensureNodeCapacity() {
         if (count >= posX.length) {
@@ -272,5 +278,44 @@ public class NodeContainer {
             out[1] = 0.0f;
             out[2] = 0.0f;
         }
+    }
+
+    /**
+     * Returns the coordinate-wise median of the current local node positions.
+     * This is a robust origin for floating-point recentering: a minority of
+     * detached nodes can travel arbitrarily far without dragging the vehicle
+     * entity origin away from the main body. It is intentionally not a physical
+     * center of mass and must not be used by force or inertia calculations.
+     */
+    public void getMedianPosition(float[] out) {
+        if (medianScratch.length < count) {
+            medianScratch = new float[Math.max(count, medianScratch.length * 2)];
+        }
+        out[0] = medianOfFinite(posX, count, medianScratch);
+        out[1] = medianOfFinite(posY, count, medianScratch);
+        out[2] = medianOfFinite(posZ, count, medianScratch);
+    }
+
+    /** Computes a median while ignoring NaN/infinite values, using caller-owned scratch storage. */
+    public static float medianOfFinite(float[] values, int count, float[] scratch) {
+        if (count < 0 || count > values.length || scratch.length < count) {
+            throw new IllegalArgumentException("invalid median input or undersized scratch buffer");
+        }
+        int finiteCount = 0;
+        for (int i = 0; i < count; i++) {
+            float value = values[i];
+            if (Float.isFinite(value)) {
+                scratch[finiteCount++] = value;
+            }
+        }
+        if (finiteCount == 0) {
+            return 0.0f;
+        }
+        Arrays.sort(scratch, 0, finiteCount);
+        int middle = finiteCount >>> 1;
+        if ((finiteCount & 1) != 0) {
+            return scratch[middle];
+        }
+        return (scratch[middle - 1] + scratch[middle]) * 0.5f;
     }
 }

@@ -201,7 +201,7 @@ public class PhysicsWorld {
 
         long t3 = System.nanoTime();
         activeVehicles.parallelStream().forEach(vehicle -> {
-            vehicle.updateLocalCOMCache();
+            vehicle.updateLocalOriginCache();
             vehicle.updateBeamPrecompression(dt);
         });
         long t4 = System.nanoTime();

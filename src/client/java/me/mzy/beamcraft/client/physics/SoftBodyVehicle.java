@@ -24,7 +24,7 @@ public class SoftBodyVehicle {
     private final int parkingBrakeInputSignalId;
 
     public final PhysicsVehicleEntity parentEntity;
-    public final float[] localCOM = new float[3];
+    public final float[] localOriginShift = new float[3];
     public int vehicleId = -1;
     public int globalNodeOffset = 0;
 
@@ -83,20 +83,20 @@ public class SoftBodyVehicle {
     /*
     Must call updateEntityLocation after
      */
-    public void updateLocalCOMCache() {
-        nodes.getCenterOfMass(localCOM);
-        nodes.moveNodes(-localCOM[0], -localCOM[1], -localCOM[2]);
+    public void updateLocalOriginCache() {
+        nodes.getMedianPosition(localOriginShift);
+        nodes.moveNodes(-localOriginShift[0], -localOriginShift[1], -localOriginShift[2]);
     }
 
     /*
-    Must call updateLocalCOMCache before
+    Must call updateLocalOriginCache before
      */
     public void updateEntityLocation() {
         this.parentEntity.setVelocity(0, 0, 0);
 
-        double newEntityX = entityX + localCOM[0];
-        double newEntityY = entityY + localCOM[1];
-        double newEntityZ = entityZ + localCOM[2];
+        double newEntityX = entityX + localOriginShift[0];
+        double newEntityY = entityY + localOriginShift[1];
+        double newEntityZ = entityZ + localOriginShift[2];
         this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
     }
 

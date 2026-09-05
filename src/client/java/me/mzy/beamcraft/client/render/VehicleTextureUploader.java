@@ -51,8 +51,9 @@ import java.util.Set;
  *
  * <p><b>Failure fallback</b>: a missing/failed/unsupported texture never takes
  * a vehicle down. {@link #getOrUpload} returns the single shared white 1×1
- * texture ({@link #getWhiteTexture}) and logs once per resource (rate-limited,
- * not per frame).
+ * texture ({@link #getWhiteTexture}). Failures are negatively cached for the
+ * resource's namespace lifetime, preventing repeated disk reads and decodes,
+ * and are logged once per resource.
  */
 public final class VehicleTextureUploader {
 
@@ -101,6 +102,10 @@ public final class VehicleTextureUploader {
     private final Map<String, Set<TextureResource>> byNamespace = new HashMap<>();
     private final Map<ComposedKey, Entry> composedTextures = new HashMap<>();
     private final Map<String, Set<ComposedKey>> byComposedNamespace = new HashMap<>();
+    private final Set<TextureResource> failedTextures = new HashSet<>();
+    private final Map<String, Set<TextureResource>> failedByNamespace = new HashMap<>();
+    private final Set<ComposedKey> failedComposedTextures = new HashSet<>();
+    private final Map<String, Set<ComposedKey>> failedComposedByNamespace = new HashMap<>();
     private final Set<String> warnedResources = new HashSet<>();
     private final Set<String> warnedComposedResources = new HashSet<>();
     private int whiteTextureId = -1;
@@ -144,6 +149,9 @@ public final class VehicleTextureUploader {
         if (entry != null) {
             return entry.textureId;
         }
+        if (failedTextures.contains(resource)) {
+            return getWhiteTexture();
+        }
         try {
             DecodedImage image = MaterialLibrary.acquireDecodedTexture(resource, namespace);
             int textureId;
@@ -159,6 +167,7 @@ public final class VehicleTextureUploader {
             }
             return textureId;
         } catch (Exception e) {
+            rememberTextureFailure(resource, namespace);
             warnOnce(resource, e);
             return getWhiteTexture();
         }
@@ -180,8 +189,8 @@ public final class VehicleTextureUploader {
      *
      * <p><b>Failure fallback</b>: a missing/failed/mismatched composition never
      * takes a vehicle down. {@link #getOrUploadComposed} falls back to the
-     * diffuse texture's baked alpha and logs once per pair (rate-limited, not
-     * per frame). The shared white texture remains the final fallback only when
+     * diffuse texture's baked alpha and negatively caches the failed pair. The
+     * shared white texture remains the final fallback only when
      * the diffuse upload itself also fails.
      *
      * @param diffuse   base-colour texture handle (must be non-null)
@@ -198,6 +207,9 @@ public final class VehicleTextureUploader {
         Entry entry = composedTextures.get(key);
         if (entry != null) {
             return entry.textureId;
+        }
+        if (failedComposedTextures.contains(key)) {
+            return getOrUpload(diffuse, namespace);
         }
         try {
             DecodedImage image = MaterialLibrary.composeDiffuseAndOpacity(diffuse, opacity, namespace);
@@ -218,6 +230,7 @@ public final class VehicleTextureUploader {
             }
             return textureId;
         } catch (Exception e) {
+            rememberComposedFailure(key, namespace);
             warnOnceComposed(key, e);
             return getOrUpload(diffuse, namespace);
         }
@@ -282,6 +295,14 @@ public final class VehicleTextureUploader {
                 }
             }
         }
+        Set<TextureResource> failedOwned = failedByNamespace.remove(namespace);
+        if (failedOwned != null) {
+            failedTextures.removeAll(failedOwned);
+        }
+        Set<ComposedKey> failedComposedOwned = failedComposedByNamespace.remove(namespace);
+        if (failedComposedOwned != null) {
+            failedComposedTextures.removeAll(failedComposedOwned);
+        }
     }
 
     /** Deletes all cached GL textures, including the white fallback. Shutdown only. */
@@ -297,6 +318,10 @@ public final class VehicleTextureUploader {
         }
         composedTextures.clear();
         byComposedNamespace.clear();
+        failedTextures.clear();
+        failedByNamespace.clear();
+        failedComposedTextures.clear();
+        failedComposedByNamespace.clear();
         if (whiteTextureId != -1) {
             GlStateManager._deleteTexture(whiteTextureId);
             whiteTextureId = -1;
@@ -400,6 +425,24 @@ public final class VehicleTextureUploader {
             BeamCraft.LOGGER.warn(
                     "BeamCraft: cannot upload texture {} ({}); rendering white fallback",
                     resource.describe(), e.getMessage());
+        }
+    }
+
+    private void rememberTextureFailure(TextureResource resource, String namespace) {
+        failedTextures.add(resource);
+        String ownership = MaterialLibrary.resolveTextureOwnership(resource, namespace);
+        if (ownership != null) {
+            failedByNamespace.computeIfAbsent(ownership, ignored -> new HashSet<>()).add(resource);
+        }
+    }
+
+    private void rememberComposedFailure(ComposedKey key, String namespace) {
+        failedComposedTextures.add(key);
+        String diffuseOwnership = MaterialLibrary.resolveTextureOwnership(key.diffuse, namespace);
+        String opacityOwnership = MaterialLibrary.resolveTextureOwnership(key.opacity, namespace);
+        String ownership = diffuseOwnership != null ? diffuseOwnership : opacityOwnership;
+        if (ownership != null) {
+            failedComposedByNamespace.computeIfAbsent(ownership, ignored -> new HashSet<>()).add(key);
         }
     }
 
