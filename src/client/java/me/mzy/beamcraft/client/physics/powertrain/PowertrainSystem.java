@@ -171,8 +171,15 @@ public final class PowertrainSystem {
             float actualThrottle = Math.max(throttle, idleOutput);
             engines.playerThrottle[unit] = throttle;
             engines.actualThrottle[unit] = actualThrottle;
+            float availableCombustionTorque = Math.max(0.0f, interpolateTorque(unit, rpm));
             float combustionTorque = combustionEnabled
-                    ? actualThrottle * interpolateTorque(unit, rpm) : 0.0f;
+                    ? actualThrottle * availableCombustionTorque : 0.0f;
+            float normalizedCombustionOutput = availableCombustionTorque > 1.0e-6f
+                    ? Math.clamp(combustionTorque / availableCombustionTorque, 0.0f, 1.0f)
+                    : 0.0f;
+            engines.availableCombustionTorque[unit] = availableCombustionTorque;
+            engines.combustionTorque[unit] = combustionTorque;
+            engines.normalizedCombustionOutput[unit] = normalizedCombustionOutput;
 
             float starterTorque = engines.starterActive[unit] && engines.engineAV[unit] < engines.starterMaxAV[unit]
                     ? engines.starterTorque[unit] : 0.0f;
@@ -432,6 +439,9 @@ public final class PowertrainSystem {
             engines.starterActive[i] = false;
             engines.playerThrottle[i] = 0.0f;
             engines.actualThrottle[i] = engines.idleLossThrottle[i];
+            engines.availableCombustionTorque[i] = 0.0f;
+            engines.combustionTorque[i] = 0.0f;
+            engines.normalizedCombustionOutput[i] = 0.0f;
             engines.limiterCutRemaining[i] = 0.0f;
             gearboxes.currentGearIndex[i] = gearboxes.initialGearIndex[i];
             gearboxes.pendingGearIndex[i] = -1;

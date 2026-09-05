@@ -234,7 +234,12 @@ class PowertrainGearboxLimiterTest {
         for (int step = 0; step < 4000; step++) {
             vehicle.powertrain.solve(DT);
             maxRpm = Math.max(maxRpm, vehicle.powertrain.debugEngineRPM());
-            if (vehicle.powertrain.debugLimiterActive()) sawCut = true;
+            if (vehicle.powertrain.debugLimiterActive()) {
+                sawCut = true;
+                assertEquals(0.0f,
+                        vehicle.powertrain.engines.normalizedCombustionOutput[0], 1.0e-6f,
+                        "spark/fuel cut must make realized combustion output zero even at full throttle");
+            }
         }
         assertTrue(sawCut, "the rev limiter must cut combustion");
         assertTrue(maxRpm < 1800f, "RPM must stay bounded by the limiter, got max " + maxRpm);

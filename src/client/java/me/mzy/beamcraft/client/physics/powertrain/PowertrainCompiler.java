@@ -325,6 +325,9 @@ final class PowertrainCompiler {
             engines.maxIdleThrottle[i] = Math.clamp((float) engine.maxIdleThrottle(), 0.0f, 1.0f);
             engines.playerThrottle[i] = 0.0f;
             engines.actualThrottle[i] = engines.idleLossThrottle[i];
+            engines.availableCombustionTorque[i] = 0.0f;
+            engines.combustionTorque[i] = 0.0f;
+            engines.normalizedCombustionOutput[i] = 0.0f;
             engines.revLimiterRPM[i] = Math.max(0.0f, (float) engine.revLimiterRPM());
             engines.revLimiterType[i] = "soft".equalsIgnoreCase(engine.revLimiterType())
                     ? CombustionEngineContainer.LIMITER_TYPE_SOFT

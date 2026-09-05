@@ -178,6 +178,9 @@ class PowertrainSolveTest {
 
         assertTrue(vehicle.powertrain.debugCombustionTorque() > 0f,
                 "full throttle must produce positive indicated combustion torque");
+        assertEquals(vehicle.powertrain.engines.actualThrottle[0],
+                vehicle.powertrain.engines.normalizedCombustionOutput[0], 1.0e-6f,
+                "with the current linear torque map, normalized output equals actual throttle");
         assertTrue(vehicle.powertrain.debugClutchTorque() > 0f,
                 "a slipping clutch must transmit drive torque to the wheels");
         assertTrue(peakRpm > IDLE_RPM + 200f,

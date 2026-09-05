@@ -44,6 +44,11 @@ public final class CombustionEngineContainer {
     /** Player pedal command and physical throttle opening are deliberately separate. */
     public float[] playerThrottle = new float[0];
     public float[] actualThrottle = new float[0];
+    /** Torque available at the current RPM before throttle/cuts, and realized combustion output. */
+    public float[] availableCombustionTorque = new float[0];
+    public float[] combustionTorque = new float[0];
+    /** Realized combustion torque divided by available combustion torque, in [0, 1]. */
+    public float[] normalizedCombustionOutput = new float[0];
 
     // Rev limiter configuration.
     public float[] revLimiterRPM = new float[0];
@@ -80,6 +85,9 @@ public final class CombustionEngineContainer {
         maxIdleThrottle = new float[units];
         playerThrottle = new float[units];
         actualThrottle = new float[units];
+        availableCombustionTorque = new float[units];
+        combustionTorque = new float[units];
+        normalizedCombustionOutput = new float[units];
         revLimiterRPM = new float[units];
         revLimiterType = new byte[units];
         revLimiterCutTime = new float[units];
