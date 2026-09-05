@@ -8,8 +8,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.texture.DecodedImage;
 import me.mzy.beamcraft.texture.DecodedTextureCache;
-import me.mzy.beamcraft.texture.DdsDecoder;
 import me.mzy.beamcraft.texture.TextureCompositor;
+import me.mzy.beamcraft.texture.TextureDecoder;
 import me.mzy.beamcraft.texture.TextureOwnership;
 
 import java.io.File;
@@ -357,8 +357,8 @@ public final class MaterialLibrary {
     // ------------------------------------------------------------------
 
     /**
-     * Decodes a resolved texture to an RGBA8 image via the backend-neutral DDS
-     * decoder and retains it in the decoded-texture cache. The returned image
+     * Decodes a resolved DDS, PNG, or JPEG texture to a backend-neutral RGBA8
+     * image and retains it in the decoded-texture cache. The returned image
      * is pinned; call {@link #releaseDecodedTexture} when done. The image is
      * owned by the cache (or by a later renderer uploader) and must not be
      * mutated.
@@ -377,7 +377,7 @@ public final class MaterialLibrary {
         String ns = namespace == null ? null : namespace.toLowerCase(Locale.ROOT);
         String ownership = TextureOwnership.resolve(resource.sourceId(), COMMON_SOURCE_IDS, ns,
                 ns == null ? null : NAMESPACE_SOURCE_IDS.get(ns));
-        return DECODED_TEXTURES.acquire(resource, ownership, key -> DdsDecoder.decode(LOCATOR.readBytes(key)));
+        return DECODED_TEXTURES.acquire(resource, ownership, key -> TextureDecoder.decode(LOCATOR.readBytes(key)));
     }
 
     /**
