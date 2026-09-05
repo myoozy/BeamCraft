@@ -14,11 +14,18 @@ public class TorsionBarContainer {
 
     public float[] restAngle = new float[INIT_TORSION_CAP]; // 静止角度
     public float[] baseRestAngle = new float[INIT_TORSION_CAP];
+    /** Runtime actuator offset from the deformable neutral angle, in radians. */
+    public float[] actuationAngle = new float[INIT_TORSION_CAP];
     public float[] spring = new float[INIT_TORSION_CAP];
     public float[] damp = new float[INIT_TORSION_CAP];
+    public float[] spring2 = new float[INIT_TORSION_CAP];
+    public float[] damp2 = new float[INIT_TORSION_CAP];
     public float[] deform = new float[INIT_TORSION_CAP];
     public float[] baseDeform = new float[INIT_TORSION_CAP];
     public float[] strength = new float[INIT_TORSION_CAP];
+    public float[] precompressionAngle = new float[INIT_TORSION_CAP];
+    public float[] precompressionState = new float[INIT_TORSION_CAP];
+    public float[] precompressionTime = new float[INIT_TORSION_CAP];
     public boolean[] broken = new boolean[INIT_TORSION_CAP];
 
     private void ensureCapacity() {
@@ -30,17 +37,23 @@ public class TorsionBarContainer {
             node4 = Utility.expand(node4, newSize);
             restAngle = Utility.expand(restAngle, newSize);
             baseRestAngle =  Utility.expand(baseRestAngle, newSize);
+            actuationAngle = Utility.expand(actuationAngle, newSize);
             spring =  Utility.expand(spring, newSize);
             damp = Utility.expand(damp, newSize);
+            spring2 = Utility.expand(spring2, newSize);
+            damp2 = Utility.expand(damp2, newSize);
             deform = Utility.expand(deform, newSize);
             baseDeform = Utility.expand(baseDeform, newSize);
             strength = Utility.expand(strength, newSize);
+            precompressionAngle = Utility.expand(precompressionAngle, newSize);
+            precompressionState = Utility.expand(precompressionState, newSize);
+            precompressionTime = Utility.expand(precompressionTime, newSize);
             broken = Utility.expand(broken, newSize);
             System.out.println("⚠️ [TorsionBarContainer] Resized to: " + newSize);
         }
     }
 
-    public void addTorsionBar(PhysicsSpecs.TorsionBarSpec spec, int index1, int index2, int index3, int index4, NodeContainer nodes) {
+    public int addTorsionBar(PhysicsSpecs.TorsionBarSpec spec, int index1, int index2, int index3, int index4, NodeContainer nodes) {
         ensureCapacity();
 
         int n1 = index1; int n2 = index2;
@@ -50,8 +63,13 @@ public class TorsionBarContainer {
         node3[count] = n3; node4[count] = n4;
 
         spring[count] = spec.spring(); damp[count] = spec.damp();
+        spring2[count] = spec.spring2(); damp2[count] = spec.damp2();
         deform[count] = spec.deform(); baseDeform[count] = spec.deform();
         strength[count] = spec.strength();
+        precompressionAngle[count] = spec.precompressionAngle();
+        precompressionTime[count] = spec.precompressionTime();
+        precompressionState[count] = spec.precompressionTime() > 0.0f
+                ? 0.0f : spec.precompressionAngle();
         broken[count] = false;
 
         // 获取初始坐标
@@ -87,9 +105,10 @@ public class TorsionBarContainer {
 
         restAngle[count] = (float) angle;
         baseRestAngle[count] = restAngle[count];
+        actuationAngle[count] = 0.0f;
         if (Double.isNaN(angle)) broken[count] = true;
 
-        count++;
+        return count++;
     }
 
     public void clear() {
@@ -101,6 +120,9 @@ public class TorsionBarContainer {
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             restAngle[i] = baseRestAngle[i];
+            actuationAngle[i] = 0.0f;
+            precompressionState[i] = precompressionTime[i] > 0.0f
+                    ? 0.0f : precompressionAngle[i];
             deform[i] = baseDeform[i];
         }
     }

@@ -151,6 +151,10 @@ public class JBeamAssembler {
                 if (entry.json.has("torsionbars")) {
                     JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle, entry);
                 }
+                if (entry.json.has("torsionHydros")) {
+                    JBeamParser.parseTorsionHydros(
+                            entry.json.getAsJsonArray("torsionHydros"), vehicle, entry);
+                }
                 if (entry.json.has("rails")) {
                     JBeamParser.parseRails(entry.json.getAsJsonObject("rails"), vehicleRailMap);
                 }

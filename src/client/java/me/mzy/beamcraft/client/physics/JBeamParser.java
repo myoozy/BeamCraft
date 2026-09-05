@@ -631,42 +631,13 @@ public class JBeamParser {
 
     static PhysicsSpecs.HydroSpec buildHydroSpec(PhysicsSpecs.BeamSpec beam, JsonObject properties,
                                                   Map<String, Double> variables) {
-        float inLimit = getFloatSafe(properties, "inLimit", 1.0f, variables);
-        float outLimit = getFloatSafe(properties, "outLimit", 2.0f, variables);
-        float inputFactor = getFloatSafe(properties, "inputFactor", 1.0f, variables);
-
-        if (properties.has("factor") && !properties.get("factor").isJsonNull()) {
-            float factor = getFloatSafe(properties, "factor", Float.NaN, variables);
-            if (Float.isFinite(factor)) {
-                float extent = Math.abs(factor);
-                inLimit = 1.0f - extent;
-                outLimit = 1.0f + extent;
-                inputFactor = factor < 0.0f ? -1.0f : 1.0f;
-            }
-        }
-
-        float inRate = Math.max(0.0f, getFloatSafe(properties, "inRate", 2.0f, variables));
-        float outRate = Math.max(0.0f, getFloatSafe(properties, "outRate", inRate, variables));
-        float autoCenterRate = Math.max(0.0f,
-                getFloatSafe(properties, "autoCenterRate", inRate, variables));
-        Float steeringWheelLock = properties.has("steeringWheelLock")
-                && !properties.get("steeringWheelLock").isJsonNull()
-                ? getFloatSafe(properties, "steeringWheelLock", 0.0f, variables)
-                : null;
+        HydroControlValues control = buildHydroControl(properties, variables, 1.0f, 1.0f, 2.0f);
 
         return new PhysicsSpecs.HydroSpec(
                 beam,
-                getStringSafe(properties, "inputSource", "steering_input"),
-                inLimit,
-                outLimit,
-                inputFactor,
-                getFloatSafe(properties, "inputCenter", 0.0f, variables),
-                getFloatSafe(properties, "inputInLimit", -1.0f, variables),
-                getFloatSafe(properties, "inputOutLimit", 1.0f, variables),
-                inRate,
-                outRate,
-                autoCenterRate,
-                steeringWheelLock
+                control.inputSource, control.inLimit, control.outLimit, control.inputFactor,
+                control.inputCenter, control.inputInLimit, control.inputOutLimit,
+                control.inRate, control.outRate, control.autoCenterRate, control.steeringWheelLock
         );
     }
 
@@ -716,18 +687,22 @@ public class JBeamParser {
 
     // --- 4. Torsionbar Parsing ---
     public static void parseTorsionbars(JsonArray torsionbars, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
-        boolean isHeader = true;
-        float currentSpring = 0.0f, currentDamp = 0.0f;
-        float currentDeform = PhysicsWorld.KINDA_BIG_NUMBER;
-        float currentStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        parseTorsionRows(torsionbars, vehicle, entry, false);
+    }
 
-        for (JsonElement element : torsionbars) {
+    public static void parseTorsionHydros(JsonArray torsionHydros, SoftBodyVehicle vehicle,
+                                           JBeamAssembler.PartEntry entry) {
+        parseTorsionRows(torsionHydros, vehicle, entry, true);
+    }
+
+    private static void parseTorsionRows(JsonArray rows, SoftBodyVehicle vehicle,
+                                         JBeamAssembler.PartEntry entry, boolean hydroSection) {
+        boolean isHeader = true;
+        JsonObject currentProperties = new JsonObject();
+
+        for (JsonElement element : rows) {
             if (element.isJsonObject()) {
-                JsonObject modifier = element.getAsJsonObject();
-                currentSpring = getFloatSafe(modifier, "spring", currentSpring, entry.variables);
-                currentDamp = getFloatSafe(modifier, "damp", currentDamp, entry.variables);
-                currentDeform = getFloatSafe(modifier, "deform", currentDeform, entry.variables);
-                currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
+                mergeJsonObjectsRecursive(currentProperties, element.getAsJsonObject());
                 continue;
             }
 
@@ -735,17 +710,85 @@ public class JBeamParser {
                 JsonArray row = element.getAsJsonArray();
                 if (isHeader) { isHeader = false; continue; }
                 if (row.size() >= 4) {
-                    vehicle.addTorsionBar(new PhysicsSpecs.TorsionBarSpec(
+                    JsonObject properties = copyJsonObject(currentProperties);
+                    if (row.get(row.size() - 1).isJsonObject()) {
+                        mergeJsonObjectsRecursive(properties, row.get(row.size() - 1).getAsJsonObject());
+                    }
+                    float spring = getFloatSafe(properties, "spring", 0.0f, entry.variables);
+                    float damp = getFloatSafe(properties, "damp", 0.0f, entry.variables);
+                    PhysicsSpecs.TorsionBarSpec torsionBar = new PhysicsSpecs.TorsionBarSpec(
                             row.get(0).getAsString(),
                             row.get(1).getAsString(),
                             row.get(2).getAsString(),
                             row.get(3).getAsString(),
-                            currentSpring, currentDamp, currentDeform, currentStrength
-                    ));
+                            spring,
+                            damp,
+                            getFloatSafe(properties, "spring2", spring, entry.variables),
+                            getFloatSafe(properties, "damp2", damp, entry.variables),
+                            getFloatSafe(properties, "deform", PhysicsWorld.KINDA_BIG_NUMBER, entry.variables),
+                            getFloatSafe(properties, "strength", PhysicsWorld.KINDA_BIG_NUMBER, entry.variables),
+                            getFloatSafe(properties, "precompressionAngle", 0.0f, entry.variables),
+                            Math.max(0.0f, getFloatSafe(
+                                    properties, "precompressionTime", 0.0f, entry.variables))
+                    );
+                    if (hydroSection) {
+                        HydroControlValues control = buildHydroControl(
+                                properties, entry.variables, 0.0f, -1.0f, 1.0f);
+                        vehicle.addTorsionHydro(new PhysicsSpecs.TorsionHydroSpec(
+                                torsionBar,
+                                control.inputSource, control.inLimit, control.outLimit, control.inputFactor,
+                                control.inputCenter, control.inputInLimit, control.inputOutLimit,
+                                control.inRate, control.outRate, control.autoCenterRate,
+                                control.steeringWheelLock
+                        ));
+                    } else {
+                        vehicle.addTorsionBar(torsionBar);
+                    }
                 }
             }
         }
     }
+
+    private static HydroControlValues buildHydroControl(JsonObject properties, Map<String, Double> variables,
+                                                         float neutralOutput, float defaultInLimit,
+                                                         float defaultOutLimit) {
+        float inLimit = getFloatSafe(properties, "inLimit", defaultInLimit, variables);
+        float outLimit = getFloatSafe(properties, "outLimit", defaultOutLimit, variables);
+        float inputFactor = getFloatSafe(properties, "inputFactor", 1.0f, variables);
+
+        if (properties.has("factor") && !properties.get("factor").isJsonNull()) {
+            float factor = getFloatSafe(properties, "factor", Float.NaN, variables);
+            if (Float.isFinite(factor)) {
+                float extent = Math.abs(factor);
+                inLimit = neutralOutput - extent;
+                outLimit = neutralOutput + extent;
+                inputFactor = factor < 0.0f ? -1.0f : 1.0f;
+            }
+        }
+
+        float inRate = Math.max(0.0f, getFloatSafe(properties, "inRate", 2.0f, variables));
+        float outRate = Math.max(0.0f, getFloatSafe(properties, "outRate", inRate, variables));
+        float autoCenterRate = Math.max(0.0f,
+                getFloatSafe(properties, "autoCenterRate", inRate, variables));
+        Float steeringWheelLock = properties.has("steeringWheelLock")
+                && !properties.get("steeringWheelLock").isJsonNull()
+                ? getFloatSafe(properties, "steeringWheelLock", 0.0f, variables)
+                : null;
+        return new HydroControlValues(
+                getStringSafe(properties, "inputSource", "steering_input"),
+                inLimit, outLimit, inputFactor,
+                getFloatSafe(properties, "inputCenter", 0.0f, variables),
+                getFloatSafe(properties, "inputInLimit", -1.0f, variables),
+                getFloatSafe(properties, "inputOutLimit", 1.0f, variables),
+                inRate, outRate, autoCenterRate, steeringWheelLock
+        );
+    }
+
+    private record HydroControlValues(
+            String inputSource, float inLimit, float outLimit, float inputFactor,
+            float inputCenter, float inputInLimit, float inputOutLimit,
+            float inRate, float outRate, float autoCenterRate, Float steeringWheelLock
+    ) {}
 
     // --- 5. Rail Parsing ---
     public static void parseRails(JsonObject railsObj, Map<String, String[]> globalRailMap) {

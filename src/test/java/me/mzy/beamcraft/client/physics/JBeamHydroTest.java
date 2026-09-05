@@ -39,23 +39,24 @@ class JBeamHydroTest {
         assertEquals(3, vehicle.hydros.count);
         assertEquals(8001000.0f, vehicle.normalBeams.spring[0]);
         assertEquals(50.0f, vehicle.normalBeams.damp[1]);
-        assertEquals(0.86f, vehicle.hydros.inLimit[0], 1.0e-6f);
-        assertEquals(1.14f, vehicle.hydros.outLimit[0], 1.0e-6f);
-        assertEquals(1.0f, vehicle.hydros.inputFactor[0]);
-        assertEquals(510.0f, vehicle.hydros.steeringWheelLock[0]);
-        assertEquals(1.25f, vehicle.hydros.inRate[0]);
-        assertEquals(1.25f, vehicle.hydros.outRate[0]);
-        assertEquals("door", vehicle.hydros.inputSource[1]);
-        assertEquals(vehicle.electrics.signalId("door"), vehicle.hydros.inputSignalId[1]);
-        assertEquals(-1.0f, vehicle.hydros.inputFactor[1]);
-        assertEquals(0.5f, vehicle.hydros.outRate[1]);
-        assertEquals(0.4f, vehicle.hydros.inLimit[2]);
-        assertEquals(1.8f, vehicle.hydros.outLimit[2]);
-        assertEquals(0.5f, vehicle.hydros.inputFactor[2]);
-        assertEquals(0.05f, vehicle.hydros.inputCenter[2]);
-        assertEquals(-0.4f, vehicle.hydros.inputInLimit[2]);
-        assertEquals(0.45f, vehicle.hydros.inputOutLimit[2]);
-        assertEquals(0.3f, vehicle.hydros.autoCenterRate[2]);
+        HydroActuatorController controls = vehicle.hydros.controls;
+        assertEquals(0.86f, controls.inLimit[0], 1.0e-6f);
+        assertEquals(1.14f, controls.outLimit[0], 1.0e-6f);
+        assertEquals(1.0f, controls.inputFactor[0]);
+        assertEquals(510.0f, controls.steeringWheelLock[0]);
+        assertEquals(1.25f, controls.inRate[0]);
+        assertEquals(1.25f, controls.outRate[0]);
+        assertEquals("door", controls.inputSource[1]);
+        assertEquals(vehicle.electrics.signalId("door"), controls.inputSignalId[1]);
+        assertEquals(-1.0f, controls.inputFactor[1]);
+        assertEquals(0.5f, controls.outRate[1]);
+        assertEquals(0.4f, controls.inLimit[2]);
+        assertEquals(1.8f, controls.outLimit[2]);
+        assertEquals(0.5f, controls.inputFactor[2]);
+        assertEquals(0.05f, controls.inputCenter[2]);
+        assertEquals(-0.4f, controls.inputInLimit[2]);
+        assertEquals(0.45f, controls.inputOutLimit[2]);
+        assertEquals(0.3f, controls.autoCenterRate[2]);
     }
 
     @Test
@@ -85,10 +86,10 @@ class JBeamHydroTest {
         electrics.set("steering_input", 1.0f);
         hydros.update(1.0f, beams, electrics.snapshot());
 
-        assertEquals(1.5f, hydros.command[0]);
-        assertEquals(1.5f, hydros.state[0]);
-        assertEquals(0.5f, hydros.command[1]);
-        assertEquals(0.75f, hydros.state[1]);
+        assertEquals(1.5f, hydros.controls.command[0]);
+        assertEquals(1.5f, hydros.controls.state[0]);
+        assertEquals(0.5f, hydros.controls.command[1]);
+        assertEquals(0.75f, hydros.controls.state[1]);
         assertEquals(3.0f, beams.effectiveRestLength(positiveBeam));
         assertEquals(1.5f, beams.effectiveRestLength(negativeBeam));
         assertEquals(2.0f, beams.restLength[positiveBeam],
@@ -96,9 +97,9 @@ class JBeamHydroTest {
 
         electrics.set("steering_input", 0.0f);
         hydros.update(1.0f, beams, electrics.snapshot());
-        assertEquals(1.4f, hydros.state[0], 1.0e-6f,
+        assertEquals(1.4f, hydros.controls.state[0], 1.0e-6f,
                 "autoCenterRate must be used while returning to the configured center");
-        assertEquals(0.85f, hydros.state[1], 1.0e-6f);
+        assertEquals(0.85f, hydros.controls.state[1], 1.0e-6f);
     }
 
     @Test
@@ -112,7 +113,7 @@ class JBeamHydroTest {
 
         electrics.set("steering_input", 1.0f);
         hydros.update(1.0f, beams, electrics.snapshot());
-        assertEquals(1.0f, hydros.state[0]);
+        assertEquals(1.0f, hydros.controls.state[0]);
 
         beams.reset();
         hydros.reset(beams);
@@ -134,7 +135,7 @@ class JBeamHydroTest {
 
         hydros.update(1.0f, beams, preparedSnapshot);
 
-        assertEquals(1.5f, hydros.state[0]);
+        assertEquals(1.5f, hydros.controls.state[0]);
         assertEquals(-1.0, electrics.get("steering_input"));
     }
 

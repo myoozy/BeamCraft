@@ -5,6 +5,21 @@ import java.util.List;
 public final class PhysicsSpecs {
     private PhysicsSpecs() {}
 
+    /** Common command-mapping properties shared by linear and torsional hydros. */
+    public interface HydroActuatorSpec {
+        String inputSource();
+        float inLimit();
+        float outLimit();
+        float inputFactor();
+        float inputCenter();
+        float inputInLimit();
+        float inputOutLimit();
+        float inRate();
+        float outRate();
+        float autoCenterRate();
+        Float steeringWheelLock();
+    }
+
     public record NodeSpec(
             String name,
             float x,
@@ -64,7 +79,23 @@ public final class PhysicsSpecs {
             float outRate,
             float autoCenterRate,
             Float steeringWheelLock
-    ) {}
+    ) implements HydroActuatorSpec {}
+
+    /** A torsion bar whose target angle is driven by an electric input. */
+    public record TorsionHydroSpec(
+            TorsionBarSpec torsionBar,
+            String inputSource,
+            float inLimit,
+            float outLimit,
+            float inputFactor,
+            float inputCenter,
+            float inputInLimit,
+            float inputOutLimit,
+            float inRate,
+            float outRate,
+            float autoCenterRate,
+            Float steeringWheelLock
+    ) implements HydroActuatorSpec {}
 
     public record TriangleSpec(
             String name1,
@@ -82,8 +113,12 @@ public final class PhysicsSpecs {
             String name4,
             float spring,
             float damp,
+            float spring2,
+            float damp2,
             float deform,
-            float strength
+            float strength,
+            float precompressionAngle,
+            float precompressionTime
     ) {}
 
     public record SlideNodeSpec(

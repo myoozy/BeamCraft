@@ -38,6 +38,7 @@ public class SoftBodyVehicle {
     public final AnisotropicBeamContainer anisotropicBeams = new AnisotropicBeamContainer();
     public final TriangleContainer triangles = new TriangleContainer();
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
+    public final TorsionHydroContainer torsionHydros = new TorsionHydroContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
     public final PowertrainSystem powertrain = new PowertrainSystem(this);
@@ -242,6 +243,17 @@ public class SoftBodyVehicle {
      * Spawn torsion bar joint with four control nodes and physical properties
      */
     public void addTorsionBar(PhysicsSpecs.TorsionBarSpec spec) {
+        addTorsionBarInternal(spec);
+    }
+
+    public void addTorsionHydro(PhysicsSpecs.TorsionHydroSpec spec) {
+        int torsionBarIndex = addTorsionBarInternal(spec.torsionBar());
+        if (torsionBarIndex >= 0) {
+            torsionHydros.addTorsionHydro(spec, torsionBarIndex, torsionbars, electrics);
+        }
+    }
+
+    private int addTorsionBarInternal(PhysicsSpecs.TorsionBarSpec spec) {
         String name1 = spec.name1();
         String name2 = spec.name2();
         String name3 = spec.name3();
@@ -256,8 +268,9 @@ public class SoftBodyVehicle {
             int n3 = nodes.nameToIndex.get(name3);
             int n4 = nodes.nameToIndex.get(name4);
 
-            torsionbars.addTorsionBar(spec, n1, n2, n3, n4, nodes);
+            return torsionbars.addTorsionBar(spec, n1, n2, n3, n4, nodes);
         }
+        return -1;
     }
 
     /**
@@ -533,6 +546,7 @@ public class SoftBodyVehicle {
         anisotropicBeams.reset();
         triangles.reset();
         torsionbars.reset();
+        torsionHydros.reset(torsionbars);
         wheels.reset();
         powertrain.reset();
         System.out.println("Vehicle reset.");
@@ -552,6 +566,7 @@ public class SoftBodyVehicle {
         anisotropicBeams.clear();
         triangles.clear();
         torsionbars.clear();
+        torsionHydros.clear();
         slidenodes.clear();
         wheels.clear();
         powertrain.clear();
@@ -1266,7 +1281,24 @@ public class SoftBodyVehicle {
             double dot2 = c1x * c2x + c1y * c2y + c1z * c2z;
             double currentAngle = Math.atan2(dot1, dot2);
 
-            double deltaAngle = currentAngle - torsionbars.restAngle[i];
+            float precompressionTarget = torsionbars.precompressionAngle[i];
+            float precompressionState = torsionbars.precompressionState[i];
+            if (precompressionState != precompressionTarget) {
+                float time = torsionbars.precompressionTime[i];
+                float maxDelta = time <= KINDA_SMALL_NUMBER
+                        ? Float.POSITIVE_INFINITY
+                        : Math.abs(precompressionTarget) / (time * invDt);
+                if (precompressionState < precompressionTarget) {
+                    precompressionState = Math.min(precompressionState + maxDelta, precompressionTarget);
+                } else {
+                    precompressionState = Math.max(precompressionState - maxDelta, precompressionTarget);
+                }
+                torsionbars.precompressionState[i] = precompressionState;
+            }
+
+            double targetAngle = torsionbars.restAngle[i]
+                    + precompressionState + torsionbars.actuationAngle[i];
+            double deltaAngle = currentAngle - targetAngle;
             while (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
             while (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
 
@@ -1300,8 +1332,12 @@ public class SoftBodyVehicle {
             double maxSafeSpring = genMass * invDt * invDt;
             double maxSafeDamp = genMass * invDt;
 
-            double activeSpring = Math.min(torsionbars.spring[i], maxSafeSpring);
-            double activeDamp = Math.min(torsionbars.damp[i], maxSafeDamp);
+            float configuredSpring = deltaAngle >= 0.0
+                    ? torsionbars.spring[i] : torsionbars.spring2[i];
+            float configuredDamp = deltaAngle >= 0.0
+                    ? torsionbars.damp[i] : torsionbars.damp2[i];
+            double activeSpring = Math.min(configuredSpring, maxSafeSpring);
+            double activeDamp = Math.min(configuredDamp, maxSafeDamp);
 
             double omega = (g1x*nodes.velX[n1] + g1y*nodes.velY[n1] + g1z*nodes.velZ[n1]) +
                     (g2x*nodes.velX[n2] + g2y*nodes.velY[n2] + g2z*nodes.velZ[n2]) +
@@ -1413,6 +1449,8 @@ public class SoftBodyVehicle {
         float invDt = 1.0f / dt;
 
         hydros.update(dt, normalBeams,
+                electricSnapshot == null ? ElectricSnapshot.EMPTY : electricSnapshot);
+        torsionHydros.update(dt, torsionbars,
                 electricSnapshot == null ? ElectricSnapshot.EMPTY : electricSnapshot);
 
         for (int i = 0; i < nodes.count; i++) {
