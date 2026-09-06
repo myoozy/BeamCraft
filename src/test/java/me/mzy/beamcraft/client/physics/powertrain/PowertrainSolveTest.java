@@ -135,8 +135,8 @@ class PowertrainSolveTest {
 
     /**
      * Gives the wheel's hub nodes a rigid rotation with {@code getAngularVelocity} = wheelAV.
-     * The system reads the axle as node1 - node2 = (-1, 0, 0), so a positive AV needs
-     * v = axis × r · wheelAV with axis = (-1, 0, 0): velY = rz·w, velZ = -ry·w.
+     * The public wheel axis is node2 - node1 = (1, 0, 0), so a positive AV needs
+     * v = axis × r · wheelAV: velY = -rz·w, velZ = ry·w.
      */
     private static void spinWheel(SoftBodyVehicle vehicle, int wIdx, float wheelAV) {
         NodeContainer nodes = vehicle.nodes;
@@ -148,8 +148,8 @@ class PowertrainSolveTest {
                 float ry = nodes.posY[node];
                 float rz = nodes.posZ[node];
                 nodes.velX[node] = 0f;
-                nodes.velY[node] = rz * wheelAV;
-                nodes.velZ[node] = -ry * wheelAV;
+                nodes.velY[node] = -rz * wheelAV;
+                nodes.velZ[node] = ry * wheelAV;
             }
         }
     }
@@ -283,8 +283,8 @@ class PowertrainSolveTest {
 
         // Push the car: wheels roll forward, so the driveline is faster than the idle
         // crank and the clutch back-drives the engine — this must keep working.
-        spinWheel(vehicle, 0, -20.0f);
-        spinWheel(vehicle, 1, -20.0f);
+        spinWheel(vehicle, 0, 20.0f);
+        spinWheel(vehicle, 1, 20.0f);
         vehicle.powertrain.setControls(0.0f, 0.0f);
         float peakRpm = 0f;
         for (int step = 0; step < 800; step++) {
@@ -386,8 +386,8 @@ class PowertrainSolveTest {
         }
         assertTrue(vehicle.powertrain.debugClutchTorque() > 0.0f,
                 "engine leading must produce positive clutch torque");
-        assertTrue(vehicle.wheels.getAngularVelocity(0) < 0.0f,
-                "engine->wheel drive torque must have the corrected (negative) sign, got "
+        assertTrue(vehicle.wheels.getAngularVelocity(0) > 0.0f,
+                "engine->wheel drive torque and forward wheel AV must both be positive, got "
                         + vehicle.wheels.getAngularVelocity(0));
         assertTrue(vehicle.powertrain.engines.engineAV[0] < 100.0f,
                 "the clutch must load the engine");
@@ -396,7 +396,7 @@ class PowertrainSolveTest {
     @Test
     void wheelsLeadingBackDriveTheEngineWithNegativeClutchTorque() {
         SoftBodyVehicle vehicle = signRig(3.0f, 0.5f, 5000.0f);
-        spinWheel(vehicle, 0, -50.0f); // forward wheel motion is negative in the corrected convention
+        spinWheel(vehicle, 0, 50.0f); // forward wheel motion is positive in the public convention
         vehicle.powertrain.setControls(0.0f, 0.0f);
         float engineAVBefore = vehicle.powertrain.engines.engineAV[0]; // idle
         float minimumClutchTorque = Float.POSITIVE_INFINITY;

@@ -206,11 +206,14 @@ public final class PowertrainSystem {
             // shift, which disconnects the torque path without skipping engine integration.
             updateShift(unit, dt);
             float activeRatio = gearboxes.activeRatio[unit];
+            // Zero while neutral or shifting, explicitly disconnecting the clutch path
+            // and all downstream torsion reactions.
+            float ratioFactor = 0.0f;
 
             float clutchTorque = 0.0f;
             if (Math.abs(activeRatio) > 1e-6f) {
                 float pathBaseRatio = gearboxes.pathBaseRatio[unit];
-                float ratioFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
+                ratioFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
                 float drivelineAV = 0.0f;
                 float compliance = 0.0f;
                 int pStart = wheelPaths.pathStart[unit];
@@ -218,10 +221,9 @@ public final class PowertrainSystem {
                 for (int p = pStart; p < pEnd; p++) {
                     int wheel = wheelPaths.pathWheel[p];
                     float gain = wheelPaths.pathGain[p] * ratioFactor;
-                    // The wheel API's forward-positive convention is opposite to the
-                    // engine shaft convention. Use the same signed transform here and
-                    // below for torque so T*w power is conserved through the rigid map.
-                    drivelineAV -= gain * vehicle.wheels.getAngularVelocity(wheel);
+                    // Wheel AV and drive torque are forward-positive, matching the engine
+                    // shaft convention, so T*w power needs no compensating sign.
+                    drivelineAV += gain * vehicle.wheels.getAngularVelocity(wheel);
                     float inertia = vehicle.wheels.getRotationalInertia(wheel);
                     if (inertia > 1e-7f) compliance += gain * gain / inertia;
                 }
@@ -235,10 +237,7 @@ public final class PowertrainSystem {
                     engines.engineAV[unit] -= dt * clutchTorque / engines.engineInertia[unit];
                     for (int p = pStart; p < pEnd; p++) {
                         float gain = wheelPaths.pathGain[p] * ratioFactor;
-                        // Engine -> wheel drive torque has the corrected sign (opposite to the
-                        // clutch torque handed to the driveline), so positive engine spin drives
-                        // the vehicle forward in the game's wheel-AV convention.
-                        vehicle.wheels.applyDriveTorque(wheelPaths.pathWheel[p], -clutchTorque * gain);
+                        vehicle.wheels.applyDriveTorque(wheelPaths.pathWheel[p], clutchTorque * gain);
                     }
                 } else {
                     clutches.clutchTorque[unit] = 0.0f;
@@ -255,11 +254,11 @@ public final class PowertrainSystem {
             // on its own axis. Keeping those axes separate matters on longitudinal
             // layouts where the crank and wheel axes are perpendicular.
             applyReactionTorque(reactions.reactionStart[unit], reactions.reactionCount[unit],
-                    -(externalTorque - clutchTorque));
+                    externalTorque - clutchTorque);
             int rEnd = reactions.reactorStart[unit] + reactions.reactorCount[unit];
             for (int reactor = reactions.reactorStart[unit]; reactor < rEnd; reactor++) {
                 applyReactionTorque(reactions.reactorNodeStart[reactor], reactions.reactorNodeCount[reactor],
-                        -clutchTorque * reactions.reactorGain[reactor]);
+                        clutchTorque * reactions.reactorGain[reactor] * ratioFactor);
             }
 
             if (unit == 0) {

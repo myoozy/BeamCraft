@@ -641,9 +641,11 @@ public class WheelContainer {
         int rays = numRays[wheelIdx];
         if (rays <= 0) return 0.0f;
 
-        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
-        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
-        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        // Expose the same forward-positive convention as the powertrain. The old
+        // node1-node2 axis made a forward-rolling wheel report a negative AV.
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
         double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
         if (axisLength < 1e-9) return 0.0f;
         double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
@@ -692,9 +694,9 @@ public class WheelContainer {
         int rays = numRays[wheelIdx];
         if (rays <= 0) return 0.0f;
 
-        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
-        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
-        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
         double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
         if (axisLength < 1e-9) return 0.0f;
         ax /= axisLength; ay /= axisLength; az /= axisLength;
@@ -723,9 +725,10 @@ public class WheelContainer {
         int rays = numRays[wheelIdx];
         if (rays <= 0) return;
 
-        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
-        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
-        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        // Keep applied torque and reported AV on the same forward-positive axis.
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
         double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
         if (axisLength < 1e-9) return;
         double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;

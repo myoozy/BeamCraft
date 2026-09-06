@@ -218,7 +218,7 @@ class PowertrainGearboxLimiterTest {
             vehicle.powertrain.solve(DT);
             integrate(vehicle, DT);
         }
-        assertTrue(vehicle.wheels.getAngularVelocity(0) > wheelAVBefore,
+        assertTrue(vehicle.wheels.getAngularVelocity(0) < wheelAVBefore,
                 "reverse ratio must flip the drive torque sign, got Δ "
                         + (vehicle.wheels.getAngularVelocity(0) - wheelAVBefore));
     }

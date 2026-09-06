@@ -106,7 +106,7 @@ class WheelBrakeTest {
             int node = i + 2;
             nodes.posX[node] = x[i];
             nodes.posY[node] = y[i];
-            nodes.velZ[node] = y[i] * 10.0f;
+            nodes.velZ[node] = -y[i] * 10.0f;
             nodes.mass[node] = 1.0f;
         }
 
