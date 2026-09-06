@@ -1,14 +1,18 @@
-package me.mzy.beamcraft.client.physics.powertrain;
+package me.mzy.beamcraft.client.physics;
 
-import me.mzy.beamcraft.client.physics.NodeContainer;
-
-/** Converts a requested body torque into zero-net-force node forces. */
-final class TorqueReactionSolver {
+/**
+ * Converts a requested body torque into zero-net-force node forces distributed across a
+ * set of reaction nodes. Shared by the powertrain reactor path and by pressure-wheel
+ * drivetrain/brake counter-torque reactions.
+ */
+public final class TorqueReactionSolver {
     private TorqueReactionSolver() {
     }
 
-    static void apply(NodeContainer nodes, int[] reactionNodes, int offset, int count,
-                      float torqueX, float torqueY, float torqueZ) {
+    /** Adds forces on {@code reactionNodes[offset .. offset+count)} whose sum is zero and
+     *  whose moment about the nodes' mass centroid equals {@code (torqueX,torqueY,torqueZ)}. */
+    public static void apply(NodeContainer nodes, int[] reactionNodes, int offset, int count,
+                             float torqueX, float torqueY, float torqueZ) {
         if (count < 2) return;
 
         double totalMass = 0.0, cx = 0.0, cy = 0.0, cz = 0.0;

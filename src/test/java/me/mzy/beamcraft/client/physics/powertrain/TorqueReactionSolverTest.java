@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client.physics.powertrain;
 
 import me.mzy.beamcraft.client.physics.NodeContainer;
+import me.mzy.beamcraft.client.physics.TorqueReactionSolver;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

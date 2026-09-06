@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.utility.Utility;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +67,27 @@ public class WheelContainer {
 
     public boolean[] isDeflated = new boolean[INIT_WHEEL_CAP];
 
+    // ================================================================
+    // BeamNG pressure-wheel counter-torque nodes (node indices; -1 = not defined).
+    // A wheel torque is applied to the hub ring by applyDriveTorque(); its equal-and-
+    // opposite counter-torque is distributed over these nodes so the axle / suspension /
+    // body receives the reaction without producing a net force. BeamNG semantics:
+    //   * torqueCoupling + torqueArm + torqueArm2 receive the drivetrain counter-torque.
+    //     No drivetrain reaction is generated unless both torqueCoupling and torqueArm are
+    //     defined; an undefined torqueArm2 falls back to the inner axle node.
+    //   * nodeArm (header column) + nodeCoupling receive the braking counter-torque. An
+    //     undefined nodeCoupling falls back to the inner axle node; an undefined nodeArm
+    //     means no explicit braking reaction (the load is carried structurally).
+    // ================================================================
+    public int[] torqueCouplingNode = newReactionNodeArray();
+    public int[] torqueArmNode = newReactionNodeArray();
+    public int[] torqueArm2Node = newReactionNodeArray();
+    public int[] nodeCouplingNode = newReactionNodeArray();
+    public int[] nodeArmNode = newReactionNodeArray();
+
+    // Scratch buffer used to assemble reaction node sets without per-call allocation.
+    private final int[] reactionScratch = new int[3];
+
     private final SoftBodyVehicle vehicle;
 
     public WheelContainer(SoftBodyVehicle vehicle) {
@@ -111,6 +133,15 @@ public class WheelContainer {
         numRays[wIdx] = rays > 0 ? Math.min(rays, MAX_RAYS) : MAX_RAYS;
         hubRadius[wIdx] = (float) radius;
         this.isDeflated[wIdx] = false;
+
+        // Default every pressure-wheel reaction to "undefined"; the parser fills the
+        // drivetrain nodes via setReactionNodes() when the wheel defines them. The nodeArm
+        // header column is the braking lever arm and arrives through the hub spec.
+        torqueCouplingNode[wIdx] = -1;
+        torqueArmNode[wIdx] = -1;
+        torqueArm2Node[wIdx] = -1;
+        nodeCouplingNode[wIdx] = -1;
+        nodeArmNode[wIdx] = spec.nodeArm() != null ? spec.nodeArm() : -1;
 
         int partId = vehicle.nodes.partId[n1];
         int baseOffset = wIdx * MAX_RAYS;
@@ -592,6 +623,12 @@ public class WheelContainer {
             serviceBrakeTorque = Utility.expand(serviceBrakeTorque, newSize);
             brakeAngle = Utility.expand(brakeAngle, newSize);
 
+            torqueCouplingNode = expandReactionArray(torqueCouplingNode, newSize);
+            torqueArmNode = expandReactionArray(torqueArmNode, newSize);
+            torqueArm2Node = expandReactionArray(torqueArm2Node, newSize);
+            nodeCouplingNode = expandReactionArray(nodeCouplingNode, newSize);
+            nodeArmNode = expandReactionArray(nodeArmNode, newSize);
+
             frictionCoef = Utility.expand(frictionCoef, newSize);
             slidingFrictionCoef = Utility.expand(slidingFrictionCoef, newSize);
             stribeckVelMult = Utility.expand(stribeckVelMult, newSize);
@@ -620,6 +657,38 @@ public class WheelContainer {
 
             System.out.println("⚠️ [WheelContainer] Resized to: " + newSize + " wheels, flat size: " + newFlatSize);
         }
+    }
+
+    private static int[] newReactionNodeArray() {
+        int[] array = new int[INIT_WHEEL_CAP];
+        Arrays.fill(array, -1);
+        return array;
+    }
+
+    private static int[] expandReactionArray(int[] array, int newSize) {
+        int oldSize = array.length;
+        int[] expanded = Utility.expand(array, newSize);
+        Arrays.fill(expanded, oldSize, newSize, -1);
+        return expanded;
+    }
+
+    /**
+     * Configures the BeamNG drivetrain counter-torque nodes for one wheel. Pass {@code -1}
+     * for any node that is not defined; a drivetrain reaction only occurs at apply time when
+     * both {@code torqueCoupling} and {@code torqueArm} are defined ({@code torqueArm2}
+     * falls back to the inner axle node).
+     */
+    public void setReactionNodes(int wheelIdx, int torqueCoupling, int torqueArm, int torqueArm2) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        torqueCouplingNode[wheelIdx] = torqueCoupling;
+        torqueArmNode[wheelIdx] = torqueArm;
+        torqueArm2Node[wheelIdx] = torqueArm2;
+    }
+
+    /** Overrides the braking coupling node; pass {@code -1} to restore the inner-axle default. */
+    public void setBrakeCouplingNode(int wheelIdx, int nodeCoupling) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        nodeCouplingNode[wheelIdx] = nodeCoupling;
     }
 
     public void deflateWheel(int idx) {
@@ -717,7 +786,12 @@ public class WheelContainer {
         return (float) inertia;
     }
 
-    /** Applies a pure axle torque to the hub ring without adding net force. */
+    /**
+     * Applies a pure axle torque to the hub ring without adding net force. This applies
+     * the wheel torque <em>only</em> — it never touches the pressure-wheel counter-torque
+     * nodes. Braking reuses this method, so the drivetrain reaction must be requested
+     * explicitly through {@link #applyDriveReaction} / {@link #applyBrakeReaction}.
+     */
     public void applyDriveTorque(int wheelIdx, float torque) {
         if (wheelIdx < 0 || wheelIdx >= count || Math.abs(torque) < 1e-8f) return;
         NodeContainer nodes = vehicle.nodes;
@@ -763,6 +837,98 @@ public class WheelContainer {
         }
     }
 
+    /**
+     * Applies a wheel torque together with the BeamNG pressure-wheel drivetrain
+     * counter-torque: the hub receives {@code torque} and an equal-and-opposite torque is
+     * distributed over the wheel's torqueCoupling/torqueArm/torqueArm2 nodes. {@code torque}
+     * is forward-positive. When the wheel defines no torque coupling nodes this is exactly
+     * {@link #applyDriveTorque}.
+     */
+    public void applyDriveTorqueAndReaction(int wheelIdx, float torque) {
+        applyDriveTorque(wheelIdx, torque);
+        applyDriveReaction(wheelIdx, torque);
+    }
+
+    /**
+     * Applies only the drivetrain counter-torque for a wheel torque that the caller has
+     * already applied. The reaction is generated only when the wheel defines both
+     * {@code torqueCoupling} and {@code torqueArm} (BeamNG semantics); an undefined
+     * {@code torqueArm2} falls back to the inner axle node. No reaction implies no wheel
+     * torque was applied (e.g. neutral), so nothing is generated here either.
+     */
+    public void applyDriveReaction(int wheelIdx, float torque) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        int torqueCoupling = torqueCouplingNode[wheelIdx];
+        int torqueArm = torqueArmNode[wheelIdx];
+        if (torqueCoupling < 0 || torqueArm < 0) return;
+        int torqueArm2 = torqueArm2Node[wheelIdx];
+        if (torqueArm2 < 0) torqueArm2 = node2[wheelIdx];
+        applyTorqueReaction(wheelIdx, torque, torqueCoupling, torqueArm, torqueArm2);
+    }
+
+    /**
+     * Applies the BeamNG braking counter-torque for a brake torque the caller already
+     * applied to the wheel. The reaction is distributed over nodeArm (the header brake
+     * lever node) and nodeCoupling (defaulting to the inner axle node). A wheel without a
+     * nodeArm has no explicit braking reaction: the counter-torque is carried structurally
+     * through the hub/suspension beams, exactly as before this feature existed.
+     */
+    public void applyBrakeReaction(int wheelIdx, float appliedWheelTorque) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        int nodeArm = nodeArmNode[wheelIdx];
+        if (nodeArm < 0) return;
+        int nodeCoupling = nodeCouplingNode[wheelIdx];
+        if (nodeCoupling < 0) nodeCoupling = node2[wheelIdx];
+        applyTorqueReaction(wheelIdx, appliedWheelTorque, nodeCoupling, nodeArm, -1);
+    }
+
+    /**
+     * Distributes the equal-and-opposite counter-torque for {@code wheelTorque} over the
+     * given reaction nodes as a zero-net-force pure torque about the wheel's forward-positive
+     * axle. {@code nodeC} may be -1. Degenerate or invalid geometry simply produces no forces.
+     */
+    private void applyTorqueReaction(int wheelIdx, float wheelTorque, int nodeA, int nodeB, int nodeC) {
+        if (wheelIdx < 0 || wheelIdx >= count || Math.abs(wheelTorque) < 1e-8f) return;
+        NodeContainer nodes = vehicle.nodes;
+
+        // The reaction uses the same forward-positive axle axis as applyDriveTorque() so the
+        // counter-torque is exactly equal and opposite to the torque applied to the wheel.
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return;
+        double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
+        ax = ax * direction / axisLength;
+        ay = ay * direction / axisLength;
+        az = az * direction / axisLength;
+
+        // Collect the valid, unique reaction nodes into the scratch buffer (which is
+        // reused across wheels, so no per-call allocation). At least two are needed to
+        // carry a torque.
+        reactionScratch[0] = nodeA;
+        reactionScratch[1] = nodeB;
+        reactionScratch[2] = nodeC;
+        int valid = 0;
+        for (int i = 0; i < 3; i++) {
+            int candidate = reactionScratch[i];
+            if (candidate < 0 || candidate >= nodes.count) continue;
+            if (nodes.mass[candidate] <= 0.0f) continue;
+            boolean duplicate = false;
+            for (int j = 0; j < valid; j++) {
+                if (reactionScratch[j] == candidate) { duplicate = true; break; }
+            }
+            if (!duplicate) reactionScratch[valid++] = candidate;
+        }
+        if (valid < 2) return;
+
+        // Counter-torque = -(wheel torque) about the forward-positive axle.
+        TorqueReactionSolver.apply(nodes, reactionScratch, 0, valid,
+                (float) (-wheelTorque * ax),
+                (float) (-wheelTorque * ay),
+                (float) (-wheelTorque * az));
+    }
+
     /** Applies the JBeam service brake curve and pressure delays to every wheel. */
     public void applyServiceBrakes(float brakeInput, float dt) {
         applyBrakes(brakeInput, 0.0f, dt);
@@ -803,7 +969,11 @@ public class WheelContainer {
             float compliantTorque = Math.abs(brakeAngle[wheel]) * stiffness;
             float stoppingTorque = Math.abs(angularVelocity) * getHubRotationalInertia(wheel) / dt;
             float appliedTorque = Math.min(compliantTorque, stoppingTorque);
-            applyDriveTorque(wheel, -Math.copySign(appliedTorque, angularVelocity));
+            float wheelTorque = -Math.copySign(appliedTorque, angularVelocity);
+            applyDriveTorque(wheel, wheelTorque);
+            // The pressure-wheel braking counter-torque is the exact opposite of the wheel
+            // torque, distributed over nodeArm/nodeCoupling (no-op without a nodeArm).
+            applyBrakeReaction(wheel, wheelTorque);
         }
     }
 

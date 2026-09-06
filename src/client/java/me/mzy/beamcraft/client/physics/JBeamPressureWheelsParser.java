@@ -197,9 +197,14 @@ public class JBeamPressureWheelsParser {
                 // ----- 转向/传动高级节点 -----
                 String steerAxisUp = getStr(activeConfig, "steerAxisUp", null);
                 String steerAxisDown = getStr(activeConfig, "steerAxisDown", null);
-                String torqueCoupling = getStr(activeConfig, "torqueCoupling", null);
-                String torqueArm = getStr(activeConfig, "torqueArm", null);
-                String torqueArm2 = getStr(activeConfig, "torqueArm2", null);
+                // Drivetrain counter-torque is scoped per wheel row (usually inline in BeamNG
+                // data), so reaction fields are read from the row's own object literals first,
+                // falling back to the accumulated wheel state. Reading supports BeamNG's
+                // trailing-colon key spelling ("torqueCoupling:").
+                String torqueCoupling = getRowReactionName(activeConfig, row, "torqueCoupling", null);
+                String torqueArm = getRowReactionName(activeConfig, row, "torqueArm", null);
+                String torqueArm2 = getRowReactionName(activeConfig, row, "torqueArm2", null);
+                String nodeCoupling = getRowReactionName(activeConfig, row, "nodeCoupling", null);
                 String torqueJointNode1 = getStr(activeConfig, "torqueJointNode1", null);
                 String torqueJointNode2 = getStr(activeConfig, "torqueJointNode2", null);
 
@@ -226,6 +231,23 @@ public class JBeamPressureWheelsParser {
                         hubcapNodeWeight, hubcapCenterNodeWeight, hubcapNodeMaterial, hubcapFrictionCoef,
                         hubRadiusSimple
                 ));
+
+                // Store the BeamNG pressure-wheel counter-torque nodes on the slot this hub
+                // just occupied. The reaction fires only at apply time and only when both
+                // torqueCoupling and torqueArm are present (per the BeamNG documentation);
+                // torqueArm2 falls back to the inner axle node, nodeCoupling to the inner
+                // axle node too. Unresolved / absent names resolve to -1 and stay inert.
+                Integer wheelIndex = vehicle.wheels.nameToIndex.get(wheelName);
+                if (wheelIndex != null) {
+                    vehicle.wheels.setReactionNodes(
+                            wheelIndex,
+                            resolveNodeIndex(vehicle, torqueCoupling),
+                            resolveNodeIndex(vehicle, torqueArm),
+                            resolveNodeIndex(vehicle, torqueArm2));
+                    vehicle.wheels.setBrakeCouplingNode(
+                            wheelIndex,
+                            resolveNodeIndex(vehicle, nodeCoupling));
+                }
 
                 if (hasTire) {
                     vehicle.wheels.generateTire(new PhysicsSpecs.WheelTireSpec(
@@ -279,5 +301,35 @@ public class JBeamPressureWheelsParser {
 
     private static boolean getBool(JsonObject config, String key, boolean def) {
         return JBeamParser.getBooleanSafe(config, key, def);
+    }
+
+    /**
+     * Reads a per-wheel node-name reaction field (torqueCoupling/torqueArm/torqueArm2/
+     * nodeCoupling). BeamNG scopes these to the wheel row, typically as an object literal
+     * appended to that row, so row-scoped values take precedence over the accumulated wheel
+     * state. Both plain keys and BeamNG's trailing-colon spellings ("torqueCoupling:") are
+     * honoured.
+     */
+    private static String getRowReactionName(JsonObject activeConfig, JsonArray row, String key, String def) {
+        for (int i = 8; i < row.size(); i++) {
+            if (!row.get(i).isJsonObject()) continue;
+            JsonObject rowModifier = row.get(i).getAsJsonObject();
+            JsonElement value = rowModifier.get(key);
+            if (value == null) value = rowModifier.get(key + ":");
+            if (value != null && !value.isJsonNull()) {
+                try { return value.getAsString(); } catch (Exception ignored) { return def; }
+            }
+        }
+        JsonElement value = activeConfig.get(key);
+        if (value == null) value = activeConfig.get(key + ":");
+        if (value == null || value.isJsonNull()) return def;
+        try { return value.getAsString(); } catch (Exception ignored) { return def; }
+    }
+
+    /** Resolves a node name to its NodeContainer index, or -1 when absent/invalid. */
+    private static int resolveNodeIndex(SoftBodyVehicle vehicle, String nodeName) {
+        if (nodeName == null || nodeName.isEmpty()) return -1;
+        Integer index = vehicle.nodes.nameToIndex.get(nodeName);
+        return index != null ? index : -1;
     }
 }

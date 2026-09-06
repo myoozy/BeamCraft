@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.physics.powertrain;
 
 import me.mzy.beamcraft.client.physics.NodeContainer;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.TorqueReactionSolver;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
@@ -237,7 +238,7 @@ public final class PowertrainSystem {
                     engines.engineAV[unit] -= dt * clutchTorque / engines.engineInertia[unit];
                     for (int p = pStart; p < pEnd; p++) {
                         float gain = wheelPaths.pathGain[p] * ratioFactor;
-                        vehicle.wheels.applyDriveTorque(wheelPaths.pathWheel[p], clutchTorque * gain);
+                        vehicle.wheels.applyDriveTorqueAndReaction(wheelPaths.pathWheel[p], clutchTorque * gain);
                     }
                 } else {
                     clutches.clutchTorque[unit] = 0.0f;
