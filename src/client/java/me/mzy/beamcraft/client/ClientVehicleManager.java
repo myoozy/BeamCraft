@@ -15,6 +15,8 @@ import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 
 import java.io.File;
 import java.util.HashMap;
@@ -243,14 +245,16 @@ public final class ClientVehicleManager {
     }
 
     public static void initRenderHooks() {
-        WorldRenderEvents.BEFORE_ENTITIES.register(context -> {
+        // Iris renders its shadow map when vanilla enters renderSky(), before
+        // Fabric's BEFORE_ENTITIES event. Prepare skinning at START so shadow
+        // and main entity passes consume the same frame's node positions.
+        WorldRenderEvents.START.register(context -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.world == null || VEHICLE_MAP.isEmpty()) {
                 return;
             }
 
             float tickDelta = context.tickCounter().getTickDelta(true);
-            long renderNanos = System.nanoTime();
             long renderMoment = client.world.getTime() << 32
                     ^ Integer.toUnsignedLong(Float.floatToRawIntBits(tickDelta));
 
@@ -270,8 +274,12 @@ public final class ClientVehicleManager {
                 }
 
                 ensureInterpolationCapacity(nodes.count);
-                boolean sampledTimeline = vehicle.renderTimeline.sample(
-                        renderNanos,
+                Vec3d renderedEntityOrigin = getRenderedEntityOrigin(vehicle.parentEntity, tickDelta);
+                boolean sampledTimeline = vehicle.renderTimeline.sampleAtTickDeltaRelativeTo(
+                        tickDelta,
+                        renderedEntityOrigin.x,
+                        renderedEntityOrigin.y,
+                        renderedEntityOrigin.z,
                         sharedInterpX,
                         sharedInterpY,
                         sharedInterpZ,
@@ -295,6 +303,14 @@ public final class ClientVehicleManager {
                                 tickDelta
                         );
                     }
+                    offsetNodesFromCurrentToRenderedOrigin(
+                            vehicle.parentEntity.getPos(),
+                            renderedEntityOrigin,
+                            sharedInterpX,
+                            sharedInterpY,
+                            sharedInterpZ,
+                            nodes.count
+                    );
                 }
 
                 flex.skinningPipeline.updateGpuSkinning(
@@ -310,6 +326,36 @@ public final class ClientVehicleManager {
 
     private static float interpolate(double previous, double current, float tickDelta) {
         return (float) (previous + (current - previous) * tickDelta);
+    }
+
+    /**
+     * Matches WorldRenderer.renderEntity exactly. Entity#getLerpedPos uses the
+     * prevX/Y/Z fields instead, which are not the origin of the entity matrix.
+     */
+    static Vec3d getRenderedEntityOrigin(Entity entity, float tickDelta) {
+        return new Vec3d(
+                MathHelper.lerp((double) tickDelta, entity.lastRenderX, entity.getX()),
+                MathHelper.lerp((double) tickDelta, entity.lastRenderY, entity.getY()),
+                MathHelper.lerp((double) tickDelta, entity.lastRenderZ, entity.getZ())
+        );
+    }
+
+    private static void offsetNodesFromCurrentToRenderedOrigin(
+            Vec3d currentOrigin,
+            Vec3d renderedOrigin,
+            float[] x,
+            float[] y,
+            float[] z,
+            int count
+    ) {
+        float offsetX = (float) (currentOrigin.x - renderedOrigin.x);
+        float offsetY = (float) (currentOrigin.y - renderedOrigin.y);
+        float offsetZ = (float) (currentOrigin.z - renderedOrigin.z);
+        for (int node = 0; node < count; node++) {
+            x[node] += offsetX;
+            y[node] += offsetY;
+            z[node] += offsetZ;
+        }
     }
 
     private static void ensureInterpolationCapacity(int nodeCount) {

@@ -21,6 +21,9 @@ public final class PhysicsRenderTimeline {
     private long startedNanos;
     private long durationNanos;
     private int nodeCount;
+    private double originX;
+    private double originY;
+    private double originZ;
 
     /**
      * Starts a new timeline and publishes its zero-time snapshot on the client
@@ -30,6 +33,9 @@ public final class PhysicsRenderTimeline {
             long stepStartedNanos,
             long stepDurationNanos,
             int snapshotCount,
+            double originX,
+            double originY,
+            double originZ,
             float[] posX,
             float[] posY,
             float[] posZ,
@@ -47,12 +53,29 @@ public final class PhysicsRenderTimeline {
         startedNanos = stepStartedNanos;
         durationNanos = Math.max(0L, stepDurationNanos);
         nodeCount = count;
+        this.originX = originX;
+        this.originY = originY;
+        this.originZ = originZ;
         long stepGeneration = ++generation;
 
         copyPositions(positions[0], posX, posY, posZ, count);
         offsetsNanos[0] = 0L;
         publishedCount.set(1);
         return new Writer(this, stepGeneration, snapshotCount, count);
+    }
+
+    /** Compatibility overload for timelines whose local coordinates have no world origin. */
+    public Writer beginStep(
+            long stepStartedNanos,
+            long stepDurationNanos,
+            int snapshotCount,
+            float[] posX,
+            float[] posY,
+            float[] posZ,
+            int count
+    ) {
+        return beginStep(stepStartedNanos, stepDurationNanos, snapshotCount,
+                0.0, 0.0, 0.0, posX, posY, posZ, count);
     }
 
     /**
@@ -66,13 +89,34 @@ public final class PhysicsRenderTimeline {
             float[] outZ,
             int count
     ) {
+        long elapsedNanos = Math.max(0L, nowNanos - startedNanos);
+        return sampleAtOffset(elapsedNanos, outX, outY, outZ, count);
+    }
+
+    /** Samples this fixed physics step at Minecraft's fractional tick time. */
+    public boolean sampleAtTickDelta(
+            float tickDelta,
+            float[] outX,
+            float[] outY,
+            float[] outZ,
+            int count
+    ) {
+        return sampleAtOffset(tickDeltaOffsetNanos(tickDelta), outX, outY, outZ, count);
+    }
+
+    private boolean sampleAtOffset(
+            long requestedOffsetNanos,
+            float[] outX,
+            float[] outY,
+            float[] outZ,
+            int count
+    ) {
         int available = publishedCount.get();
         if (available == 0 || count != nodeCount) {
             return false;
         }
 
-        long elapsedNanos = Math.max(0L, nowNanos - startedNanos);
-        long targetNanos = Math.min(elapsedNanos, durationNanos);
+        long targetNanos = Math.max(0L, Math.min(requestedOffsetNanos, durationNanos));
 
         int upper = 0;
         while (upper < available && offsetsNanos[upper] < targetNanos) {
@@ -98,15 +142,74 @@ public final class PhysicsRenderTimeline {
         return true;
     }
 
+    /**
+     * Samples local node positions and rebases them from this physics step's
+     * double-precision world origin to the origin used by Minecraft's current
+     * entity render matrix. Only the small origin delta is converted to float.
+     */
+    public boolean sampleRelativeTo(
+            long nowNanos,
+            double relativeOriginX,
+            double relativeOriginY,
+            double relativeOriginZ,
+            float[] outX,
+            float[] outY,
+            float[] outZ,
+            int count
+    ) {
+        if (!sample(nowNanos, outX, outY, outZ, count)) {
+            return false;
+        }
+        offsetOutputs(
+                (float) (originX - relativeOriginX),
+                (float) (originY - relativeOriginY),
+                (float) (originZ - relativeOriginZ),
+                outX, outY, outZ, count
+        );
+        return true;
+    }
+
+    /** Tick-synchronous counterpart of {@link #sampleRelativeTo}. */
+    public boolean sampleAtTickDeltaRelativeTo(
+            float tickDelta,
+            double relativeOriginX,
+            double relativeOriginY,
+            double relativeOriginZ,
+            float[] outX,
+            float[] outY,
+            float[] outZ,
+            int count
+    ) {
+        if (!sampleAtTickDelta(tickDelta, outX, outY, outZ, count)) {
+            return false;
+        }
+        offsetOutputs(
+                (float) (originX - relativeOriginX),
+                (float) (originY - relativeOriginY),
+                (float) (originZ - relativeOriginZ),
+                outX, outY, outZ, count
+        );
+        return true;
+    }
+
     /** Samples one node without allocating full-vehicle interpolation buffers. */
     public boolean sampleNode(long nowNanos, int node, float[] out) {
+        long elapsedNanos = Math.max(0L, nowNanos - startedNanos);
+        return sampleNodeAtOffset(elapsedNanos, node, out);
+    }
+
+    /** Samples one node at Minecraft's fractional tick time. */
+    public boolean sampleNodeAtTickDelta(float tickDelta, int node, float[] out) {
+        return sampleNodeAtOffset(tickDeltaOffsetNanos(tickDelta), node, out);
+    }
+
+    private boolean sampleNodeAtOffset(long requestedOffsetNanos, int node, float[] out) {
         int available = publishedCount.get();
         if (available == 0 || node < 0 || node >= nodeCount || out.length < AXIS_COUNT) {
             return false;
         }
 
-        long elapsedNanos = Math.max(0L, nowNanos - startedNanos);
-        long targetNanos = Math.min(elapsedNanos, durationNanos);
+        long targetNanos = Math.max(0L, Math.min(requestedOffsetNanos, durationNanos));
         int upper = 0;
         while (upper < available && offsetsNanos[upper] < targetNanos) {
             upper++;
@@ -127,6 +230,42 @@ public final class PhysicsRenderTimeline {
             out[1] = lerp(positions[lower][nodeCount + node], positions[upper][nodeCount + node], alpha);
             out[2] = lerp(positions[lower][nodeCount * 2 + node], positions[upper][nodeCount * 2 + node], alpha);
         }
+        return true;
+    }
+
+    /** Samples one node relative to a caller-supplied double-precision origin. */
+    public boolean sampleNodeRelativeTo(
+            long nowNanos,
+            int node,
+            double relativeOriginX,
+            double relativeOriginY,
+            double relativeOriginZ,
+            float[] out
+    ) {
+        if (!sampleNode(nowNanos, node, out)) {
+            return false;
+        }
+        out[0] += (float) (originX - relativeOriginX);
+        out[1] += (float) (originY - relativeOriginY);
+        out[2] += (float) (originZ - relativeOriginZ);
+        return true;
+    }
+
+    /** Tick-synchronous counterpart of {@link #sampleNodeRelativeTo}. */
+    public boolean sampleNodeAtTickDeltaRelativeTo(
+            float tickDelta,
+            int node,
+            double relativeOriginX,
+            double relativeOriginY,
+            double relativeOriginZ,
+            float[] out
+    ) {
+        if (!sampleNodeAtTickDelta(tickDelta, node, out)) {
+            return false;
+        }
+        out[0] += (float) (originX - relativeOriginX);
+        out[1] += (float) (originY - relativeOriginY);
+        out[2] += (float) (originZ - relativeOriginZ);
         return true;
     }
 
@@ -234,8 +373,29 @@ public final class PhysicsRenderTimeline {
         }
     }
 
+    private static void offsetOutputs(
+            float offsetX,
+            float offsetY,
+            float offsetZ,
+            float[] outX,
+            float[] outY,
+            float[] outZ,
+            int count
+    ) {
+        for (int node = 0; node < count; node++) {
+            outX[node] += offsetX;
+            outY[node] += offsetY;
+            outZ[node] += offsetZ;
+        }
+    }
+
     private static float lerp(float start, float end, float alpha) {
         return start + (end - start) * alpha;
+    }
+
+    private long tickDeltaOffsetNanos(float tickDelta) {
+        double clamped = Math.max(0.0, Math.min(1.0, tickDelta));
+        return Math.round(clamped * durationNanos);
     }
 
     /** Worker-side handle tied to exactly one prepared step generation. */

@@ -98,7 +98,21 @@ public final class VehicleCameraController {
         if (node < 0 || node >= vehicle.nodes.count) {
             return false;
         }
-        if (!vehicle.renderTimeline.sampleNode(System.nanoTime(), node, out)) {
+        boolean sampledTimeline;
+        if (vehicle.parentEntity == null) {
+            sampledTimeline = vehicle.renderTimeline.sampleNodeAtTickDelta(tickDelta, node, out);
+        } else {
+            Vec3d currentOrigin = vehicle.parentEntity.getPos();
+            sampledTimeline = vehicle.renderTimeline.sampleNodeAtTickDeltaRelativeTo(
+                    tickDelta,
+                    node,
+                    currentOrigin.x,
+                    currentOrigin.y,
+                    currentOrigin.z,
+                    out
+            );
+        }
+        if (!sampledTimeline) {
             NodeContainer nodes = vehicle.nodes;
             out[0] = nodes.posX[node];
             out[1] = nodes.posY[node];
