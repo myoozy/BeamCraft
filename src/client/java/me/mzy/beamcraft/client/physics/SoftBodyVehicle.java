@@ -31,6 +31,7 @@ public class SoftBodyVehicle {
     public final NodeContainer nodes = new NodeContainer();
     public final ElectricBus electrics = new ElectricBus();
     public final BeamContainer normalBeams = new BeamContainer();
+    public final CouplerContainer couplers = new CouplerContainer();
     public final HydroContainer hydros = new HydroContainer();
     public final BeamContainer supportBeams = new BeamContainer();
     public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
@@ -146,6 +147,15 @@ public class SoftBodyVehicle {
      */
     public void addBeam(PhysicsSpecs.BeamSpec spec) {
         addBeamInternal(spec);
+    }
+
+    /** Adds a non-elastic, two-node coupler without changing the beam topology. */
+    public boolean addCoupler(PhysicsSpecs.CouplerSpec spec) {
+        Integer n1 = nodes.nameToIndex.get(spec.name1());
+        Integer n2 = nodes.nameToIndex.get(spec.name2());
+        if (n1 == null || n2 == null || n1.equals(n2)) return false;
+        couplers.add(spec, n1, n2);
+        return true;
     }
 
     public void addHydro(PhysicsSpecs.HydroSpec spec) {
@@ -539,6 +549,7 @@ public class SoftBodyVehicle {
         electrics.resetValues();
         nodes.reset();
         normalBeams.reset();
+        couplers.reset();
         hydros.reset(normalBeams);
         supportBeams.reset();
         boundedBeams.reset();
@@ -559,6 +570,7 @@ public class SoftBodyVehicle {
         nodes.clear();
         electrics.clear();
         normalBeams.clear();
+        couplers.clear();
         hydros.clear();
         supportBeams.clear();
         boundedBeams.clear();
@@ -743,6 +755,7 @@ public class SoftBodyVehicle {
         }
 
         triangles.breakByGroup(groupName);
+        couplers.breakByGroup(groupName);
 
         List<BeamPointer> linkedBeams = breakGroupMap.get(groupName);
         if (linkedBeams == null) return;
@@ -1501,7 +1514,6 @@ public class SoftBodyVehicle {
         // ==========================================
         // ==========================================
         for (int i = 0; i < nodes.count; i++) {
-
             if (nodes.mass[i] < PhysicsWorld.KINDA_SMALL_NUMBER) continue;
             nodes.forceY[i] += PhysicsWorld.GRAVITY * nodes.mass[i];
 
@@ -1510,23 +1522,36 @@ public class SoftBodyVehicle {
             nodes.velY[i] += (nodes.forceY[i] * invMass) * dt;
             nodes.velZ[i] += (nodes.forceZ[i] * invMass) * dt;
 
-            if (!Float.isFinite(nodes.velX[i]) || !Float.isFinite(nodes.velY[i]) || !Float.isFinite(nodes.velZ[i])) {
-                nodes.velX[i] = 0.0f; nodes.velY[i] = 0.0f; nodes.velZ[i] = 0.0f;
-            } else {
-                float speedSq = nodes.velX[i] * nodes.velX[i]
-                        + nodes.velY[i] * nodes.velY[i]
-                        + nodes.velZ[i] * nodes.velZ[i];
-                if (speedSq > MAX_NODE_SPEED_SQ) {
-                    float scale = MAX_NODE_SPEED / (float) Math.sqrt(speedSq);
-                    nodes.velX[i] *= scale;
-                    nodes.velY[i] *= scale;
-                    nodes.velZ[i] *= scale;
-                }
-            }
+            sanitizeNodeVelocity(i);
+        }
+
+        couplers.solveVelocityConstraints(nodes, dt);
+
+        for (int i = 0; i < nodes.count; i++) {
+            if (nodes.mass[i] < PhysicsWorld.KINDA_SMALL_NUMBER) continue;
+            sanitizeNodeVelocity(i);
 
             nodes.posX[i] += nodes.velX[i] * dt;
             nodes.posY[i] += nodes.velY[i] * dt;
             nodes.posZ[i] += nodes.velZ[i] * dt;
+        }
+    }
+
+    private void sanitizeNodeVelocity(int i) {
+        if (!Float.isFinite(nodes.velX[i]) || !Float.isFinite(nodes.velY[i]) || !Float.isFinite(nodes.velZ[i])) {
+            nodes.velX[i] = 0.0f;
+            nodes.velY[i] = 0.0f;
+            nodes.velZ[i] = 0.0f;
+            return;
+        }
+        float speedSq = nodes.velX[i] * nodes.velX[i]
+                + nodes.velY[i] * nodes.velY[i]
+                + nodes.velZ[i] * nodes.velZ[i];
+        if (speedSq > MAX_NODE_SPEED_SQ) {
+            float scale = MAX_NODE_SPEED / (float) Math.sqrt(speedSq);
+            nodes.velX[i] *= scale;
+            nodes.velY[i] *= scale;
+            nodes.velZ[i] *= scale;
         }
     }
 

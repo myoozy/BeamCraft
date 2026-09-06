@@ -344,6 +344,13 @@ public class JBeamParser {
         boolean collision = true;
         boolean selfCollision = false;
         java.util.List<String> groups = new java.util.ArrayList<>();
+        String tag = "";
+        String couplerTag = "";
+        float couplerStartRadius = 0.0f;
+        float couplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
+        boolean couplerWeld = false;
+        float couplerLatchSpeed = 0.3f;
+        float couplerLockRadius = 0.025f;
     }
 
     public static void parseNodes(JsonArray nodes, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry, CouplerRegistry couplerRegistry) {
@@ -362,6 +369,21 @@ public class JBeamParser {
                 if (modifier.has("group")) {
                     state.groups = parseGroups(modifier.get("group"), entry.variables);
                 }
+                state.tag = getStringEvalSafe(modifier, "tag", state.tag, entry.variables);
+                state.couplerTag = getStringEvalSafe(modifier, "couplerTag", state.couplerTag, entry.variables);
+                state.couplerStartRadius = getFloatSafe(
+                        modifier, "couplerStartRadius", state.couplerStartRadius, entry.variables);
+                state.couplerStrength = getFloatSafe(
+                        modifier, "couplerStrength", state.couplerStrength, entry.variables);
+                if (modifier.has("couplerWeld")) {
+                    state.couplerWeld = getBooleanSafe(modifier, "couplerWeld", state.couplerWeld);
+                } else if (modifier.has("couplerLock")) {
+                    state.couplerWeld = getBooleanSafe(modifier, "couplerLock", state.couplerWeld);
+                }
+                state.couplerLatchSpeed = getFloatSafe(
+                        modifier, "couplerLatchSpeed", state.couplerLatchSpeed, entry.variables);
+                state.couplerLockRadius = getFloatSafe(
+                        modifier, "couplerLockRadius", state.couplerLockRadius, entry.variables);
                 continue;
             }
 
@@ -391,13 +413,13 @@ public class JBeamParser {
 
         java.util.List<String> inlineGroups = state.groups;
 
-        String inlineTag = "";
-        String inlineCouplerTag = "";
-        float inlineStartRadius = 0.25f;
-        float inlineCouplerStrength = PhysicsWorld.KINDA_BIG_NUMBER;
-        boolean inlineCouplerWeld = false;
-        float inlineCouplerLatchSpeed = 0.3f;
-        float inlineCouplerLockRadius = 0.025f;
+        String inlineTag = state.tag;
+        String inlineCouplerTag = state.couplerTag;
+        float inlineStartRadius = state.couplerStartRadius;
+        float inlineCouplerStrength = state.couplerStrength;
+        boolean inlineCouplerWeld = state.couplerWeld;
+        float inlineCouplerLatchSpeed = state.couplerLatchSpeed;
+        float inlineCouplerLockRadius = state.couplerLockRadius;
 
         if (row.get(row.size() - 1).isJsonObject()) {
             JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
@@ -449,6 +471,83 @@ public class JBeamParser {
                 inlineWeight, inlineFriction, inlineSlidingFriction,
                 entry.partId, inlineCollision, inlineSelfCollision, inlineGroups
         );
+    }
+
+    /**
+     * Collects spawn-time pairs from BeamNG's modern advancedCouplerControl.
+     * Runtime toggle forces and sounds are intentionally outside this first
+     * compatibility step.
+     */
+    static void parseAdvancedCouplers(JsonObject part, Map<String, Double> variables,
+                                      CouplerRegistry registry) {
+        if (part == null || registry == null || !part.has("controller")
+                || !part.get("controller").isJsonArray()) {
+            return;
+        }
+
+        for (JsonElement element : part.getAsJsonArray("controller")) {
+            if (!element.isJsonArray()) continue;
+            JsonArray row = element.getAsJsonArray();
+            if (row.size() < 2 || !"advancedCouplerControl".equals(getStringCell(row.get(0)))) continue;
+
+            JsonObject options = null;
+            for (int i = 1; i < row.size(); i++) {
+                if (row.get(i).isJsonObject()) options = row.get(i).getAsJsonObject();
+            }
+            String controllerName = getStringEvalSafe(options, "name", null, variables);
+            if (controllerName == null || !part.has(controllerName)
+                    || !part.get(controllerName).isJsonObject()) continue;
+
+            JsonElement couplerNodes = part.getAsJsonObject(controllerName).get("couplerNodes");
+            if (couplerNodes == null || !couplerNodes.isJsonArray()) continue;
+            parseAdvancedCouplerRows(
+                    controllerName, couplerNodes.getAsJsonArray(), variables, registry);
+        }
+    }
+
+    private static void parseAdvancedCouplerRows(String controllerName, JsonArray rows,
+                                                 Map<String, Double> variables,
+                                                 CouplerRegistry registry) {
+        Map<String, Integer> columns = new java.util.HashMap<>();
+        boolean headerSeen = false;
+        for (JsonElement element : rows) {
+            if (!element.isJsonArray()) continue;
+            JsonArray row = element.getAsJsonArray();
+            if (!headerSeen) {
+                for (int i = 0; i < row.size(); i++) {
+                    String name = getStringCell(row.get(i));
+                    if (name != null) columns.put(name.toLowerCase(java.util.Locale.ROOT), i);
+                }
+                headerSeen = true;
+                continue;
+            }
+
+            String node1 = advancedCellString(row, columns, "cid1");
+            String node2 = advancedCellString(row, columns, "cid2");
+            double strength = advancedCellDouble(
+                    row, columns, "autocouplingstrength", PhysicsWorld.KINDA_BIG_NUMBER, variables);
+            double lockRadius = advancedCellDouble(
+                    row, columns, "autocouplinglockradius", 0.025, variables);
+            double speed = advancedCellDouble(
+                    row, columns, "autocouplingspeed", 0.3, variables);
+            double startRadius = advancedCellDouble(
+                    row, columns, "couplingstartradius", 0.0, variables);
+            String breakGroup = advancedCellString(row, columns, "breakgroup");
+            registry.registerDirect(controllerName, node1, node2, startRadius,
+                    speed, strength, lockRadius, breakGroup);
+        }
+    }
+
+    private static String advancedCellString(JsonArray row, Map<String, Integer> columns, String name) {
+        Integer index = columns.get(name);
+        return index == null || index < 0 || index >= row.size() ? null : getStringCell(row.get(index));
+    }
+
+    private static double advancedCellDouble(JsonArray row, Map<String, Integer> columns, String name,
+                                             double defaultValue, Map<String, Double> variables) {
+        Integer index = columns.get(name);
+        return index == null || index < 0 || index >= row.size()
+                ? defaultValue : getDoubleCell(row.get(index), defaultValue, variables);
     }
 
     // --- 2. Beam Parsing ---

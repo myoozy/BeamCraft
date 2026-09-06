@@ -125,6 +125,7 @@ public class JBeamAssembler {
                 if (entry.json.has("nodes")) {
                     JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry, couplerRegistry);
                 }
+                JBeamParser.parseAdvancedCouplers(entry.json, entry.variables, couplerRegistry);
             }
             // Internal camera rows define their own nodes and link to ordinary
             // nodes from any active part, so parse them after the node pass.
@@ -192,14 +193,18 @@ public class JBeamAssembler {
 
             // Pass 4: Resolve Couplers
             System.out.println("====== 🔗 Resolving Couplers ======");
-            int weldedCount = 0;
+            int attachedCount = 0;
+            for (CouplerRegistry.DirectCouplerDef direct : couplerRegistry.directDefinitions) {
+                if (addSpawnCoupler(vehicle, direct.node1, direct.node2,
+                        direct.startRadius, direct.latchSpeed, direct.strength,
+                        direct.lockRadius, direct.breakGroup)) {
+                    attachedCount++;
+                }
+            }
             for (CouplerRegistry.CouplerDef source : couplerRegistry.definitions) {
                 if (source.couplerTag != null && !source.couplerTag.isEmpty()) {
                     CouplerRegistry.CouplerDef bestTarget = null;
                     double minDistanceSq = Double.MAX_VALUE;
-                    double precompTime = 1.0;
-                    double precompRange = 0.0;
-
                     Integer sourceIdx = vehicle.nodes.nameToIndex.get(source.nodeName);
                     if (sourceIdx == null) continue;
                     double sx = vehicle.nodes.posX[sourceIdx], sy = vehicle.nodes.posY[sourceIdx], sz = vehicle.nodes.posZ[sourceIdx];
@@ -215,37 +220,21 @@ public class JBeamAssembler {
                             if (distSq <= source.startRadius * source.startRadius && distSq < minDistanceSq) {
                                 minDistanceSq = distSq;
                                 bestTarget = target;
-                                double dist = Math.sqrt(distSq);
-                                double distanceToTravel = dist - source.lockRadius;
-
-                                if (distanceToTravel > 0) {
-                                    precompTime = distanceToTravel / Math.max(source.latchSpeed, 1e-12);
-                                    precompRange = source.lockRadius;
-                                }
                             }
                         }
                     }
 
                     if (bestTarget != null) {
-                        double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
-                        vehicle.addBeam(new PhysicsSpecs.BeamSpec(
-                                BeamContainer.BEAM_NORMAL,
-                                source.nodeName, bestTarget.nodeName, null,
-                                null, 0, false,
-                                1e9f, 1e7f,
-                                PhysicsWorld.KINDA_BIG_NUMBER, (float) finalStrength,
-                                0.0f, (float) precompRange, (float) precompTime,
-                                0.0f, 0.0f, -1.0f, -1.0f,
-                                0.0f, 0.0f,
-                                -1.0f, -1.0f, -1.0f, -1.0f,
-                                0.0f, 0.0f, 0.0f,
-                                PhysicsWorld.KINDA_BIG_NUMBER
-                        ));
-                        weldedCount++;
+                        double effectiveStrength = Math.min(source.strength, bestTarget.strength);
+                        if (addSpawnCoupler(vehicle, source.nodeName, bestTarget.nodeName,
+                                source.startRadius, source.latchSpeed, effectiveStrength,
+                                source.lockRadius, null)) {
+                            attachedCount++;
+                        }
                     }
                 }
             }
-            System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
+            System.out.println("✅ Pass 4 Complete: " + attachedCount + " Couplers attached.");
 
             vehicle.finalizePhysicsSetup();
 
@@ -255,6 +244,28 @@ public class JBeamAssembler {
             t.printStackTrace();
             return false;
         }
+    }
+
+    private static boolean addSpawnCoupler(SoftBodyVehicle vehicle, String node1, String node2,
+                                           double startRadius, double latchSpeed, double strength,
+                                           double lockRadius, String breakGroup) {
+        Integer node1Idx = vehicle.nodes.nameToIndex.get(node1);
+        Integer node2Idx = vehicle.nodes.nameToIndex.get(node2);
+        if (node1Idx == null || node2Idx == null) return false;
+
+        double dx = vehicle.nodes.posX[node1Idx] - vehicle.nodes.posX[node2Idx];
+        double dy = vehicle.nodes.posY[node1Idx] - vehicle.nodes.posY[node2Idx];
+        double dz = vehicle.nodes.posZ[node1Idx] - vehicle.nodes.posZ[node2Idx];
+        double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance > startRadius) return false;
+
+        return vehicle.addCoupler(new PhysicsSpecs.CouplerSpec(
+                node1, node2,
+                (float) strength,
+                (float) startRadius,
+                (float) lockRadius,
+                (float) latchSpeed,
+                breakGroup));
     }
 
     private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext currentTransform, Map<String, Double> globalVariables) {

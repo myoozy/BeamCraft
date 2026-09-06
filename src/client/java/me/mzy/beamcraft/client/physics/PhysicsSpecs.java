@@ -65,6 +65,17 @@ public final class PhysicsSpecs {
             float deformLimitStress
     ) {}
 
+    /** A two-node coupler constraint; unlike a beam it has no elastic/plastic stiffness. */
+    public record CouplerSpec(
+            String name1,
+            String name2,
+            float strength,
+            float captureRadius,
+            float lockRadius,
+            float latchSpeed,
+            String breakGroup
+    ) {}
+
     /** A normal beam plus the BeamNG hydro actuator properties attached to it. */
     public record HydroSpec(
             BeamSpec beam,
