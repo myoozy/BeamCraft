@@ -1,7 +1,9 @@
 package me.mzy.beamcraft.client.physics.powertrain;
 
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ClutchlikeSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
@@ -10,6 +12,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_CLUTCH;
@@ -126,23 +129,23 @@ final class PowertrainCompiler {
         for (int engine = 0; engine < deviceCount; engine++) {
             if (topology.deviceType[engine] != TYPE_ENGINE) continue;
             if (topology.childCount[engine] != 1) {
-                LOGGER.warn("Combustion engine '{}' needs exactly one frictionClutch child in this MVP",
+                LOGGER.warn("Combustion engine '{}' needs exactly one clutchlike child",
                         topology.deviceName[engine]);
                 continue;
             }
-            int clutch = topology.children[topology.childStart[engine]];
-            if (topology.deviceType[clutch] != TYPE_CLUTCH) {
-                LOGGER.warn("Combustion engine '{}' is not followed by a frictionClutch",
+            int clutchlike = topology.children[topology.childStart[engine]];
+            if (!(specs.get(clutchlike) instanceof ClutchlikeSpec)) {
+                LOGGER.warn("Combustion engine '{}' is not followed by a clutchlike device",
                         topology.deviceName[engine]);
                 continue;
             }
-            UnitBuild unit = buildUnit(vehicle, specs, topology, engine, clutch);
+            UnitBuild unit = buildUnit(vehicle, specs, topology, engine, clutchlike);
             if (!unit.paths.isEmpty()) units.add(unit);
         }
-        compileUnits(data, units);
+        compileUnits(vehicle, data, units);
         if (data.engines.unitCount > 0) {
             data.diagnostic = detachedDevices == 0 ? "ready" : "ready; " + detachedDevices + " detached device(s)";
-            LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutch unit(s), {} driven wheel path(s)",
+            LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutchlike unit(s), {} driven wheel path(s)",
                     deviceCount, data.engines.unitCount, data.wheelPaths.pathWheel.length);
         } else {
             data.diagnostic = "no supported engine-to-wheel path";
@@ -204,31 +207,37 @@ final class PowertrainCompiler {
     // ---------------------------------------------------------------- unit compilation
 
     private static UnitBuild buildUnit(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
-                                       PowertrainTopologyContainer topology, int engine, int clutch) {
+                                       PowertrainTopologyContainer topology, int engine, int clutchlike) {
         CombustionEngineSpec engineSpec = (CombustionEngineSpec) specs.get(engine);
-        FrictionClutchSpec clutchSpec = (FrictionClutchSpec) specs.get(clutch);
+        ClutchlikeSpec clutchlikeSpec = (ClutchlikeSpec) specs.get(clutchlike);
+        FrictionClutchSpec clutchSpec = clutchlikeSpec instanceof FrictionClutchSpec c ? c : null;
+        TorqueConverterSpec converterSpec = clutchlikeSpec instanceof TorqueConverterSpec c ? c : null;
         List<PathBuild> paths = new ArrayList<>();
         List<ReactorBuild> reactors = new ArrayList<>();
         boolean[] visiting = new boolean[topology.deviceCount];
-        for (int i = 0; i < topology.childCount[clutch]; i++) {
+        for (int i = 0; i < topology.childCount[clutchlike]; i++) {
             collectPaths(vehicle, specs, topology,
-                    topology.children[topology.childStart[clutch] + i], 1.0f, paths, reactors, visiting);
+                    topology.children[topology.childStart[clutchlike] + i], 1.0f, paths, reactors, visiting);
         }
 
         float maxTorque = 0.0f;
         for (TorquePoint point : engineSpec.torqueCurve()) maxTorque = Math.max(maxTorque, (float) point.torque());
-        float capacity = (float) clutchSpec.lockTorque();
-        if (capacity <= 0.0f) capacity = Math.max(1.0f, maxTorque * 1.25f);
-        float spring = (float) clutchSpec.lockSpring();
-        float springScale = (float) (clutchSpec.lockSpringCoef() * clutchSpec.clutchStiffness());
-        if (spring <= 0.0f) spring = capacity / Math.max(1e-3f, (float) clutchSpec.clutchFreePlay());
-        spring *= Math.max(0.0f, springScale);
+        float capacity = 0.0f;
+        float spring = 0.0f;
+        if (clutchSpec != null) {
+            capacity = (float) clutchSpec.lockTorque();
+            if (capacity <= 0.0f) capacity = Math.max(1.0f, maxTorque * 1.25f);
+            spring = (float) clutchSpec.lockSpring();
+            float springScale = (float) (clutchSpec.lockSpringCoef() * clutchSpec.clutchStiffness());
+            if (spring <= 0.0f) spring = capacity / Math.max(1e-3f, (float) clutchSpec.clutchFreePlay());
+            spring *= Math.max(0.0f, springScale);
+        }
 
-        int gearboxDevice = findGearboxDevice(topology, clutch);
+        int gearboxDevice = findGearboxDevice(topology, clutchlike);
         GearboxSpec gearbox = gearboxDevice >= 0 ? (GearboxSpec) specs.get(gearboxDevice) : null;
         List<Integer> reactions = resolveNodes(vehicle, engineSpec.torqueReactionNodes());
-        return new UnitBuild(engine, clutch, engineSpec, clutchSpec, capacity, spring, paths, reactions, reactors,
-                gearboxDevice, gearbox);
+        return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec,
+                capacity, spring, maxTorque, paths, reactions, reactors, gearboxDevice, gearbox);
     }
 
     /**
@@ -281,12 +290,14 @@ final class PowertrainCompiler {
         visiting[device] = false;
     }
 
-    private static void compileUnits(PowertrainData data, List<UnitBuild> units) {
+    private static void compileUnits(SoftBodyVehicle vehicle, PowertrainData data, List<UnitBuild> units) {
         CombustionEngineContainer engines = data.engines;
         FrictionClutchContainer clutches = data.clutches;
         DrivenWheelPathContainer wheelPaths = data.wheelPaths;
         TorqueReactionContainer reactions = data.reactions;
         GearboxContainer gearboxes = data.gearboxes;
+        ClutchlikeContainer clutchlikes = data.clutchlikes;
+        TorqueConverterContainer torqueConverters = data.torqueConverters;
         PowertrainTopologyContainer topology = data.topology;
 
         int n = units.size();
@@ -301,6 +312,8 @@ final class PowertrainCompiler {
         }
         engines.allocate(n, curves);
         clutches.allocate(n);
+        clutchlikes.allocate(n);
+        torqueConverters.allocate(n);
         wheelPaths.allocate(n, paths);
         reactions.allocate(n, reactionTotal, reactors);
         gearboxes.allocate(n, Math.max(1, gearSlots));
@@ -309,8 +322,10 @@ final class PowertrainCompiler {
         for (int i = 0; i < n; i++) {
             UnitBuild unit = units.get(i);
             CombustionEngineSpec engine = unit.engine;
-            engines.engineDevice[i] = unit.engineDevice; engines.clutchDevice[i] = unit.clutchDevice;
-            engines.engineInertia[i] = Math.max(1e-5f, (float) engine.inertia());
+            engines.engineDevice[i] = unit.engineDevice; engines.clutchDevice[i] = unit.clutchlikeDevice;
+            float additionalInertia = unit.converter != null
+                    ? Math.max(0.0f, (float) unit.converter.additionalEngineInertia()) : 0.0f;
+            engines.engineInertia[i] = Math.max(1e-5f, (float) engine.inertia() + additionalInertia);
             engines.idleAV[i] = Math.max(0.0f, (float) engine.idleRPM()) * PowertrainSystem.RPM_TO_AV;
             engines.engineAV[i] = engines.idleAV[i];
             engines.engineFriction[i] = Math.max(0.0f, (float) engine.friction());
@@ -337,8 +352,34 @@ final class PowertrainCompiler {
             engines.sparkEnabled[i] = true; engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
             engines.limiterCutRemaining[i] = 0.0f;
-            clutches.clutchCapacity[i] = unit.capacity; clutches.clutchSpring[i] = unit.spring;
-            clutches.clutchDampingRatio[i] = Math.max(0.0f, (float) unit.clutch.lockDampRatio());
+            clutchlikes.device[i] = unit.clutchlikeDevice;
+            if (unit.clutch != null) {
+                clutchlikes.type[i] = ClutchlikeContainer.TYPE_FRICTION_CLUTCH;
+                clutches.clutchCapacity[i] = unit.capacity; clutches.clutchSpring[i] = unit.spring;
+                clutches.clutchDampingRatio[i] = Math.max(0.0f, (float) unit.clutch.lockDampRatio());
+            } else {
+                clutchlikes.type[i] = ClutchlikeContainer.TYPE_TORQUE_CONVERTER;
+                TorqueConverterSpec converter = unit.converter;
+                torqueConverters.couplingAVRatio[i] = Math.max(0.05f, (float) converter.couplingAVRatio());
+                torqueConverters.stallTorqueRatio[i] = Math.max(1.0f, (float) converter.stallTorqueRatio());
+                torqueConverters.converterStiffness[i] = Math.max(0.0f, (float) converter.converterStiffness());
+                torqueConverters.converterDiameter[i] = Math.max(0.0f, (float) converter.converterDiameter());
+                float configuredLimit = Math.max(0.0f, (float) converter.converterTorque());
+                torqueConverters.converterTorqueLimit[i] = configuredLimit > 0.0f ? configuredLimit
+                        : Math.max(1.0f, unit.maxTorque * 1.25f
+                        + (float) engine.maxRPM() * engines.engineInertia[i] * (float) Math.PI / 30.0f);
+                torqueConverters.additionalEngineInertia[i] = additionalInertia;
+                torqueConverters.lockupCapacity[i] = Math.max(0.0f, (float) converter.lockupClutchTorque());
+                float lockupSpring = (float) converter.lockupClutchSpring();
+                if (lockupSpring <= 0.0f) {
+                    lockupSpring = torqueConverters.lockupCapacity[i] / 0.125f;
+                }
+                torqueConverters.lockupSpring[i] = Math.max(0.0f, lockupSpring);
+                torqueConverters.lockupDampingRatio[i] = Math.max(0.0f, (float) converter.lockupClutchDampRatio());
+                String signalName = converter.lockupClutchRatioName();
+                if (signalName == null || signalName.isBlank()) signalName = ElectricSignals.LOCKUP_CLUTCH_RATIO;
+                torqueConverters.lockupSignalId[i] = vehicle.electrics.register(signalName);
+            }
 
             // Gearbox runtime state (implicit single 1.0 ratio when the unit has no gearbox).
             boolean realGearbox = unit.gearbox != null && !unit.gearbox.gearRatios().isEmpty();
@@ -495,6 +536,7 @@ final class PowertrainCompiler {
         return switch (spec) {
             case CombustionEngineSpec ignored -> PowertrainTopologyContainer.TYPE_ENGINE;
             case FrictionClutchSpec ignored -> PowertrainTopologyContainer.TYPE_CLUTCH;
+            case TorqueConverterSpec ignored -> PowertrainTopologyContainer.TYPE_TORQUE_CONVERTER;
             case GearboxSpec ignored -> PowertrainTopologyContainer.TYPE_GEARBOX;
             case ShaftSpec ignored -> PowertrainTopologyContainer.TYPE_SHAFT;
             case DifferentialSpec ignored -> PowertrainTopologyContainer.TYPE_DIFFERENTIAL;
@@ -530,8 +572,9 @@ final class PowertrainCompiler {
     private record ReactorBuild(float gain, List<Integer> nodes) {
     }
 
-    private record UnitBuild(int engineDevice, int clutchDevice, CombustionEngineSpec engine,
-                             FrictionClutchSpec clutch, float capacity, float spring,
+    private record UnitBuild(int engineDevice, int clutchlikeDevice, CombustionEngineSpec engine,
+                             FrictionClutchSpec clutch, TorqueConverterSpec converter,
+                             float capacity, float spring, float maxTorque,
                              List<PathBuild> paths, List<Integer> reactions, List<ReactorBuild> reactors,
                              int gearboxDevice, GearboxSpec gearbox) {
     }

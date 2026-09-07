@@ -17,6 +17,12 @@ public final class PowertrainData {
     /** Friction clutches (same unit ordering as {@link #engines}). */
     public final FrictionClutchContainer clutches = new FrictionClutchContainer();
 
+    /** Concrete clutch-like device selected for each compiled engine unit. */
+    public final ClutchlikeContainer clutchlikes = new ClutchlikeContainer();
+
+    /** Torque-converter parameters/state, indexed in the same order as engines. */
+    public final TorqueConverterContainer torqueConverters = new TorqueConverterContainer();
+
     /** Rigid driven-wheel paths out of each unit. */
     public final DrivenWheelPathContainer wheelPaths = new DrivenWheelPathContainer();
 
@@ -43,6 +49,8 @@ public final class PowertrainData {
         topology.clear();
         engines.clear();
         clutches.clear();
+        clutchlikes.clear();
+        torqueConverters.clear();
         wheelPaths.clear();
         reactions.clear();
         gearboxes.clear();

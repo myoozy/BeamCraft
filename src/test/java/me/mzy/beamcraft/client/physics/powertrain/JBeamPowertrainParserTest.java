@@ -12,6 +12,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 import org.junit.jupiter.api.Test;
@@ -386,6 +387,60 @@ class JBeamPowertrainParserTest {
         assertEquals(1.0, clutch.lockSpringCoef(), 1e-6);   // BeamNG 默认
         assertEquals(1.0, clutch.clutchStiffness(), 1e-6);  // BeamNG 默认
         assertEquals(0.0, clutch.lockTorque(), 1e-6);       // 未给出 → 0（运行时由父引擎派生）
+    }
+
+    @Test
+    void torqueConverterParsesHydrodynamicAndLockupFields() {
+        List<DeviceSpec> specs = parse("""
+                {
+                  "powertrain": [
+                    ["type","name","inputName","inputIndex"],
+                    ["torqueConverter","torqueConverter","mainEngine",1]
+                  ],
+                  "torqueConverter": {
+                    "converterDiameter": 0.311,
+                    "converterStiffness": 11,
+                    "couplingAVRatio": 0.92,
+                    "stallTorqueRatio": 1.77,
+                    "lockupClutchTorque": 825,
+                    "lockupClutchRatioName": "customLockup",
+                    "additionalEngineInertia": 0.16
+                  }
+                }
+                """);
+
+        TorqueConverterSpec converter = assertInstanceOf(TorqueConverterSpec.class, specs.get(0));
+        assertEquals(0.311, converter.converterDiameter(), 1e-6);
+        assertEquals(11.0, converter.converterStiffness(), 1e-6);
+        assertEquals(0.92, converter.couplingAVRatio(), 1e-6);
+        assertEquals(1.77, converter.stallTorqueRatio(), 1e-6);
+        assertEquals(825.0, converter.lockupClutchTorque(), 1e-6);
+        assertEquals("customLockup", converter.lockupClutchRatioName());
+        assertEquals(0.16, converter.additionalEngineInertia(), 1e-6);
+        assertEquals(-1.0, converter.lockupClutchSpring(), 1e-6);
+        assertEquals(0.15, converter.lockupClutchDampRatio(), 1e-6);
+    }
+
+    @Test
+    void converterOnlyPartProducesNamedDevicePatch() {
+        List<DeviceSpec> specs = parse("""
+                {
+                  "torqueConverter": {
+                    "converterDiameter": 0.322,
+                    "converterStiffness": 12,
+                    "lockupClutchTorque": 600
+                  }
+                }
+                """);
+
+        DevicePatchSpec patch = assertInstanceOf(DevicePatchSpec.class, specs.get(0));
+        assertEquals("torqueConverter", patch.name());
+        assertTrue(patch.valueModifiers().stream().anyMatch(
+                modifier -> modifier.targetKey().equals("converterDiameter")
+                        && Math.abs(modifier.value() - 0.322) < 1e-6));
+        assertTrue(patch.valueModifiers().stream().anyMatch(
+                modifier -> modifier.targetKey().equals("lockupClutchTorque")
+                        && Math.abs(modifier.value() - 600.0) < 1e-6));
     }
 
     // ---------------------------------------------------------------- 真实 Sunburst 风格数据

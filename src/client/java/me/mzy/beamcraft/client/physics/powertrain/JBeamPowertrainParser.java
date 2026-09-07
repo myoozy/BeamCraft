@@ -13,6 +13,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 
@@ -51,7 +52,8 @@ public final class JBeamPowertrainParser {
 
     /** 支持的变速箱类型（共享同一 gearRatios/friction/torqueLossCoef 结构）。 */
     private static final List<String> GEARBOX_TYPES =
-            List.of("manualgearbox", "gearbox", "automaticgearbox", "sequentialgearbox", "dctgearbox");
+            List.of("manualgearbox", "gearbox", "automaticgearbox", "sequentialgearbox", "dctgearbox",
+                    "rangebox");
 
     /**
      * 解析单个 part 的 powertrain。没有 powertrain 段时返回空列表。
@@ -126,7 +128,10 @@ public final class JBeamPowertrainParser {
             "revLimiterCutTime", "revLimiterMaxRPMDrop", "revLimiterRPMChange",
             "lockTorque", "lockSpring", "lockSpringCoef", "lockDampRatio",
             "clutchFreePlay", "clutchStiffness", "gearChangeTime", "maxGearChangeTime",
-            "dctClutchTime", "idleControllerP", "maxIdleThrottle");
+            "dctClutchTime", "idleControllerP", "maxIdleThrottle",
+            "couplingAVRatio", "stallTorqueRatio", "converterStiffness", "converterDiameter",
+            "converterTorque", "additionalEngineInertia", "lockupClutchTorque",
+            "lockupClutchSpring", "lockupClutchDampRatio");
 
     // ---------------------------------------------------------------- row 解析
 
@@ -162,6 +167,8 @@ public final class JBeamPowertrainParser {
                 return combustionEngine(type, name, inputName, inputIndex, cfg, vars);
             case "frictionclutch":
                 return frictionClutch(type, name, inputName, inputIndex, cfg, vars);
+            case "torqueconverter":
+                return torqueConverter(type, name, inputName, inputIndex, cfg, vars);
             default:
                 if (GEARBOX_TYPES.contains(lower)) {
                     return gearbox(type, name, inputName, inputIndex, cfg, vars);
@@ -227,15 +234,37 @@ public final class JBeamPowertrainParser {
         );
     }
 
+    private static TorqueConverterSpec torqueConverter(String type, String name, String inputName, int inputIndex,
+                                                       JsonObject cfg, Map<String, Double> vars) {
+        return new TorqueConverterSpec(
+                type, name, inputName, inputIndex,
+                d(cfg, "couplingAVRatio", 0.85, vars),
+                d(cfg, "stallTorqueRatio", 2.0, vars),
+                d(cfg, "converterStiffness", 10.0, vars),
+                d(cfg, "converterDiameter", 0.30, vars),
+                d(cfg, "converterTorque", 0.0, vars),
+                d(cfg, "additionalEngineInertia", 0.0, vars),
+                s(cfg, "lockupClutchRatioName", "lockupClutchRatio"),
+                d(cfg, "lockupClutchTorque", 100.0, vars),
+                d(cfg, "lockupClutchSpring", -1.0, vars),
+                d(cfg, "lockupClutchDampRatio", 0.15, vars),
+                valueModifiers(cfg, vars)
+        );
+    }
+
     private static GearboxSpec gearbox(String type, String name, String inputName, int inputIndex,
                                        JsonObject cfg, Map<String, Double> vars) {
         double shiftTime = JBeamParser.getFirstDoubleSafe(
                 cfg, -1.0, vars, "gearChangeTime", "maxGearChangeTime", "dctClutchTime");
         if (shiftTime <= 0.0) shiftTime = defaultShiftTime(type);
+        // Range boxes are a second gearbox in the path. BeamCraft currently has one
+        // driver-controlled gearbox per engine unit, so keep a range box in its first
+        // positive (high-range) ratio while still letting topology traversal pass it.
+        boolean fixedFirstGear = b(cfg, "fixedFirstGear", type.equalsIgnoreCase("rangebox"));
         return new GearboxSpec(
                 type, name, inputName, inputIndex,
                 JBeamParser.getDoubleListSafe(cfg, "gearRatios", vars),
-                b(cfg, "fixedFirstGear", false),
+                fixedFirstGear,
                 d(cfg, "friction", 0.0, vars),
                 d(cfg, "dynamicFriction", 0.0, vars),
                 d(cfg, "torqueLossCoef", 0.0, vars),

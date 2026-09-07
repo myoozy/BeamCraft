@@ -11,8 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * BeamNG-compatible rigid powertrain forest with a single elastic boundary at each
- * friction clutch.
+ * BeamNG-compatible rigid powertrain forest with one compliant {@code clutchlike}
+ * boundary (friction clutch or torque converter) downstream of each combustion engine.
  *
  * <p>This class is orchestration, control and debug only. All hot data lives in the flat
  * SoA containers of a {@link PowertrainData} (exposed here for the substep and for HUD
@@ -52,6 +52,8 @@ public final class PowertrainSystem {
     public final PowertrainTopologyContainer topology = data.topology;
     public final CombustionEngineContainer engines = data.engines;
     public final FrictionClutchContainer clutches = data.clutches;
+    public final ClutchlikeContainer clutchlikes = data.clutchlikes;
+    public final TorqueConverterContainer torqueConverters = data.torqueConverters;
     public final DrivenWheelPathContainer wheelPaths = data.wheelPaths;
     public final TorqueReactionContainer reactions = data.reactions;
     public final GearboxContainer gearboxes = data.gearboxes;
@@ -64,6 +66,7 @@ public final class PowertrainSystem {
     private final int starterSignalId;
     private final int shiftUpSignalId;
     private final int shiftDownSignalId;
+    private final int defaultLockupSignalId;
     private long lastShiftUpEvent;
     private long lastShiftDownEvent;
     private volatile float debugEngineRPM;
@@ -90,6 +93,7 @@ public final class PowertrainSystem {
         starterSignalId = vehicle.electrics.register(ElectricSignals.STARTER_INPUT);
         shiftUpSignalId = vehicle.electrics.register(ElectricSignals.SHIFT_UP_EVENT);
         shiftDownSignalId = vehicle.electrics.register(ElectricSignals.SHIFT_DOWN_EVENT);
+        defaultLockupSignalId = vehicle.electrics.register(ElectricSignals.LOCKUP_CLUTCH_RATIO);
     }
 
     public void addSpecs(List<DeviceSpec> specs) {
@@ -140,6 +144,19 @@ public final class PowertrainSystem {
     /** Requests a downshift on every compiled gearbox (toward reverse, else no-op). */
     public void requestShiftDown() {
         vehicle.electrics.set(shiftDownSignalId, vehicle.electrics.get(shiftDownSignalId) + 1.0);
+    }
+
+    /** Writes the default BeamNG-compatible torque-converter lock-up command (0 = open, 1 = locked). */
+    public void setTorqueConverterLockup(float ratio) {
+        vehicle.electrics.set(defaultLockupSignalId, Math.clamp(ratio, 0.0f, 1.0f));
+    }
+
+    /** Writes a converter-specific lock-up signal selected by {@code lockupClutchRatioName}. */
+    public void setTorqueConverterLockup(String signalName, float ratio) {
+        String resolved = signalName == null || signalName.isBlank()
+                ? ElectricSignals.LOCKUP_CLUTCH_RATIO : signalName;
+        int signalId = vehicle.electrics.register(resolved);
+        vehicle.electrics.set(signalId, Math.clamp(ratio, 0.0f, 1.0f));
     }
 
     /** Adds wheel and reaction forces for the current substep. */
@@ -211,7 +228,8 @@ public final class PowertrainSystem {
             // and all downstream torsion reactions.
             float ratioFactor = 0.0f;
 
-            float clutchTorque = 0.0f;
+            float couplerInputTorque = 0.0f;
+            float couplerOutputTorque = 0.0f;
             if (Math.abs(activeRatio) > 1e-6f) {
                 float pathBaseRatio = gearboxes.pathBaseRatio[unit];
                 ratioFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
@@ -230,23 +248,48 @@ public final class PowertrainSystem {
                 }
                 if (compliance > 1e-9f) {
                     float drivelineInertia = 1.0f / compliance;
-                    ImplicitClutchSolver.solveInto(
-                            dt, engines.engineAV[unit] - drivelineAV, engines.engineInertia[unit], drivelineInertia,
-                            clutches.clutchSpring[unit], clutches.clutchDampingRatio[unit], clutches.clutchCapacity[unit],
-                            engagement, clutches.clutchTorque, clutches.clutchAngle, unit);
-                    clutchTorque = clutches.clutchTorque[unit];
-                    engines.engineAV[unit] -= dt * clutchTorque / engines.engineInertia[unit];
+                    if (clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER) {
+                        float lockupRatio = Math.clamp(
+                                (float) input.get(torqueConverters.lockupSignalId[unit]), 0.0f, 1.0f);
+                        TorqueConverterSolver.solveInto(
+                                dt, engines.engineAV[unit], drivelineAV,
+                                engines.engineInertia[unit], drivelineInertia,
+                                torqueConverters.couplingAVRatio[unit], torqueConverters.stallTorqueRatio[unit],
+                                torqueConverters.converterStiffness[unit], torqueConverters.converterDiameter[unit],
+                                torqueConverters.converterTorqueLimit[unit], lockupRatio,
+                                torqueConverters, unit);
+                        couplerInputTorque = torqueConverters.inputTorque[unit];
+                        couplerOutputTorque = torqueConverters.outputTorque[unit];
+                    } else {
+                        ImplicitClutchSolver.solveInto(
+                                dt, engines.engineAV[unit] - drivelineAV,
+                                engines.engineInertia[unit], drivelineInertia,
+                                clutches.clutchSpring[unit], clutches.clutchDampingRatio[unit],
+                                clutches.clutchCapacity[unit], engagement,
+                                clutches.clutchTorque, clutches.clutchAngle, unit);
+                        couplerInputTorque = clutches.clutchTorque[unit];
+                        couplerOutputTorque = couplerInputTorque;
+                    }
+                    engines.engineAV[unit] -= dt * couplerInputTorque / engines.engineInertia[unit];
                     for (int p = pStart; p < pEnd; p++) {
                         float gain = wheelPaths.pathGain[p] * ratioFactor;
-                        vehicle.wheels.applyDriveTorqueAndReaction(wheelPaths.pathWheel[p], clutchTorque * gain);
+                        vehicle.wheels.applyDriveTorqueAndReaction(
+                                wheelPaths.pathWheel[p], couplerOutputTorque * gain);
                     }
                 } else {
                     clutches.clutchTorque[unit] = 0.0f;
+                    torqueConverters.inputTorque[unit] = 0.0f;
+                    torqueConverters.outputTorque[unit] = 0.0f;
+                    torqueConverters.lockupTorque[unit] = 0.0f;
                 }
             } else {
                 // Neutral / mid-shift: no torque path, clutch released.
                 clutches.clutchTorque[unit] = 0.0f;
                 clutches.clutchAngle[unit] = 0.0f;
+                torqueConverters.inputTorque[unit] = 0.0f;
+                torqueConverters.outputTorque[unit] = 0.0f;
+                torqueConverters.lockupTorque[unit] = 0.0f;
+                torqueConverters.lockupAngle[unit] = 0.0f;
             }
             if (engines.engineAV[unit] < 0.0f) engines.engineAV[unit] = 0.0f;
 
@@ -255,16 +298,17 @@ public final class PowertrainSystem {
             // on its own axis. Keeping those axes separate matters on longitudinal
             // layouts where the crank and wheel axes are perpendicular.
             applyReactionTorque(reactions.reactionStart[unit], reactions.reactionCount[unit],
-                    externalTorque - clutchTorque);
+                    externalTorque - couplerInputTorque);
             int rEnd = reactions.reactorStart[unit] + reactions.reactorCount[unit];
             for (int reactor = reactions.reactorStart[unit]; reactor < rEnd; reactor++) {
                 applyReactionTorque(reactions.reactorNodeStart[reactor], reactions.reactorNodeCount[reactor],
-                        clutchTorque * reactions.reactorGain[reactor] * ratioFactor);
+                        couplerOutputTorque * reactions.reactorGain[reactor] * ratioFactor);
             }
 
             if (unit == 0) {
                 debugEngineRPM = engines.engineAV[0] * AV_TO_RPM;
-                debugClutchTorque = clutches.clutchTorque[0];
+                debugClutchTorque = clutchlikes.type[0] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER
+                        ? torqueConverters.outputTorque[0] : clutches.clutchTorque[0];
                 debugCombustionTorque = combustionTorque;
                 debugTorqueCurveCount = engines.curveCount[0];
                 debugActualThrottle = actualThrottle;
@@ -323,20 +367,30 @@ public final class PowertrainSystem {
         }
     }
 
-    /** BeamNG-style positive-error idle controller with a current-speed loss feedforward. */
+    /** BeamNG-style positive-error idle controller with simplified load feedforward. */
     private float idleControllerOutput(int unit, boolean running) {
         float idle = engines.idleAV[unit];
         float engineAV = Math.max(0.0f, engines.engineAV[unit]);
         float torque = interpolateTorque(unit, engineAV * AV_TO_RPM);
         float loss = engines.engineFriction[unit]
                 + engines.engineDynamicFriction[unit] * engineAV;
+        // BeamCraft's torque curve is scaled linearly by throttle and has no BeamNG-style
+        // intake/throttle map. Compensate the previous substep's converter pump reaction
+        // explicitly so a converter with valid JBeam parameters cannot overwhelm the
+        // friction-only idle top screw. A one-substep delay is negligible at physics rate.
+        float converterLoad = clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER
+                ? Math.max(0.0f, torqueConverters.inputTorque[unit])
+                : 0.0f;
         float feedforward = torque > 1e-3f
-                ? Math.clamp(loss / torque + 0.05f, 0.0f, 1.0f)
-                : (loss > 1e-3f ? 1.0f : 0.0f);
+                ? Math.clamp((loss + converterLoad) / torque + 0.05f, 0.0f, 1.0f)
+                : (loss + converterLoad > 1e-3f ? 1.0f : 0.0f);
         engines.idleLossThrottle[unit] = feedforward;
         if (idle <= 1e-6f || !running) return feedforward;
         float positiveError = Math.max(idle - engines.engineAV[unit], 0.0f);
-        if (positiveError <= 0.0f) return 0.0f;
+        // The top screw must still cover steady losses at the idle target. Returning zero
+        // here creates a sawtooth idle and gives a newly engaged converter a free braking
+        // substep before any idle torque is produced.
+        if (positiveError <= 0.0f) return feedforward;
         float proportional = Math.min(positiveError * engines.idleControllerP[unit],
                 engines.maxIdleThrottle[unit]);
         return Math.max(feedforward, proportional);
@@ -434,6 +488,10 @@ public final class PowertrainSystem {
             engines.engineAV[i] = engines.idleAV[i];
             clutches.clutchAngle[i] = 0.0f;
             clutches.clutchTorque[i] = 0.0f;
+            torqueConverters.lockupAngle[i] = 0.0f;
+            torqueConverters.lockupTorque[i] = 0.0f;
+            torqueConverters.inputTorque[i] = 0.0f;
+            torqueConverters.outputTorque[i] = 0.0f;
             engines.sparkEnabled[i] = true;
             engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
@@ -455,6 +513,8 @@ public final class PowertrainSystem {
         vehicle.electrics.set(starterSignalId, 0.0);
         vehicle.electrics.set(shiftUpSignalId, 0.0);
         vehicle.electrics.set(shiftDownSignalId, 0.0);
+        vehicle.electrics.set(defaultLockupSignalId, 0.0);
+        for (int signalId : torqueConverters.lockupSignalId) vehicle.electrics.set(signalId, 0.0);
         debugEngineRPM = engines.unitCount > 0 ? engines.engineAV[0] * AV_TO_RPM : 0.0f;
         debugThrottle = 0.0f;
         debugActualThrottle = engines.unitCount > 0 ? engines.actualThrottle[0] : 0.0f;

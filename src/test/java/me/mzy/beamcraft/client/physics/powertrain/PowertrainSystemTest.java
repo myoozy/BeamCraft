@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client.physics.powertrain;
 
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.*;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,49 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PowertrainSystemTest {
+    @Test
+    void compilesTorqueConverterAsClutchlikeAheadOfAutomaticGearbox() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.wheels.count = 2;
+        vehicle.wheels.nameToIndex.put("FL", 0);
+        vehicle.wheels.nameToIndex.put("FR", 1);
+        PowertrainSystem system = vehicle.powertrain;
+        system.addSpecs(List.of(new DevicePatchSpec("converter", List.of(
+                new ValueModifier("converterDiameter", '=', 0.32)))));
+        system.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 800, 7000, 1, 0.01, 2,
+                        List.of(new TorquePoint(1000, 100), new TorquePoint(5000, 200)), List.of(), List.of()),
+                new TorqueConverterSpec("torqueConverter", "converter", "engine", 1,
+                        0.9, 1.8, 10, 0.31, 0, 0.15,
+                        ElectricSignals.LOCKUP_CLUTCH_RATIO, 500, -1, 0.15, List.of()),
+                new GearboxSpec("automaticGearbox", "gearbox", "converter", 1,
+                        List.of(-3.0, 0.0, 4.0, 2.0), false, 0, 0, 0, List.of()),
+                new DifferentialSpec("differential", "diff", "gearbox", 1,
+                        4.0, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "right", "diff", 2, 1, "FR", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+
+        system.finalizeSetup();
+
+        assertEquals(1, system.engines.unitCount);
+        assertEquals(ClutchlikeContainer.TYPE_TORQUE_CONVERTER, system.clutchlikes.type[0]);
+        assertEquals(PowertrainTopologyContainer.TYPE_TORQUE_CONVERTER, system.topology.deviceType[1]);
+        assertEquals("automaticGearbox", system.gearboxes.gearboxType[0]);
+        assertEquals(0.35f, system.engines.engineInertia[0], 1e-6f);
+        assertEquals(500.0f, system.torqueConverters.lockupCapacity[0], 1e-6f);
+        assertEquals(4000.0f, system.torqueConverters.lockupSpring[0], 1e-6f);
+        assertEquals(0.32f, system.torqueConverters.converterDiameter[0], 1e-6f);
+        assertEquals("ready", system.diagnostic());
+
+        system.setTorqueConverterLockup(0.75f);
+        int signal = vehicle.electrics.register(ElectricSignals.LOCKUP_CLUTCH_RATIO);
+        assertEquals(0.75, vehicle.electrics.get(signal), 1e-6);
+    }
+
     @Test
     void separateFinalDrivePartOverridesDifferentialRatioEvenWhenLoadedFirst() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);

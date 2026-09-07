@@ -9,6 +9,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutch
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -100,6 +101,40 @@ class PowertrainSolveTest {
                 new TorquePoint(6000, 210), new TorquePoint(6500, 199), new TorquePoint(7000, 186),
                 new TorquePoint(7500, 168), new TorquePoint(8000, 149), new TorquePoint(8500, 135),
                 new TorquePoint(9000, 122), new TorquePoint(9500, 108), new TorquePoint(10000, 90));
+    }
+
+    @Test
+    void torqueConverterTransfersStoredEngineSpeedThroughAutomaticGearbox() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        vehicle.powertrain.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "mainEngine", "dummy", 1,
+                        0.2, IDLE_RPM, 7000, 0, 0, 0,
+                        List.of(new TorquePoint(0, 0), new TorquePoint(7000, 0)), List.of(), List.of()),
+                new TorqueConverterSpec("torqueConverter", "converter", "mainEngine", 1,
+                        0.9, 1.8, 10, 0.31, 1000, 0.1,
+                        "lockupClutchRatio", 500, -1, 0.15, List.of()),
+                new GearboxSpec("automaticGearbox", "gearbox", "converter", 1,
+                        List.of(3.0), true, 0, 0, 0, List.of()),
+                new DifferentialSpec("differential", "diff", "gearbox", 1,
+                        3.9, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "right", "diff", 2, 1, "FR", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+        vehicle.powertrain.finalizeSetup();
+        vehicle.powertrain.engines.engineAV[0] = 200.0f;
+
+        vehicle.powertrain.solve(DT);
+        float engineAfterCoupling = vehicle.powertrain.engines.engineAV[0];
+        integrate(vehicle, DT);
+
+        assertTrue(vehicle.powertrain.torqueConverters.inputTorque[0] > 0.0f);
+        assertTrue(vehicle.powertrain.torqueConverters.outputTorque[0]
+                > vehicle.powertrain.torqueConverters.inputTorque[0]);
+        assertTrue(engineAfterCoupling < 200.0f);
+        assertTrue(vehicle.wheels.getAngularVelocity(0) > 0.0f);
+        assertTrue(vehicle.wheels.getAngularVelocity(1) > 0.0f);
     }
 
     /** Selects first gear directly when a test specifically exercises the connected driveline. */

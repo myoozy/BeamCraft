@@ -10,6 +10,8 @@ public final class ElectricSignals {
     public static final String STARTER_INPUT = "starter_input";
     public static final String SHIFT_UP_EVENT = "shift_up_event";
     public static final String SHIFT_DOWN_EVENT = "shift_down_event";
+    /** BeamNG-compatible 0..1 torque-converter lock-up command. */
+    public static final String LOCKUP_CLUTCH_RATIO = "lockupClutchRatio";
 
     private ElectricSignals() {
     }

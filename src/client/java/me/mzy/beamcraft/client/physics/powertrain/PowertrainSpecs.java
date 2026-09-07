@@ -32,13 +32,18 @@ public final class PowertrainSpecs {
      * 在所有实现上直接可用。
      */
     public sealed interface DeviceSpec
-            permits CombustionEngineSpec, FrictionClutchSpec, GearboxSpec,
+            permits CombustionEngineSpec, ClutchlikeSpec, GearboxSpec,
                     ShaftSpec, TorsionReactorSpec, DifferentialSpec, DevicePatchSpec, UnsupportedConfig {
         String type();
         String name();
         String inputName();
         int inputIndex();
         List<ValueModifier> valueModifiers();
+    }
+
+    /** A valid compliant boundary immediately downstream of a combustion engine. */
+    public sealed interface ClutchlikeSpec extends DeviceSpec
+            permits FrictionClutchSpec, TorqueConverterSpec {
     }
 
     /**
@@ -148,8 +153,31 @@ public final class PowertrainSpecs {
             double clutchFreePlay,
             double clutchStiffness,
             List<ValueModifier> valueModifiers
-    ) implements DeviceSpec {
+    ) implements ClutchlikeSpec {
         public FrictionClutchSpec {
+            valueModifiers = List.copyOf(valueModifiers);
+        }
+    }
+
+    /** Hydrodynamic {@code torqueConverter}, including its externally commanded lock-up clutch. */
+    public record TorqueConverterSpec(
+            String type,
+            String name,
+            String inputName,
+            int inputIndex,
+            double couplingAVRatio,
+            double stallTorqueRatio,
+            double converterStiffness,
+            double converterDiameter,
+            double converterTorque,
+            double additionalEngineInertia,
+            String lockupClutchRatioName,
+            double lockupClutchTorque,
+            double lockupClutchSpring,
+            double lockupClutchDampRatio,
+            List<ValueModifier> valueModifiers
+    ) implements ClutchlikeSpec {
+        public TorqueConverterSpec {
             valueModifiers = List.copyOf(valueModifiers);
         }
     }

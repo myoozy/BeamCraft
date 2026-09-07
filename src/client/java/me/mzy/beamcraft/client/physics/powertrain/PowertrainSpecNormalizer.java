@@ -105,6 +105,28 @@ final class PowertrainSpecNormalizer {
             return new FrictionClutchSpec(c.type(), c.name(), c.inputName(), c.inputIndex(), capacity, spring,
                     coefficient, damping, freePlay, stiffness, List.of());
         }
+        if (spec instanceof TorqueConverterSpec c) {
+            double coupling = c.couplingAVRatio(), stall = c.stallTorqueRatio();
+            double stiffness = c.converterStiffness(), diameter = c.converterDiameter();
+            double limit = c.converterTorque(), extraInertia = c.additionalEngineInertia();
+            double lockCapacity = c.lockupClutchTorque(), lockSpring = c.lockupClutchSpring();
+            double lockDamping = c.lockupClutchDampRatio();
+            switch (key) {
+                case "couplingAVRatio" -> coupling = modify(coupling, modifier);
+                case "stallTorqueRatio" -> stall = modify(stall, modifier);
+                case "converterStiffness" -> stiffness = modify(stiffness, modifier);
+                case "converterDiameter" -> diameter = modify(diameter, modifier);
+                case "converterTorque" -> limit = modify(limit, modifier);
+                case "additionalEngineInertia" -> extraInertia = modify(extraInertia, modifier);
+                case "lockupClutchTorque" -> lockCapacity = modify(lockCapacity, modifier);
+                case "lockupClutchSpring" -> lockSpring = modify(lockSpring, modifier);
+                case "lockupClutchDampRatio" -> lockDamping = modify(lockDamping, modifier);
+                default -> { return spec; }
+            }
+            return new TorqueConverterSpec(c.type(), c.name(), c.inputName(), c.inputIndex(),
+                    coupling, stall, stiffness, diameter, limit, extraInertia,
+                    c.lockupClutchRatioName(), lockCapacity, lockSpring, lockDamping, List.of());
+        }
         if (spec instanceof GearboxSpec g) {
             double friction = g.friction(), dynamic = g.dynamicFriction(), loss = g.torqueLossCoef();
             double shiftTime = g.shiftTime();
