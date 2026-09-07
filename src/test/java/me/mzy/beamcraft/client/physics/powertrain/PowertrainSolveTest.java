@@ -411,6 +411,60 @@ class PowertrainSolveTest {
     }
 
     @Test
+    void zeroPedalKeepsIdleThrottleOpeningButCutsCombustionAboveIdle() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        addSunburstPowertrain(vehicle);
+        vehicle.powertrain.setControls(0.0f, 1.0f);
+        vehicle.powertrain.engines.engineAV[0] = vehicle.powertrain.engines.idleAV[0] + 10.0f;
+
+        vehicle.powertrain.solve(DT);
+
+        assertTrue(vehicle.powertrain.debugActualThrottle() > 0.0f,
+                "the physical throttle plate keeps its steady idle opening");
+        assertEquals(0.0f, vehicle.powertrain.debugCombustionTorque(), 1e-6f,
+                "zero pedal above idle must cut combustion instead of accelerating the engine");
+    }
+
+    @Test
+    void converterLoadRecoveryPreventsStallWithoutRaisingIdleTarget() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        vehicle.powertrain.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "mainEngine", "dummy", 1,
+                        0.16, 750, 5000, 19, 0.035, 38,
+                        List.of(new TorquePoint(500, 130), new TorquePoint(1000, 190),
+                                new TorquePoint(2000, 305), new TorquePoint(3000, 395)),
+                        List.of(), List.of()),
+                new TorqueConverterSpec("torqueConverter", "converter", "mainEngine", 1,
+                        0.85, 2.2, 7, 0.285, 0, 0.18,
+                        "lockupClutchRatio", 350, -1, 0.15, List.of()),
+                new GearboxSpec("automaticGearbox", "gearbox", "converter", 1,
+                        List.of(2.4), true, 0, 0, 0, List.of()),
+                new DifferentialSpec("differential", "diff", "gearbox", 1,
+                        3.55, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "right", "diff", 2, 1, "FR", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+        vehicle.powertrain.finalizeSetup();
+        vehicle.powertrain.setControls(0.0f, 0.0f);
+
+        // Do not integrate wheel forces: this represents holding the truck stationary
+        // in Drive. The controller may feed the converter below idle, but must neither
+        // stall the engine nor establish a higher no-pedal speed target.
+        float maxRpm = 0.0f;
+        for (int step = 0; step < 4000; step++) {
+            vehicle.powertrain.solve(DT);
+            maxRpm = Math.max(maxRpm, vehicle.powertrain.debugEngineRPM());
+        }
+
+        assertTrue(vehicle.powertrain.debugEngineRPM() > 650.0f,
+                "converter idle recovery must prevent a stall");
+        assertTrue(maxRpm < 800.0f,
+                "zero pedal must not raise the engine above its idle target, max " + maxRpm);
+    }
+
+    @Test
     void engineLeadingClutchAppliesCorrectedDriveTorqueToWheels() {
         SoftBodyVehicle vehicle = signRig(1.0f, 0.5f, 5000.0f);
         vehicle.powertrain.setControls(0.0f, 0.0f); // engaged clutch, no combustion input

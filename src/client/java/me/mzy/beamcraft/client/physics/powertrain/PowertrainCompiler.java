@@ -336,6 +336,7 @@ final class PowertrainCompiler {
             float peakTorque = peakTorqueOf(engine);
             engines.starterTorque[i] = Math.max(0.0f, starterTorqueOf(engine, peakTorque));
             engines.idleLossThrottle[i] = idleLossThrottleOf(engine, engines.idleAV[i]);
+            engines.idleControlThrottle[i] = engines.idleLossThrottle[i];
             engines.idleControllerP[i] = Math.max(0.0f, (float) engine.idleControllerP());
             engines.maxIdleThrottle[i] = Math.clamp((float) engine.maxIdleThrottle(), 0.0f, 1.0f);
             engines.playerThrottle[i] = 0.0f;
@@ -464,7 +465,7 @@ final class PowertrainCompiler {
         // Solve ff*T_idle = friction + dynamic*idleAV. Additional engine braking is
         // load-dependent in BeamNG and stays inactive until that model exists here.
         float feedforward = (friction + dynamic * idleAV) / torqueAtIdle;
-        return Math.clamp(feedforward + 0.05f, 0.0f, 1.0f);
+        return Math.clamp(feedforward, 0.0f, 1.0f);
     }
 
     private static float interpolateCurve(List<TorquePoint> curve, float rpm) {

@@ -183,10 +183,17 @@ public final class PowertrainSystem {
             updateRevLimiter(unit, rpm, dt);
 
             boolean crankRunning = engines.engineAV[unit] >= engines.crankingAV[unit];
-            boolean combustionEnabled = crankRunning
+            boolean belowIdle = crankRunning && engines.engineAV[unit] < engines.idleAV[unit];
+            float idleOutput = idleControllerOutput(unit, crankRunning, belowIdle, dt);
+            // KinetiForge-style pedal mapping: the physical throttle plate spans from
+            // the steady idle opening to wide open throttle. Fuel is nevertheless cut
+            // at zero pedal once the crank has recovered to the idle target.
+            float pedalThrottle = Math.fma(1.0f - engines.idleLossThrottle[unit], throttle,
+                    engines.idleLossThrottle[unit]);
+            float actualThrottle = belowIdle ? Math.max(pedalThrottle, idleOutput) : pedalThrottle;
+            boolean combustionRequested = throttle > 1.0e-6f || belowIdle;
+            boolean combustionEnabled = crankRunning && combustionRequested
                     && engines.sparkEnabled[unit] && engines.fuelEnabled[unit];
-            float idleOutput = idleControllerOutput(unit, crankRunning);
-            float actualThrottle = Math.max(throttle, idleOutput);
             engines.playerThrottle[unit] = throttle;
             engines.actualThrottle[unit] = actualThrottle;
             float availableCombustionTorque = Math.max(0.0f, interpolateTorque(unit, rpm));
@@ -367,33 +374,36 @@ public final class PowertrainSystem {
         }
     }
 
-    /** BeamNG-style positive-error idle controller with simplified load feedforward. */
-    private float idleControllerOutput(int unit, boolean running) {
-        float idle = engines.idleAV[unit];
+    /** Smooth below-idle recovery with a model-based converter-load floor. */
+    private float idleControllerOutput(int unit, boolean running, boolean belowIdle, float dt) {
+        float baseThrottle = engines.idleLossThrottle[unit];
+        if (!running || !belowIdle) {
+            engines.idleControlThrottle[unit] = baseThrottle;
+            return baseThrottle;
+        }
+
         float engineAV = Math.max(0.0f, engines.engineAV[unit]);
         float torque = interpolateTorque(unit, engineAV * AV_TO_RPM);
         float loss = engines.engineFriction[unit]
                 + engines.engineDynamicFriction[unit] * engineAV;
-        // BeamCraft's torque curve is scaled linearly by throttle and has no BeamNG-style
-        // intake/throttle map. Compensate the previous substep's converter pump reaction
-        // explicitly so a converter with valid JBeam parameters cannot overwhelm the
-        // friction-only idle top screw. A one-substep delay is negligible at physics rate.
+        // The current converter reaction is available on the following physics substep.
+        // Solving the simplified linear combustion model backwards provides the opening
+        // that balances that load without turning it into an unconditional torque source.
         float converterLoad = clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER
                 ? Math.max(0.0f, torqueConverters.inputTorque[unit])
                 : 0.0f;
-        float feedforward = torque > 1e-3f
-                ? Math.clamp((loss + converterLoad) / torque + 0.05f, 0.0f, 1.0f)
-                : (loss + converterLoad > 1e-3f ? 1.0f : 0.0f);
-        engines.idleLossThrottle[unit] = feedforward;
-        if (idle <= 1e-6f || !running) return feedforward;
-        float positiveError = Math.max(idle - engines.engineAV[unit], 0.0f);
-        // The top screw must still cover steady losses at the idle target. Returning zero
-        // here creates a sawtooth idle and gives a newly engaged converter a free braking
-        // substep before any idle torque is produced.
-        if (positiveError <= 0.0f) return feedforward;
-        float proportional = Math.min(positiveError * engines.idleControllerP[unit],
-                engines.maxIdleThrottle[unit]);
-        return Math.max(feedforward, proportional);
+        float requiredByLoad = torque > 1.0e-3f
+                ? Math.clamp((loss + converterLoad) / torque, 0.0f, 1.0f)
+                : 1.0f;
+
+        // Equivalent to FInterpTo(current, 1, dt, 1): a deliberately slow recovery
+        // avoids the substep-to-substep chatter of a raw proportional controller.
+        float alpha = Math.clamp(dt, 0.0f, 1.0f);
+        float smoothedRecovery = Math.fma(1.0f - engines.idleControlThrottle[unit], alpha,
+                engines.idleControlThrottle[unit]);
+        float result = Math.max(requiredByLoad, smoothedRecovery);
+        engines.idleControlThrottle[unit] = result;
+        return result;
     }
 
     /**
@@ -486,6 +496,7 @@ public final class PowertrainSystem {
     public void reset() {
         for (int i = 0; i < engines.unitCount; i++) {
             engines.engineAV[i] = engines.idleAV[i];
+            engines.idleControlThrottle[i] = engines.idleLossThrottle[i];
             clutches.clutchAngle[i] = 0.0f;
             clutches.clutchTorque[i] = 0.0f;
             torqueConverters.lockupAngle[i] = 0.0f;
