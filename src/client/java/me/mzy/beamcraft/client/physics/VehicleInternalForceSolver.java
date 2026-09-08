@@ -70,6 +70,11 @@ public final class VehicleInternalForceSolver {
 
         solveAnisotropicBeams(plasticRelaxation, invDt);
 
+        // Commit fracture topology only after every beam family has evaluated
+        // the same start-of-substep topology. Directly failed beams already
+        // skipped their own force; break-group peers retain this substep's force.
+        v.commitPendingBeamBreaks();
+
         // ==========================================
         // ==========================================
         solveTorsionBars(plasticRelaxation, invDt);
@@ -254,7 +259,7 @@ public final class VehicleInternalForceSolver {
             float absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > normalBeams.strength[i]) {
-                v.breakBeamAt(normalBeams, i);
+                normalBeams.queueBreak(i);
                 continue;
             }
 
@@ -321,7 +326,7 @@ public final class VehicleInternalForceSolver {
             float absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > supportBeams.strength[i]) {
-                v.breakBeamAt(supportBeams, i);
+                supportBeams.queueBreak(i);
                 continue;
             }
 
@@ -420,7 +425,7 @@ public final class VehicleInternalForceSolver {
             float absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > boundedBeams.strength[i]) {
-                v.breakBeamAt(boundedBeams, i);
+                boundedBeams.queueBreak(i);
                 continue;
             }
 
@@ -516,7 +521,7 @@ public final class VehicleInternalForceSolver {
 
             double absTotalForce = Math.abs(totalForce);
             if (absTotalForce > lBeams.strength[i]) {
-                v.breakBeamAt(lBeams, i);
+                lBeams.queueBreak(i);
                 continue;
             }
 
@@ -617,7 +622,7 @@ public final class VehicleInternalForceSolver {
             float absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > anisotropicBeams.strength[i]) {
-                v.breakBeamAt(anisotropicBeams, i);
+                anisotropicBeams.queueBreak(i);
                 continue;
             }
 

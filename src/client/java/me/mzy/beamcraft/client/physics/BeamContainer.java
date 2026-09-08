@@ -35,6 +35,14 @@ public class BeamContainer {
     public float[] maxDeform;
     public float[] strength;
     public boolean[] broken;
+    /**
+     * Direct failures detected during the current internal-force phase.
+     * Topology side effects are committed only after every beam family has
+     * evaluated the same start-of-substep topology.
+     */
+    private boolean[] pendingBreak;
+    private int[] pendingBreakIndices;
+    private int pendingBreakCount;
     public int[] breakGroupType;
     public boolean[] disableTriangleBreaking;
     public int[] wheelId;
@@ -56,6 +64,8 @@ public class BeamContainer {
         maxDeform = new float[INIT_BEAM_CAP];
         strength = new float[INIT_BEAM_CAP];
         broken = new boolean[INIT_BEAM_CAP];
+        pendingBreak = new boolean[INIT_BEAM_CAP];
+        pendingBreakIndices = new int[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
         disableTriangleBreaking = new boolean[INIT_BEAM_CAP];
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
@@ -88,6 +98,8 @@ public class BeamContainer {
         maxDeform = Utility.expand(maxDeform, newSize);
         strength = Utility.expand(strength, newSize);
         broken = Utility.expand(broken, newSize);
+        pendingBreak = Utility.expand(pendingBreak, newSize);
+        pendingBreakIndices = Utility.expand(pendingBreakIndices, newSize);
         breakGroupType = Utility.expand(breakGroupType, newSize);
         disableTriangleBreaking = Utility.expand(disableTriangleBreaking, newSize);
         wheelId = Utility.expand(wheelId, newSize);
@@ -130,6 +142,7 @@ public class BeamContainer {
         float hardeningLimit = spec.deform() + Math.max(0.0f, spec.deformLimitStress());
         this.maxDeform[idx] = Math.min(spec.strength(), hardeningLimit);
         this.broken[idx] = false;
+        this.pendingBreak[idx] = false;
         this.breakGroupType[idx] = spec.breakGroupType();
         this.disableTriangleBreaking[idx] = spec.disableTriangleBreaking();
         this.wheelId[idx] = -1;
@@ -154,6 +167,7 @@ public class BeamContainer {
     }
 
     public void reset() {
+        clearPendingBreaks();
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             restLength[i] = baseRestLength[i];
@@ -161,6 +175,27 @@ public class BeamContainer {
             deform[i] = baseDeform[i];
             precompTimer[i] = precompTimeTotal[i];
         }
+    }
+
+    void queueBreak(int beamIndex) {
+        if (broken[beamIndex] || pendingBreak[beamIndex]) return;
+        pendingBreak[beamIndex] = true;
+        pendingBreakIndices[pendingBreakCount++] = beamIndex;
+    }
+
+    int pendingBreakCount() {
+        return pendingBreakCount;
+    }
+
+    int pendingBreakIndex(int pendingIndex) {
+        return pendingBreakIndices[pendingIndex];
+    }
+
+    void clearPendingBreaks() {
+        for (int i = 0; i < pendingBreakCount; i++) {
+            pendingBreak[pendingBreakIndices[i]] = false;
+        }
+        pendingBreakCount = 0;
     }
 
     public float effectiveRestLength(int beamIndex) {

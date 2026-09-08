@@ -709,6 +709,27 @@ public class SoftBodyVehicle {
         }
     }
 
+    /**
+     * Applies direct beam failures detected during the force-accumulation phase.
+     * Keeping this as a separate commit phase prevents beam iteration order from
+     * deciding whether another member of the same break group contributes force.
+     */
+    void commitPendingBeamBreaks() {
+        commitPendingBeamBreaks(normalBeams);
+        commitPendingBeamBreaks(supportBeams);
+        commitPendingBeamBreaks(boundedBeams);
+        commitPendingBeamBreaks(lBeams);
+        commitPendingBeamBreaks(anisotropicBeams);
+    }
+
+    private void commitPendingBeamBreaks(BeamContainer container) {
+        int pendingCount = container.pendingBreakCount();
+        for (int i = 0; i < pendingCount; i++) {
+            breakBeamAt(container, container.pendingBreakIndex(i));
+        }
+        container.clearPendingBreaks();
+    }
+
     void breakBeamAt(BeamContainer container, int idx) {
         if (container.broken[idx]) return;
         container.broken[idx] = true;
