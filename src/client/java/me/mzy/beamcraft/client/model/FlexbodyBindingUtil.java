@@ -10,6 +10,22 @@ import java.util.List;
 
 public class FlexbodyBindingUtil {
 
+    /** Number of locally-nearest nodes considered when building a vertex basis. */
+    static final int MAX_BASIS_CANDIDATES = 16;
+    /** BeamNG describes VX/VY as roughly perpendicular; this is the preferred lower bound. */
+    static final double PREFERRED_BASIS_ANGLE_DEGREES = 45.0;
+    /** Below this angle the planar solve is too ill-conditioned to use safely. */
+    static final double MIN_USABLE_BASIS_ANGLE_DEGREES = 20.0;
+    /** Bounds used by BeamNG's Flexbody Debug to flag potentially spiking locator coordinates. */
+    static final double PREFERRED_LOCATOR_MIN = -0.5;
+    static final double PREFERRED_LOCATOR_MAX = 1.5;
+    /** Last-resort finite guard. Values this large are never a defensible local locator. */
+    static final double MAX_SAFE_LOCATOR_MAGNITUDE = 15.0;
+    static final double MIN_AXIS_LENGTH_SQUARED = 1.0e-6;
+    static final double MIN_BASIS_NORMAL_LENGTH_SQUARED = 1.0e-14;
+    static final double MIN_INPUT_NORMAL_LENGTH = 1.0e-5;
+    static final double MIN_INVERSE_SCALE_MAGNITUDE = 1.0e-12;
+
     public static void performBinding(FlexbodyContainer flex, SoftBodyVehicle vehicle) {
         NodeContainer nodes = vehicle.nodes;
         if (flex.isSkinningBound || flex.meshCount == 0) return;
@@ -54,13 +70,20 @@ public class FlexbodyBindingUtil {
             if (geom == null) continue;
 
             List<Integer> primaryPool = new ArrayList<>();
+            boolean[] addedToPool = new boolean[nodes.count];
             if (flex.targetGroups[m] != null && !flex.targetGroups[m].isEmpty()) {
                 for (String gName : flex.targetGroups[m]) {
                     Integer gId = flex.groupNameToId.get(gName);
                     if (gId != null) {
                         int start = flex.groupNodeOffsets[gId];
                         int count = flex.groupNodeCounts[gId];
-                        for (int i = 0; i < count; i++) primaryPool.add(flex.flatGroupNodes[start + i]);
+                        for (int i = 0; i < count; i++) {
+                            int node = flex.flatGroupNodes[start + i];
+                            if (!addedToPool[node]) {
+                                addedToPool[node] = true;
+                                primaryPool.add(node);
+                            }
+                        }
                     }
                 }
             } else {
@@ -143,123 +166,191 @@ public class FlexbodyBindingUtil {
     }
 
     private static double inverseScaleNormal(double component, double scale) {
-        return Math.abs(scale) > 1.0e-12 ? component / scale : 0.0;
+        return Math.abs(scale) > MIN_INVERSE_SCALE_MAGNITUDE ? component / scale : 0.0;
     }
 
-    private static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,
-                                                     double vx, double vy, double vz,
-                                                     double normX, double normY, double normZ, List<Integer> pool) {
-        int poolSize = pool.size();
-        if (poolSize < 3) return false;
+    static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,
+                                              double vx, double vy, double vz,
+                                              double normX, double normY, double normZ, List<Integer> pool) {
+        if (pool.size() < 3) return false;
 
-        int bestRef = pool.get(0);
-        double minDistSq = Double.MAX_VALUE;
-        for (int i = 0; i < poolSize; i++) {
-            int n = pool.get(i);
-            double dx = vx - nodes.baseX[n], dy = vy - nodes.baseY[n], dz = vz - nodes.baseZ[n];
-            double dSq = dx * dx + dy * dy + dz * dz;
-            if (dSq < minDistSq) { minDistSq = dSq; bestRef = n; }
-        }
-
-        int bestNx = bestRef;
-        double minDistNxSq = Double.MAX_VALUE;
-        for (int i = 0; i < poolSize; i++) {
-            int n = pool.get(i);
-            if (n == bestRef) continue;
-            double dx = vx - nodes.baseX[n], dy = vy - nodes.baseY[n], dz = vz - nodes.baseZ[n];
-            double dSq = dx * dx + dy * dy + dz * dz;
-            if (dSq < minDistNxSq) { minDistNxSq = dSq; bestNx = n; }
-        }
-
-        if (bestNx == bestRef) return false;
-
-        double cx = nodes.baseX[bestRef], cy = nodes.baseY[bestRef], cz = nodes.baseZ[bestRef];
-        double uX = nodes.baseX[bestNx] - cx, uY = nodes.baseY[bestNx] - cy, uZ = nodes.baseZ[bestNx] - cz;
-        double lenUSq = uX * uX + uY * uY + uZ * uZ;
-        if (lenUSq < 1e-6) return false;
-        double invLenU = 1.0 / Math.sqrt(lenUSq);
-
-        int bestNy = bestRef;
-        double minDistNySq = Double.MAX_VALUE;
-        for (int i = 0; i < poolSize; i++) {
-            int n = pool.get(i);
-            if (n == bestRef || n == bestNx) continue;
-
-            double wX = nodes.baseX[n] - cx, wY = nodes.baseY[n] - cy, wZ = nodes.baseZ[n] - cz;
-            double lenWSq = wX * wX + wY * wY + wZ * wZ;
-            if (lenWSq < 1e-6) continue;
-
-            double dot = (wX * uX + wY * uY + wZ * uZ) * invLenU / Math.sqrt(lenWSq);
-            // 放宽共线判定，只要不是绝对平行即可，依靠后续的降维投影自适应
-            if (Math.abs(dot) > 0.95) continue;
-
-            double dx = vx - nodes.baseX[n], dy = vy - nodes.baseY[n], dz = vz - nodes.baseZ[n];
-            double dSq = dx * dx + dy * dy + dz * dz;
-            if (dSq < minDistNySq) { minDistNySq = dSq; bestNy = n; }
-        }
-
-        if (bestNy == bestRef) return false;
-
-        double vX = nodes.baseX[bestNy] - cx, vY = nodes.baseY[bestNy] - cy, vZ = nodes.baseZ[bestNy] - cz;
-
-        double nX = uY * vZ - uZ * vY;
-        double nY = uZ * vX - uX * vZ;
-        double nZ = uX * vY - uY * vX;
-        double lenN = Math.sqrt(nX * nX + nY * nY + nZ * nZ);
-        if (lenN > 1e-7) {
-            double invN = 1.0 / lenN;
-            nX *= invN; nY *= invN; nZ *= invN;
-        } else return false;
-
-        double dX = vx - cx, dY = vy - cy, dZ = vz - cz;
-        double wZ = dX * nX + dY * nY + dZ * nZ;
-        double pX = dX - wZ * nX, pY = dY - wZ * nY, pZ = dZ - wZ * nZ;
-
-        double u_u = uX * uX + uY * uY + uZ * uZ;
-        double u_v = uX * vX + uY * vY + uZ * vZ;
-        double v_v = vX * vX + vY * vY + vZ * vZ;
-        double d_u = pX * uX + pY * uY + pZ * uZ;
-        double d_v = pX * vX + pY * vY + pZ * vZ;
-
-        double det2D = u_u * v_v - u_v * u_v;
-        if (Math.abs(det2D) < 1e-9) return false;
-
-        double invDet2D = 1.0 / det2D;
-        float wX = (float) ((d_u * v_v - d_v * u_v) * invDet2D);
-        float wY = (float) ((d_v * u_u - d_u * u_v) * invDet2D);
-
-        // 如果超出合理外延直接视为病态退化，触发 Rigid Follow，绝不让它乱长尖刺！
-        if (Float.isNaN(wX) || Float.isNaN(wY) || Float.isNaN((float)wZ) ||
-                Math.abs(wX) > 15.0f || Math.abs(wY) > 15.0f || Math.abs(wZ) > 15.0f) {
-            return false;
-        }
-
-        float nwX = 0, nwY = 0, nwZ = 1;
-        if (flex.vNormWeightX != null) {
-            double normLen = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
-            if (normLen > 1e-5) {
-                double inX = normX / normLen, inY = normY / normLen, inZ = normZ / normLen;
-                double normWZ = inX * nX + inY * nY + inZ * nZ;
-                double npX = inX - normWZ * nX, npY = inY - normWZ * nY, npZ = inZ - normWZ * nZ;
-                double nd_u = npX * uX + npY * uY + npZ * uZ;
-                double nd_v = npX * vX + npY * vY + npZ * vZ;
-                nwX = (float) ((nd_u * v_v - nd_v * u_v) * invDet2D);
-                nwY = (float) ((nd_v * u_u - nd_u * u_v) * invDet2D);
-                nwZ = (float) normWZ;
+        int centerNode = pool.getFirst();
+        double nearestDistanceSquared = Double.POSITIVE_INFINITY;
+        for (int node : pool) {
+            double dx = vx - nodes.baseX[node], dy = vy - nodes.baseY[node], dz = vz - nodes.baseZ[node];
+            double distanceSquared = dx * dx + dy * dy + dz * dz;
+            if (distanceSquared < nearestDistanceSquared) {
+                nearestDistanceSquared = distanceSquared;
+                centerNode = node;
             }
-            flex.vNormWeightX[ptr] = nwX;
-            flex.vNormWeightY[ptr] = nwY;
-            flex.vNormWeightZ[ptr] = nwZ;
         }
 
-        flex.vCenterNode[ptr] = bestRef;
-        flex.vVxNode[ptr]     = bestNx;
-        flex.vVyNode[ptr]     = bestNy;
-        flex.vWeightX[ptr]    = wX;
-        flex.vWeightY[ptr]    = wY;
-        flex.vWeightZ[ptr]    = (float) wZ;
-        flex.vUseCrossZ[ptr]  = true;
+        int capacity = Math.min(MAX_BASIS_CANDIDATES, pool.size() - 1);
+        int[] candidates = new int[capacity];
+        double[] distances = new double[capacity];
+        java.util.Arrays.fill(distances, Double.POSITIVE_INFINITY);
+        int candidateCount = 0;
+        for (int node : pool) {
+            if (node == centerNode) continue;
+            double dx = vx - nodes.baseX[node], dy = vy - nodes.baseY[node], dz = vz - nodes.baseZ[node];
+            double distanceSquared = dx * dx + dy * dy + dz * dz;
+            if (candidateCount == capacity && distanceSquared >= distances[capacity - 1]) continue;
+            int insert = Math.min(candidateCount, capacity - 1);
+            while (insert > 0 && distanceSquared < distances[insert - 1]) insert--;
+            if (insert >= capacity) continue;
+            int moveCount = Math.min(candidateCount, capacity - 1) - insert;
+            if (moveCount > 0) {
+                System.arraycopy(candidates, insert, candidates, insert + 1, moveCount);
+                System.arraycopy(distances, insert, distances, insert + 1, moveCount);
+            }
+            candidates[insert] = node;
+            distances[insert] = distanceSquared;
+            if (candidateCount < capacity) candidateCount++;
+        }
+        if (candidateCount < 2) return false;
+
+        BasisSolution best = new BasisSolution();
+        boolean foundBasis = false;
+        for (int first = 0; first < candidateCount - 1; first++) {
+            for (int second = first + 1; second < candidateCount; second++) {
+                foundBasis |= considerBasis(nodes, centerNode, candidates[first], candidates[second],
+                        vx, vy, vz, distances[first] + distances[second], best);
+            }
+        }
+        if (!foundBasis) return false;
+
+        float normalWeightX = 0, normalWeightY = 0, normalWeightZ = 1;
+        if (flex.vNormWeightX != null) {
+            double normalLength = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
+            if (normalLength > MIN_INPUT_NORMAL_LENGTH) {
+                double inX = normX / normalLength, inY = normY / normalLength, inZ = normZ / normalLength;
+                double normalZ = inX * best.nX + inY * best.nY + inZ * best.nZ;
+                double planarX = inX - normalZ * best.nX;
+                double planarY = inY - normalZ * best.nY;
+                double planarZ = inZ - normalZ * best.nZ;
+                double dotU = planarX * best.uX + planarY * best.uY + planarZ * best.uZ;
+                double dotV = planarX * best.vX + planarY * best.vY + planarZ * best.vZ;
+                normalWeightX = (float) ((dotU * best.vLengthSquared - dotV * best.axisDot) * best.inverseDeterminant);
+                normalWeightY = (float) ((dotV * best.uLengthSquared - dotU * best.axisDot) * best.inverseDeterminant);
+                normalWeightZ = (float) normalZ;
+            }
+            flex.vNormWeightX[ptr] = normalWeightX;
+            flex.vNormWeightY[ptr] = normalWeightY;
+            flex.vNormWeightZ[ptr] = normalWeightZ;
+        }
+
+        flex.vCenterNode[ptr] = centerNode;
+        flex.vVxNode[ptr] = best.vxNode;
+        flex.vVyNode[ptr] = best.vyNode;
+        flex.vWeightX[ptr] = best.weightX;
+        flex.vWeightY[ptr] = best.weightY;
+        flex.vWeightZ[ptr] = (float) best.weightZ;
+        flex.vUseCrossZ[ptr] = true;
         return true;
+    }
+
+    private static boolean considerBasis(NodeContainer nodes, int centerNode, int vxNode, int vyNode,
+                                         double px, double py, double pz, double pairDistanceSquared,
+                                         BasisSolution best) {
+        double cx = nodes.baseX[centerNode], cy = nodes.baseY[centerNode], cz = nodes.baseZ[centerNode];
+        double uX = nodes.baseX[vxNode] - cx, uY = nodes.baseY[vxNode] - cy, uZ = nodes.baseZ[vxNode] - cz;
+        double vX = nodes.baseX[vyNode] - cx, vY = nodes.baseY[vyNode] - cy, vZ = nodes.baseZ[vyNode] - cz;
+        double uLengthSquared = uX * uX + uY * uY + uZ * uZ;
+        double vLengthSquared = vX * vX + vY * vY + vZ * vZ;
+        if (uLengthSquared < MIN_AXIS_LENGTH_SQUARED || vLengthSquared < MIN_AXIS_LENGTH_SQUARED) return false;
+
+        double axisDot = uX * vX + uY * vY + uZ * vZ;
+        double cosineSquared = axisDot * axisDot / (uLengthSquared * vLengthSquared);
+        double sineSquared = 1.0 - Math.min(1.0, Math.max(0.0, cosineSquared));
+        if (sineSquared < squaredSine(MIN_USABLE_BASIS_ANGLE_DEGREES)) return false;
+
+        double crossX = uY * vZ - uZ * vY;
+        double crossY = uZ * vX - uX * vZ;
+        double crossZ = uX * vY - uY * vX;
+        double crossLengthSquared = crossX * crossX + crossY * crossY + crossZ * crossZ;
+        if (crossLengthSquared < MIN_BASIS_NORMAL_LENGTH_SQUARED) return false;
+        double inverseCrossLength = 1.0 / Math.sqrt(crossLengthSquared);
+        double nX = crossX * inverseCrossLength, nY = crossY * inverseCrossLength, nZ = crossZ * inverseCrossLength;
+
+        double dX = px - cx, dY = py - cy, dZ = pz - cz;
+        double weightZ = dX * nX + dY * nY + dZ * nZ;
+        double planarX = dX - weightZ * nX, planarY = dY - weightZ * nY, planarZ = dZ - weightZ * nZ;
+        double determinant = uLengthSquared * vLengthSquared - axisDot * axisDot;
+        if (determinant <= MIN_BASIS_NORMAL_LENGTH_SQUARED) return false;
+        double inverseDeterminant = 1.0 / determinant;
+        double dotU = planarX * uX + planarY * uY + planarZ * uZ;
+        double dotV = planarX * vX + planarY * vY + planarZ * vZ;
+        float weightX = (float) ((dotU * vLengthSquared - dotV * axisDot) * inverseDeterminant);
+        float weightY = (float) ((dotV * uLengthSquared - dotU * axisDot) * inverseDeterminant);
+        if (!Float.isFinite(weightX) || !Float.isFinite(weightY) || !Double.isFinite(weightZ)
+                || Math.abs(weightX) > MAX_SAFE_LOCATOR_MAGNITUDE
+                || Math.abs(weightY) > MAX_SAFE_LOCATOR_MAGNITUDE
+                || Math.abs(weightZ) > MAX_SAFE_LOCATOR_MAGNITUDE) return false;
+
+        boolean preferredAngle = sineSquared >= squaredSine(PREFERRED_BASIS_ANGLE_DEGREES);
+        boolean preferredCoordinates = withinPreferredLocatorBounds(weightX) && withinPreferredLocatorBounds(weightY);
+        int preferenceTier = BasisSolution.preferenceTier(preferredAngle, preferredCoordinates);
+        if (!best.accepts(preferenceTier, pairDistanceSquared, sineSquared)) return false;
+        best.set(vxNode, vyNode, uX, uY, uZ, vX, vY, vZ, nX, nY, nZ,
+                uLengthSquared, vLengthSquared, axisDot, inverseDeterminant, weightX, weightY, weightZ,
+                pairDistanceSquared, sineSquared, preferenceTier);
+        return true;
+    }
+
+    private static double squaredSine(double degrees) {
+        double sine = Math.sin(Math.toRadians(degrees));
+        return sine * sine;
+    }
+
+    private static boolean withinPreferredLocatorBounds(double value) {
+        return value >= PREFERRED_LOCATOR_MIN && value <= PREFERRED_LOCATOR_MAX;
+    }
+
+    private static final class BasisSolution {
+        int vxNode, vyNode;
+        double uX, uY, uZ, vX, vY, vZ, nX, nY, nZ;
+        double uLengthSquared, vLengthSquared, axisDot, inverseDeterminant;
+        float weightX, weightY;
+        double weightZ;
+        double pairDistanceSquared = Double.POSITIVE_INFINITY;
+        double sineSquared;
+        int preferenceTier = Integer.MAX_VALUE;
+
+        static int preferenceTier(boolean preferredAngle, boolean preferredCoordinates) {
+            if (preferredAngle && preferredCoordinates) return 0;
+            if (preferredAngle) return 1;
+            if (preferredCoordinates) return 2;
+            return 3;
+        }
+
+        boolean accepts(int tier, double distanceSquared, double candidateSineSquared) {
+            if (tier != preferenceTier) return tier < preferenceTier;
+            int distanceOrder = Double.compare(distanceSquared, pairDistanceSquared);
+            return distanceOrder < 0 || (distanceOrder == 0 && candidateSineSquared > sineSquared);
+        }
+
+        void set(int vxNode, int vyNode,
+                 double uX, double uY, double uZ, double vX, double vY, double vZ,
+                 double nX, double nY, double nZ,
+                 double uLengthSquared, double vLengthSquared, double axisDot, double inverseDeterminant,
+                 float weightX, float weightY, double weightZ,
+                 double pairDistanceSquared, double sineSquared, int preferenceTier) {
+            this.vxNode = vxNode;
+            this.vyNode = vyNode;
+            this.uX = uX; this.uY = uY; this.uZ = uZ;
+            this.vX = vX; this.vY = vY; this.vZ = vZ;
+            this.nX = nX; this.nY = nY; this.nZ = nZ;
+            this.uLengthSquared = uLengthSquared;
+            this.vLengthSquared = vLengthSquared;
+            this.axisDot = axisDot;
+            this.inverseDeterminant = inverseDeterminant;
+            this.weightX = weightX;
+            this.weightY = weightY;
+            this.weightZ = weightZ;
+            this.pairDistanceSquared = pairDistanceSquared;
+            this.sineSquared = sineSquared;
+            this.preferenceTier = preferenceTier;
+        }
     }
 
     private static void applyFallbackRigidBinding(FlexbodyContainer flex, NodeContainer nodes, int ptr,
@@ -285,9 +376,9 @@ public class FlexbodyBindingUtil {
 
         if (flex.vNormWeightX != null) {
             double nLen = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
-            flex.vNormWeightX[ptr] = (float)(nLen > 1e-5 ? normX / nLen : 0);
-            flex.vNormWeightY[ptr] = (float)(nLen > 1e-5 ? normY / nLen : 1);
-            flex.vNormWeightZ[ptr] = (float)(nLen > 1e-5 ? normZ / nLen : 0);
+            flex.vNormWeightX[ptr] = (float)(nLen > MIN_INPUT_NORMAL_LENGTH ? normX / nLen : 0);
+            flex.vNormWeightY[ptr] = (float)(nLen > MIN_INPUT_NORMAL_LENGTH ? normY / nLen : 1);
+            flex.vNormWeightZ[ptr] = (float)(nLen > MIN_INPUT_NORMAL_LENGTH ? normZ / nLen : 0);
         }
     }
 }
