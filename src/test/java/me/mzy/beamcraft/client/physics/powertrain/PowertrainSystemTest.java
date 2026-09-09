@@ -52,13 +52,11 @@ class PowertrainSystemTest {
         system.finalizeSetup();
 
         assertEquals("ready", system.diagnostic());
-        assertEquals(4, system.wheelPaths.pathWheel.length);
-        assertArrayEquals(new byte[]{
-                DrivenWheelPathContainer.BRANCH_PRIMARY,
-                DrivenWheelPathContainer.BRANCH_PRIMARY,
-                DrivenWheelPathContainer.BRANCH_SECONDARY,
-                DrivenWheelPathContainer.BRANCH_SECONDARY
-        }, system.wheelPaths.pathBranch);
+        assertEquals(2, system.wheelPaths.pathWheel.length,
+                "the engine's rigid domain follows only the split's primary output");
+        assertEquals(1, system.splitShafts.count);
+        assertEquals(2, system.splitShafts.primaryPathCount[0]);
+        assertEquals(2, system.splitShafts.secondaryPathCount[0]);
         assertEquals(SplitShaftContainer.MODE_LOCKED, system.splitShafts.activeMode[0]);
         assertEquals(1.0f, system.splitShafts.clutchRatio[0], 1e-6f,
                 "without the electronic controller, a connected AWD split must not become FWD");
@@ -67,6 +65,61 @@ class PowertrainSystemTest {
         assertEquals(SplitShaftContainer.MODE_DISCONNECTED, system.splitShafts.activeMode[0]);
         system.setSplitShaftMode("transfercase", "viscous");
         assertEquals(SplitShaftContainer.MODE_VISCOUS, system.splitShafts.activeMode[0]);
+    }
+
+    @Test
+    void compilesNestedSplitShaftsIntoContiguousCouplingPaths() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.wheels.count = 6;
+        String[] names = {"A1", "A2", "B1", "B2", "C1", "C2"};
+        for (int i = 0; i < names.length; i++) vehicle.wheels.nameToIndex.put(names[i], i);
+        PowertrainSystem system = vehicle.powertrain;
+        system.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 800, 7000, 1, 0.01, 2,
+                        List.of(new TorquePoint(1000, 100)), List.of(), List.of()),
+                new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
+                        300, 1000, 1, 0.2, 0.125, 1, List.of()),
+                new SplitShaftSpec("splitShaft", "splitA", "clutch", 1,
+                        1, 2, "locked", true, false, 1,
+                        1000, -1, 1, 0.15, 1, 10, 100, 1, 25, 0, 0, 0, List.of()),
+                new DifferentialSpec("differential", "axleA", "splitA", 2,
+                        4, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "a1", "axleA", 1, 1, "A1", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "a2", "axleA", 2, 1, "A2", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new SplitShaftSpec("splitShaft", "splitB", "splitA", 1,
+                        1, 2, "viscous", false, false, 1,
+                        1000, -1, 1, 0.15, 1, 10, 100, 1, 25, 0, 0, 0, List.of()),
+                new DifferentialSpec("differential", "axleB", "splitB", 2,
+                        4, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "b1", "axleB", 1, 1, "B1", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "b2", "axleB", 2, 1, "B2", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new DifferentialSpec("differential", "axleC", "splitB", 1,
+                        4, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "c1", "axleC", 1, 1, "C1", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "c2", "axleC", 2, 1, "C2", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+
+        system.finalizeSetup();
+
+        assertEquals("ready", system.diagnostic());
+        assertEquals(2, system.splitShafts.count);
+        assertEquals(0, system.splitShafts.unitStart[0]);
+        assertEquals(2, system.splitShafts.unitCount[0]);
+        assertEquals("splitA", system.splitShafts.deviceName[0]);
+        assertEquals("splitB", system.splitShafts.deviceName[1]);
+        assertEquals(2, system.splitShafts.primaryPathCount[0]);
+        assertEquals(2, system.splitShafts.secondaryPathCount[0],
+                "splitA secondary sees splitB's primary rigid domain, not all four downstream wheels");
+        assertEquals(2, system.splitShafts.primaryPathCount[1]);
+        assertEquals(2, system.splitShafts.secondaryPathCount[1]);
+        assertEquals(8, system.splitShafts.pathWheel.length);
     }
 
     @Test

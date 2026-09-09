@@ -9,33 +9,33 @@ public final class SplitShaftSolver {
 
     public static float solve(float dt, float primaryAV, float secondaryAV,
                               float primaryInertia, float secondaryInertia,
-                              SplitShaftContainer state, int unit) {
-        if (dt <= 0.0f || state.activeMode[unit] == SplitShaftContainer.MODE_DISCONNECTED) {
-            clear(state, unit);
+                              SplitShaftContainer state, int split) {
+        if (dt <= 0.0f || state.activeMode[split] == SplitShaftContainer.MODE_DISCONNECTED) {
+            clear(state, split);
             return 0.0f;
         }
-        if (state.activeMode[unit] == SplitShaftContainer.MODE_VISCOUS) {
-            state.lockTorque[unit] = 0.0f;
-            state.shaftAngle[unit] = 0.0f;
+        if (state.activeMode[split] == SplitShaftContainer.MODE_VISCOUS) {
+            state.lockTorque[split] = 0.0f;
+            state.shaftAngle[split] = 0.0f;
             float slip = primaryAV - secondaryAV;
-            float magnitude = state.viscousCoef[unit]
-                    * (float) Math.pow(Math.abs(slip), state.viscousExponent[unit]);
+            float magnitude = state.viscousCoef[split]
+                    * (float) Math.pow(Math.abs(slip), state.viscousExponent[split]);
             float target = Math.clamp(Math.copySign(magnitude, slip),
-                    -state.viscousCapacity[unit], state.viscousCapacity[unit]);
-            float alpha = Math.clamp(dt * state.viscousSmoothing[unit], 0.0f, 1.0f);
-            float torque = Math.fma(target - state.viscousTorque[unit], alpha,
-                    state.viscousTorque[unit]);
+                    -state.viscousCapacity[split], state.viscousCapacity[split]);
+            float alpha = Math.clamp(dt * state.viscousSmoothing[split], 0.0f, 1.0f);
+            float torque = Math.fma(target - state.viscousTorque[split], alpha,
+                    state.viscousTorque[split]);
             torque = clampToNoSlipImpulse(dt, slip, primaryInertia, secondaryInertia, torque);
-            state.viscousTorque[unit] = torque;
+            state.viscousTorque[split] = torque;
             return torque;
         }
 
-        state.viscousTorque[unit] = 0.0f;
-        ImplicitClutchSolver.solveInto(
+        state.viscousTorque[split] = 0.0f;
+        ImplicitCouplingSolver.solveInto(
                 dt, primaryAV - secondaryAV, primaryInertia, secondaryInertia,
-                state.lockSpring[unit], state.lockDampingRatio[unit], state.lockCapacity[unit],
-                state.clutchRatio[unit], state.lockTorque, state.shaftAngle, unit);
-        return state.lockTorque[unit];
+                state.lockSpring[split], state.lockDampingRatio[split], state.lockCapacity[split],
+                state.clutchRatio[split], state.lockTorque, state.shaftAngle, split);
+        return state.lockTorque[split];
     }
 
     private static float clampToNoSlipImpulse(float dt, float slip, float primaryInertia,
@@ -47,9 +47,9 @@ public final class SplitShaftSolver {
         return Math.clamp(torque, -limit, limit);
     }
 
-    public static void clear(SplitShaftContainer state, int unit) {
-        state.lockTorque[unit] = 0.0f;
-        state.shaftAngle[unit] = 0.0f;
-        state.viscousTorque[unit] = 0.0f;
+    public static void clear(SplitShaftContainer state, int split) {
+        state.lockTorque[split] = 0.0f;
+        state.shaftAngle[split] = 0.0f;
+        state.viscousTorque[split] = 0.0f;
     }
 }

@@ -47,7 +47,7 @@ class SplitShaftSolverTest {
 
     private static SplitShaftContainer state() {
         SplitShaftContainer state = new SplitShaftContainer();
-        state.allocate(1);
+        state.allocate(0, 1, 0);
         state.clutchRatio[0] = 1.0f;
         state.lockCapacity[0] = 1000.0f;
         state.lockSpring[0] = 8000.0f;

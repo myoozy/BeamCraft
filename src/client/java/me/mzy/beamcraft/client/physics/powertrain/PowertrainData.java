@@ -35,7 +35,7 @@ public final class PowertrainData {
     /** Optional selectable high/low range box for each engine unit. */
     public final RangeBoxContainer rangeBoxes = new RangeBoxContainer();
 
-    /** Optional primary/secondary output coupling for each engine unit. */
+    /** Every split-shaft coupling, grouped into contiguous ranges per engine unit. */
     public final SplitShaftContainer splitShafts = new SplitShaftContainer();
 
     /** Compiled shaft devices (build-time diagnostics). */

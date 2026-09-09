@@ -36,7 +36,7 @@ import java.util.List;
  * <p>Gearboxes are runtime SoA: the active ratio scales the compile-time first-gear wheel
  * paths, a shift request disconnects the torque path (active ratio 0) for the shift
  * duration, and all shift/limiter timers are decremented only by {@code solve(dt)}.
- * The clutch torque is governed solely by {@link ImplicitClutchSolver} and its friction
+ * The clutch torque is governed solely by {@link ImplicitCouplingSolver} and its friction
  * capacity — it may stall the engine; it is never clamped to the engine's sustainable
  * torque.
  */
@@ -173,20 +173,20 @@ public final class PowertrainSystem {
             default -> -1;
         };
         if (resolved < 0) return;
-        for (int unit = 0; unit < splitShafts.unitCount; unit++) {
-            if (splitShafts.device[unit] < 0 || !splitShafts.deviceName[unit].equals(deviceName)) continue;
-            if (resolved == SplitShaftContainer.MODE_DISCONNECTED && !splitShafts.canDisconnect[unit]) continue;
-            splitShafts.activeMode[unit] = resolved;
-            SplitShaftSolver.clear(splitShafts, unit);
+        for (int split = 0; split < splitShafts.count; split++) {
+            if (!splitShafts.deviceName[split].equals(deviceName)) continue;
+            if (resolved == SplitShaftContainer.MODE_DISCONNECTED && !splitShafts.canDisconnect[split]) continue;
+            splitShafts.activeMode[split] = resolved;
+            SplitShaftSolver.clear(splitShafts, split);
         }
     }
 
     /** Updates the lock-clutch command for a named split shaft (0 = open, 1 = engaged). */
     public void setSplitShaftClutchRatio(String deviceName, float ratio) {
         float clamped = Math.clamp(ratio, 0.0f, 1.0f);
-        for (int unit = 0; unit < splitShafts.unitCount; unit++) {
-            if (splitShafts.device[unit] >= 0 && splitShafts.deviceName[unit].equals(deviceName)) {
-                splitShafts.clutchRatio[unit] = clamped;
+        for (int split = 0; split < splitShafts.count; split++) {
+            if (splitShafts.deviceName[split].equals(deviceName)) {
+                splitShafts.clutchRatio[split] = clamped;
             }
         }
     }
@@ -277,97 +277,112 @@ public final class PowertrainSystem {
             // shift, which disconnects the torque path without skipping engine integration.
             updateShift(unit, dt);
             float activeRatio = gearboxes.activeRatio[unit];
-            // Zero while neutral or shifting, explicitly disconnecting the clutch path
-            // and all downstream torsion reactions.
-            float ratioFactor = 0.0f;
+            float pathBaseRatio = gearboxes.pathBaseRatio[unit];
+            float gearboxFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
+            float rangeBaseRatio = rangeBoxes.pathBaseRatio[unit];
+            float rangeFactor = rangeBaseRatio > 1.0e-6f
+                    ? rangeBoxes.activeRatio[unit] / rangeBaseRatio : 1.0f;
+            float ratioFactor = gearboxFactor * rangeFactor;
 
             float couplerInputTorque = 0.0f;
             float couplerOutputTorque = 0.0f;
-            if (Math.abs(activeRatio) > 1e-6f) {
-                float pathBaseRatio = gearboxes.pathBaseRatio[unit];
-                ratioFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
-                float rangeBaseRatio = rangeBoxes.pathBaseRatio[unit];
-                if (rangeBaseRatio > 1.0e-6f) {
-                    ratioFactor *= rangeBoxes.activeRatio[unit] / rangeBaseRatio;
-                }
-                float primaryAV = 0.0f;
-                float primaryCompliance = 0.0f;
-                float secondaryAV = 0.0f;
-                float secondaryCompliance = 0.0f;
-                int pStart = wheelPaths.pathStart[unit];
-                int pEnd = pStart + wheelPaths.pathCount[unit];
-                for (int p = pStart; p < pEnd; p++) {
-                    int wheel = wheelPaths.pathWheel[p];
-                    float gain = wheelPaths.pathGain[p] * ratioFactor;
-                    // Wheel AV and drive torque are forward-positive, matching the engine
-                    // shaft convention, so T*w power needs no compensating sign.
-                    float inertia = vehicle.wheels.getRotationalInertia(wheel);
-                    float reflectedAV = gain * vehicle.wheels.getAngularVelocity(wheel);
-                    float reflectedCompliance = inertia > 1e-7f ? gain * gain / inertia : 0.0f;
-                    if (wheelPaths.pathBranch[p] == DrivenWheelPathContainer.BRANCH_SECONDARY) {
-                        secondaryAV += reflectedAV;
-                        secondaryCompliance += reflectedCompliance;
-                    } else {
-                        primaryAV += reflectedAV;
-                        primaryCompliance += reflectedCompliance;
-                    }
-                }
-                if (primaryCompliance > 1e-9f) {
-                    float primaryInertia = 1.0f / primaryCompliance;
-                    if (clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER) {
-                        float lockupRatio = Math.clamp(
-                                (float) input.get(torqueConverters.lockupSignalId[unit]), 0.0f, 1.0f);
-                        TorqueConverterSolver.solveInto(
-                                dt, engines.engineAV[unit], primaryAV,
-                                engines.engineInertia[unit], primaryInertia,
-                                torqueConverters.couplingAVRatio[unit], torqueConverters.stallTorqueRatio[unit],
-                                torqueConverters.converterStiffness[unit], torqueConverters.converterDiameter[unit],
-                                torqueConverters.converterTorqueLimit[unit], lockupRatio,
-                                torqueConverters, unit);
-                        couplerInputTorque = torqueConverters.inputTorque[unit];
-                        couplerOutputTorque = torqueConverters.outputTorque[unit];
-                    } else {
-                        ImplicitClutchSolver.solveInto(
-                                dt, engines.engineAV[unit] - primaryAV,
-                                engines.engineInertia[unit], primaryInertia,
-                                clutches.clutchSpring[unit], clutches.clutchDampingRatio[unit],
-                                clutches.clutchCapacity[unit], engagement,
-                                clutches.clutchTorque, clutches.clutchAngle, unit);
-                        couplerInputTorque = clutches.clutchTorque[unit];
-                        couplerOutputTorque = couplerInputTorque;
-                    }
-                    engines.engineAV[unit] -= dt * couplerInputTorque / engines.engineInertia[unit];
-                    float splitTorque = 0.0f;
-                    if (splitShafts.device[unit] >= 0 && secondaryCompliance > 1e-9f) {
-                        splitTorque = SplitShaftSolver.solve(
-                                dt, primaryAV, secondaryAV, primaryInertia,
-                                1.0f / secondaryCompliance, splitShafts, unit);
-                    } else {
-                        SplitShaftSolver.clear(splitShafts, unit);
-                    }
-                    for (int p = pStart; p < pEnd; p++) {
-                        float gain = wheelPaths.pathGain[p] * ratioFactor;
-                        float pathTorque = wheelPaths.pathBranch[p] == DrivenWheelPathContainer.BRANCH_SECONDARY
-                                ? splitTorque : couplerOutputTorque - splitTorque;
-                        vehicle.wheels.applyDriveTorqueAndReaction(
-                                wheelPaths.pathWheel[p], pathTorque * gain);
-                    }
+            float drivelineAV = 0.0f;
+            float drivelineCompliance = 0.0f;
+            int pStart = wheelPaths.pathStart[unit];
+            int pEnd = pStart + wheelPaths.pathCount[unit];
+            for (int p = pStart; p < pEnd; p++) {
+                int wheel = wheelPaths.pathWheel[p];
+                float gain = adjustedPathGain(wheelPaths.pathGain[p], wheelPaths.pathFlags[p],
+                        gearboxFactor, rangeFactor);
+                drivelineAV += gain * vehicle.wheels.getAngularVelocity(wheel);
+                float inertia = vehicle.wheels.getRotationalInertia(wheel);
+                if (inertia > 1e-7f) drivelineCompliance += gain * gain / inertia;
+            }
+            if (drivelineCompliance > 1e-9f) {
+                float drivelineInertia = 1.0f / drivelineCompliance;
+                if (clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER) {
+                    float lockupRatio = Math.clamp(
+                            (float) input.get(torqueConverters.lockupSignalId[unit]), 0.0f, 1.0f);
+                    TorqueConverterSolver.solveInto(
+                            dt, engines.engineAV[unit], drivelineAV,
+                            engines.engineInertia[unit], drivelineInertia,
+                            torqueConverters.couplingAVRatio[unit], torqueConverters.stallTorqueRatio[unit],
+                            torqueConverters.converterStiffness[unit], torqueConverters.converterDiameter[unit],
+                            torqueConverters.converterTorqueLimit[unit], lockupRatio,
+                            torqueConverters, unit);
+                    couplerInputTorque = torqueConverters.inputTorque[unit];
+                    couplerOutputTorque = torqueConverters.outputTorque[unit];
                 } else {
-                    clutches.clutchTorque[unit] = 0.0f;
-                    torqueConverters.inputTorque[unit] = 0.0f;
-                    torqueConverters.outputTorque[unit] = 0.0f;
-                    torqueConverters.lockupTorque[unit] = 0.0f;
-                    SplitShaftSolver.clear(splitShafts, unit);
+                    ImplicitCouplingSolver.solveInto(
+                            dt, engines.engineAV[unit] - drivelineAV,
+                            engines.engineInertia[unit], drivelineInertia,
+                            clutches.clutchSpring[unit], clutches.clutchDampingRatio[unit],
+                            clutches.clutchCapacity[unit], engagement,
+                            clutches.clutchTorque, clutches.clutchAngle, unit);
+                    couplerInputTorque = clutches.clutchTorque[unit];
+                    couplerOutputTorque = couplerInputTorque;
+                }
+                engines.engineAV[unit] -= dt * couplerInputTorque / engines.engineInertia[unit];
+                for (int p = pStart; p < pEnd; p++) {
+                    float gain = adjustedPathGain(wheelPaths.pathGain[p], wheelPaths.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    vehicle.wheels.applyDriveTorqueAndReaction(
+                            wheelPaths.pathWheel[p], couplerOutputTorque * gain);
                 }
             } else {
-                // Neutral / mid-shift: no torque path, clutch released.
                 clutches.clutchTorque[unit] = 0.0f;
                 clutches.clutchAngle[unit] = 0.0f;
                 torqueConverters.inputTorque[unit] = 0.0f;
                 torqueConverters.outputTorque[unit] = 0.0f;
                 torqueConverters.lockupTorque[unit] = 0.0f;
                 torqueConverters.lockupAngle[unit] = 0.0f;
-                SplitShaftSolver.clear(splitShafts, unit);
+            }
+
+            // Split shafts are independent coupling edges. They remain active in an
+            // upstream gearbox neutral and can therefore still couple their axle groups.
+            int splitEnd = splitShafts.unitStart[unit] + splitShafts.unitCount[unit];
+            for (int split = splitShafts.unitStart[unit]; split < splitEnd; split++) {
+                float primaryAV = 0.0f;
+                float primaryCompliance = 0.0f;
+                int primaryEnd = splitShafts.primaryPathStart[split]
+                        + splitShafts.primaryPathCount[split];
+                for (int p = splitShafts.primaryPathStart[split]; p < primaryEnd; p++) {
+                    int wheel = splitShafts.pathWheel[p];
+                    float gain = adjustedPathGain(splitShafts.pathGain[p], splitShafts.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    primaryAV += gain * vehicle.wheels.getAngularVelocity(wheel);
+                    float inertia = vehicle.wheels.getRotationalInertia(wheel);
+                    if (inertia > 1e-7f) primaryCompliance += gain * gain / inertia;
+                }
+                float secondaryAV = 0.0f;
+                float secondaryCompliance = 0.0f;
+                int secondaryEnd = splitShafts.secondaryPathStart[split]
+                        + splitShafts.secondaryPathCount[split];
+                for (int p = splitShafts.secondaryPathStart[split]; p < secondaryEnd; p++) {
+                    int wheel = splitShafts.pathWheel[p];
+                    float gain = adjustedPathGain(splitShafts.pathGain[p], splitShafts.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    secondaryAV += gain * vehicle.wheels.getAngularVelocity(wheel);
+                    float inertia = vehicle.wheels.getRotationalInertia(wheel);
+                    if (inertia > 1e-7f) secondaryCompliance += gain * gain / inertia;
+                }
+                if (primaryCompliance <= 1e-9f || secondaryCompliance <= 1e-9f) {
+                    SplitShaftSolver.clear(splitShafts, split);
+                    continue;
+                }
+                float splitTorque = SplitShaftSolver.solve(
+                        dt, primaryAV, secondaryAV, 1.0f / primaryCompliance,
+                        1.0f / secondaryCompliance, splitShafts, split);
+                for (int p = splitShafts.primaryPathStart[split]; p < primaryEnd; p++) {
+                    float gain = adjustedPathGain(splitShafts.pathGain[p], splitShafts.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    vehicle.wheels.applyDriveTorqueAndReaction(splitShafts.pathWheel[p], -splitTorque * gain);
+                }
+                for (int p = splitShafts.secondaryPathStart[split]; p < secondaryEnd; p++) {
+                    float gain = adjustedPathGain(splitShafts.pathGain[p], splitShafts.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    vehicle.wheels.applyDriveTorqueAndReaction(splitShafts.pathWheel[p], splitTorque * gain);
+                }
             }
             if (engines.engineAV[unit] < 0.0f) engines.engineAV[unit] = 0.0f;
 
@@ -569,6 +584,14 @@ public final class PowertrainSystem {
         return 0.0f;
     }
 
+    private static float adjustedPathGain(float baseGain, byte flags,
+                                          float gearboxFactor, float rangeFactor) {
+        float gain = baseGain;
+        if ((flags & DrivenWheelPathContainer.FLAG_GEARBOX) != 0) gain *= gearboxFactor;
+        if ((flags & DrivenWheelPathContainer.FLAG_RANGE_BOX) != 0) gain *= rangeFactor;
+        return gain;
+    }
+
     /** JBeam gear label: R for a negative ratio, N for zero, then 1, 2, … by forward order. */
     private String gearName(int unit, int index) {
         float ratio = gearboxRatio(unit, index);
@@ -593,9 +616,6 @@ public final class PowertrainSystem {
             torqueConverters.lockupTorque[i] = 0.0f;
             torqueConverters.inputTorque[i] = 0.0f;
             torqueConverters.outputTorque[i] = 0.0f;
-            SplitShaftSolver.clear(splitShafts, i);
-            splitShafts.activeMode[i] = splitShafts.initialMode[i];
-            splitShafts.clutchRatio[i] = splitShafts.defaultClutchRatio[i];
             engines.sparkEnabled[i] = true;
             engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
@@ -610,6 +630,11 @@ public final class PowertrainSystem {
             gearboxes.activeRatio[i] = gearboxRatio(i, gearboxes.initialGearIndex[i]);
             setRangeBoxMode(i, false);
             gearboxes.shiftRemaining[i] = 0.0f;
+        }
+        for (int split = 0; split < splitShafts.count; split++) {
+            SplitShaftSolver.clear(splitShafts, split);
+            splitShafts.activeMode[split] = splitShafts.initialMode[split];
+            splitShafts.clutchRatio[split] = splitShafts.defaultClutchRatio[split];
         }
         lastShiftUpEvent = 0L;
         lastShiftDownEvent = 0L;

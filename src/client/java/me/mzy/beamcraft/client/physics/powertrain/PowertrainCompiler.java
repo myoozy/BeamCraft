@@ -215,17 +215,27 @@ final class PowertrainCompiler {
         ClutchlikeSpec clutchlikeSpec = (ClutchlikeSpec) specs.get(clutchlike);
         FrictionClutchSpec clutchSpec = clutchlikeSpec instanceof FrictionClutchSpec c ? c : null;
         TorqueConverterSpec converterSpec = clutchlikeSpec instanceof TorqueConverterSpec c ? c : null;
-        int splitShaftDevice = findDeviceOfType(topology, clutchlike, TYPE_SPLIT_SHAFT);
-        SplitShaftSpec splitShaft = splitShaftDevice >= 0
-                ? (SplitShaftSpec) specs.get(splitShaftDevice) : null;
+        int gearboxDevice = findGearboxDevice(topology, clutchlike);
+        GearboxSpec gearbox = gearboxDevice >= 0 ? (GearboxSpec) specs.get(gearboxDevice) : null;
+        int rangeBoxDevice = findDeviceOfType(topology, clutchlike, TYPE_RANGE_BOX);
+        GearboxSpec rangeBox = rangeBoxDevice >= 0 ? (GearboxSpec) specs.get(rangeBoxDevice) : null;
         List<PathBuild> paths = new ArrayList<>();
         List<ReactorBuild> reactors = new ArrayList<>();
+        List<SplitBuild> splitShafts = new ArrayList<>();
         boolean[] visiting = new boolean[topology.deviceCount];
         for (int i = 0; i < topology.childCount[clutchlike]; i++) {
-            collectPaths(vehicle, specs, topology,
+            collectDomainPaths(vehicle, specs, topology,
                     topology.children[topology.childStart[clutchlike] + i], 1.0f,
-                    splitShaftDevice, DrivenWheelPathContainer.BRANCH_RIGID,
-                    paths, reactors, visiting);
+                    (byte) 0, gearboxDevice, rangeBoxDevice, paths, visiting);
+        }
+        Arrays.fill(visiting, false);
+        collectSplitBuilds(vehicle, specs, topology, clutchlike, gearboxDevice,
+                rangeBoxDevice, splitShafts, visiting);
+        Arrays.fill(visiting, false);
+        for (int i = 0; i < topology.childCount[clutchlike]; i++) {
+            collectReactors(vehicle, specs, topology,
+                    topology.children[topology.childStart[clutchlike] + i],
+                    1.0f, reactors, visiting);
         }
 
         float maxTorque = 0.0f;
@@ -241,15 +251,11 @@ final class PowertrainCompiler {
             spring *= Math.max(0.0f, springScale);
         }
 
-        int gearboxDevice = findGearboxDevice(topology, clutchlike);
-        GearboxSpec gearbox = gearboxDevice >= 0 ? (GearboxSpec) specs.get(gearboxDevice) : null;
-        int rangeBoxDevice = findDeviceOfType(topology, clutchlike, TYPE_RANGE_BOX);
-        GearboxSpec rangeBox = rangeBoxDevice >= 0 ? (GearboxSpec) specs.get(rangeBoxDevice) : null;
         List<Integer> reactions = resolveNodes(vehicle, engineSpec.torqueReactionNodes());
         return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec,
                 capacity, spring, maxTorque, paths, reactions, reactors,
                 gearboxDevice, gearbox, rangeBoxDevice, rangeBox,
-                splitShaftDevice, splitShaft);
+                splitShafts);
     }
 
     /**
@@ -273,10 +279,83 @@ final class PowertrainCompiler {
         return -1;
     }
 
-    private static void collectPaths(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
-                                     PowertrainTopologyContainer topology, int device, float incomingGain,
-                                     int splitShaftDevice, byte branch,
-                                     List<PathBuild> paths, List<ReactorBuild> reactors, boolean[] visiting) {
+    /** Collects one rigid kinematic domain, following only the primary port at split shafts. */
+    private static void collectDomainPaths(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
+                                           PowertrainTopologyContainer topology, int device,
+                                           float incomingGain, byte incomingFlags,
+                                           int gearboxDevice, int rangeBoxDevice,
+                                           List<PathBuild> paths, boolean[] visiting) {
+        if (visiting[device] || topology.deviceType[device] == TYPE_UNSUPPORTED) return;
+        visiting[device] = true;
+        float gain = incomingGain * topology.deviceRatio[device];
+        byte flags = incomingFlags;
+        if (device == gearboxDevice) flags |= DrivenWheelPathContainer.FLAG_GEARBOX;
+        if (device == rangeBoxDevice) flags |= DrivenWheelPathContainer.FLAG_RANGE_BOX;
+        DeviceSpec spec = specs.get(device);
+        String wheelName = connectedWheel(spec);
+        if (wheelName != null) {
+            Integer wheel = vehicle.wheels.nameToIndex.get(wheelName);
+            if (wheel != null) paths.add(new PathBuild(wheel, gain, flags));
+            else LOGGER.warn("Powertrain device '{}' references missing wheel '{}'", topology.deviceName[device], wheelName);
+        }
+
+        int count = topology.childCount[device];
+        for (int i = 0; i < count; i++) {
+            int child = topology.children[topology.childStart[device] + i];
+            float split = 1.0f;
+            if (topology.deviceType[device] == TYPE_SPLIT_SHAFT) {
+                if (topology.parentPort[child] != ((SplitShaftSpec) spec).primaryOutputID()) continue;
+            } else if (topology.deviceType[device] == TYPE_DIFFERENTIAL) {
+                float configured = Math.clamp((float) ((DifferentialSpec) spec).diffTorqueSplit(), 0.0f, 1.0f);
+                split = topology.parentPort[child] <= 1 ? configured : 1.0f - configured;
+            } else if (count > 1) {
+                split = 1.0f / count;
+            }
+            collectDomainPaths(vehicle, specs, topology, child, gain * split, flags,
+                    gearboxDevice, rangeBoxDevice, paths, visiting);
+        }
+        visiting[device] = false;
+    }
+
+    /** Discovers every split shaft in the unit, including nested devices on secondary branches. */
+    private static void collectSplitBuilds(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
+                                           PowertrainTopologyContainer topology, int device,
+                                           int gearboxDevice, int rangeBoxDevice,
+                                           List<SplitBuild> result, boolean[] visiting) {
+        if (visiting[device] || topology.deviceType[device] == TYPE_UNSUPPORTED) return;
+        visiting[device] = true;
+        if (specs.get(device) instanceof SplitShaftSpec splitSpec) {
+            List<PathBuild> primary = new ArrayList<>();
+            List<PathBuild> secondary = new ArrayList<>();
+            boolean[] pathVisiting = new boolean[topology.deviceCount];
+            int end = topology.childStart[device] + topology.childCount[device];
+            for (int cursor = topology.childStart[device]; cursor < end; cursor++) {
+                int child = topology.children[cursor];
+                List<PathBuild> target = topology.parentPort[child] == splitSpec.primaryOutputID()
+                        ? primary : secondary;
+                collectDomainPaths(vehicle, specs, topology, child, 1.0f, (byte) 0,
+                        gearboxDevice, rangeBoxDevice, target, pathVisiting);
+            }
+            if (primary.isEmpty() || secondary.isEmpty()) {
+                LOGGER.warn("Split shaft '{}' has no resolved wheel inertia on its {} output; "
+                                + "the coupling stays inactive until a virtual-inertia domain is available",
+                        splitSpec.name(), primary.isEmpty() ? "primary" : "secondary");
+            }
+            result.add(new SplitBuild(device, splitSpec, primary, secondary));
+        }
+        int end = topology.childStart[device] + topology.childCount[device];
+        for (int cursor = topology.childStart[device]; cursor < end; cursor++) {
+            collectSplitBuilds(vehicle, specs, topology, topology.children[cursor],
+                    gearboxDevice, rangeBoxDevice, result, visiting);
+        }
+        visiting[device] = false;
+    }
+
+    /** Retains the existing body torque-reaction metadata independently of domain paths. */
+    private static void collectReactors(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
+                                        PowertrainTopologyContainer topology, int device,
+                                        float incomingGain, List<ReactorBuild> reactors,
+                                        boolean[] visiting) {
         if (visiting[device] || topology.deviceType[device] == TYPE_UNSUPPORTED) return;
         visiting[device] = true;
         float gain = incomingGain * topology.deviceRatio[device];
@@ -285,13 +364,6 @@ final class PowertrainCompiler {
             List<Integer> nodes = resolveNodes(vehicle, reactorSpec.torqueReactionNodes());
             if (nodes.size() >= 3) reactors.add(new ReactorBuild(gain, nodes));
         }
-        String wheelName = connectedWheel(spec);
-        if (wheelName != null) {
-            Integer wheel = vehicle.wheels.nameToIndex.get(wheelName);
-            if (wheel != null) paths.add(new PathBuild(wheel, gain, branch));
-            else LOGGER.warn("Powertrain device '{}' references missing wheel '{}'", topology.deviceName[device], wheelName);
-        }
-
         int count = topology.childCount[device];
         for (int i = 0; i < count; i++) {
             int child = topology.children[topology.childStart[device] + i];
@@ -299,21 +371,8 @@ final class PowertrainCompiler {
             if (topology.deviceType[device] == TYPE_DIFFERENTIAL) {
                 float configured = Math.clamp((float) ((DifferentialSpec) spec).diffTorqueSplit(), 0.0f, 1.0f);
                 split = topology.parentPort[child] <= 1 ? configured : 1.0f - configured;
-            } else if (count > 1) {
-                split = 1.0f / count;
             }
-            byte childBranch = branch;
-            if (device == splitShaftDevice) {
-                int primaryOutput = ((SplitShaftSpec) spec).primaryOutputID();
-                childBranch = topology.parentPort[child] == primaryOutput
-                        ? DrivenWheelPathContainer.BRANCH_PRIMARY
-                        : DrivenWheelPathContainer.BRANCH_SECONDARY;
-                // A split shaft transfers torque between its outputs; it is not an open
-                // differential and therefore does not divide either branch gain here.
-                split = 1.0f;
-            }
-            collectPaths(vehicle, specs, topology, child, gain * split,
-                    splitShaftDevice, childBranch, paths, reactors, visiting);
+            collectReactors(vehicle, specs, topology, child, gain * split, reactors, visiting);
         }
         visiting[device] = false;
     }
@@ -332,6 +391,7 @@ final class PowertrainCompiler {
 
         int n = units.size();
         int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, gearSlots = 0;
+        int splitCount = 0, splitPathCount = 0;
         for (UnitBuild unit : units) {
             curves += unit.engine.torqueCurve().size();
             paths += unit.paths.size();
@@ -339,6 +399,10 @@ final class PowertrainCompiler {
             reactors += unit.reactors.size();
             for (ReactorBuild reactor : unit.reactors) reactionTotal += reactor.nodes.size();
             gearSlots += gearRatiosOf(unit).size();
+            splitCount += unit.splitShafts.size();
+            for (SplitBuild split : unit.splitShafts) {
+                splitPathCount += split.primaryPaths.size() + split.secondaryPaths.size();
+            }
         }
         engines.allocate(n, curves);
         clutches.allocate(n);
@@ -348,9 +412,10 @@ final class PowertrainCompiler {
         reactions.allocate(n, reactionTotal, reactors);
         gearboxes.allocate(n, Math.max(1, gearSlots));
         rangeBoxes.allocate(n);
-        splitShafts.allocate(n);
+        splitShafts.allocate(n, splitCount, splitPathCount);
 
         int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, gearCursor = 0;
+        int splitCursor = 0, splitPathCursor = 0;
         for (int i = 0; i < n; i++) {
             UnitBuild unit = units.get(i);
             CombustionEngineSpec engine = unit.engine;
@@ -456,44 +521,48 @@ final class PowertrainCompiler {
             rangeBoxes.activeRatio[i] = rangeHigh;
             rangeBoxes.lowMode[i] = false;
 
-            splitShafts.device[i] = unit.splitShaftDevice;
-            splitShafts.deviceName[i] = unit.splitShaft != null ? unit.splitShaft.name() : "none";
-            if (unit.splitShaft != null) {
-                SplitShaftSpec splitShaft = unit.splitShaft;
+            splitShafts.unitStart[i] = splitCursor;
+            splitShafts.unitCount[i] = (short) unit.splitShafts.size();
+            for (SplitBuild splitBuild : unit.splitShafts) {
+                int splitIndex = splitCursor++;
+                SplitShaftSpec splitShaft = splitBuild.spec;
+                splitShafts.unit[splitIndex] = i;
+                splitShafts.device[splitIndex] = splitBuild.device;
+                splitShafts.deviceName[splitIndex] = splitShaft.name();
                 byte configuredMode = "viscous".equalsIgnoreCase(splitShaft.splitType())
                         ? SplitShaftContainer.MODE_VISCOUS : SplitShaftContainer.MODE_LOCKED;
-                splitShafts.configuredMode[i] = configuredMode;
-                splitShafts.initialMode[i] = splitShaft.isDisconnected()
+                splitShafts.configuredMode[splitIndex] = configuredMode;
+                splitShafts.initialMode[splitIndex] = splitShaft.isDisconnected()
                         ? SplitShaftContainer.MODE_DISCONNECTED : configuredMode;
-                splitShafts.activeMode[i] = splitShafts.initialMode[i];
-                splitShafts.primaryOutputID[i] = splitShaft.primaryOutputID();
-                splitShafts.canDisconnect[i] = splitShaft.canDisconnect();
+                splitShafts.activeMode[splitIndex] = splitShafts.initialMode[splitIndex];
+                splitShafts.primaryOutputID[splitIndex] = splitShaft.primaryOutputID();
+                splitShafts.canDisconnect[splitIndex] = splitShaft.canDisconnect();
                 // BeamNG normally supplies this through an electronic controller. Until
                 // BeamCraft has that layer, a connected split shaft must remain useful:
                 // defaultClutchRatio=0 therefore falls back to fully engaged instead of
                 // silently turning an AWD configuration into primary-axle-only drive.
                 float configuredClutchRatio = Math.clamp((float) splitShaft.defaultClutchRatio(), 0.0f, 1.0f);
-                splitShafts.defaultClutchRatio[i] = configuredClutchRatio > 1.0e-6f
+                splitShafts.defaultClutchRatio[splitIndex] = configuredClutchRatio > 1.0e-6f
                         ? configuredClutchRatio : 1.0f;
-                splitShafts.clutchRatio[i] = splitShafts.defaultClutchRatio[i];
-                splitShafts.lockCapacity[i] = Math.max(0.0f, (float) splitShaft.lockTorque());
+                splitShafts.clutchRatio[splitIndex] = splitShafts.defaultClutchRatio[splitIndex];
+                splitShafts.lockCapacity[splitIndex] = Math.max(0.0f, (float) splitShaft.lockTorque());
                 float lockSpring = (float) splitShaft.lockSpring();
-                if (lockSpring <= 0.0f) lockSpring = splitShafts.lockCapacity[i] / 0.125f;
+                if (lockSpring <= 0.0f) lockSpring = splitShafts.lockCapacity[splitIndex] / 0.125f;
                 float springScale = Math.max(0.0f,
                         (float) (splitShaft.lockSpringCoef() * splitShaft.clutchStiffness()));
-                splitShafts.lockSpring[i] = Math.max(0.0f, lockSpring * springScale);
-                splitShafts.lockDampingRatio[i] = Math.max(0.0f, (float) splitShaft.lockDampRatio());
-                splitShafts.viscousCoef[i] = Math.max(0.0f, (float) splitShaft.viscousCoef());
-                splitShafts.viscousCapacity[i] = Math.max(0.0f, (float) splitShaft.viscousTorque());
-                splitShafts.viscousExponent[i] = Math.max(0.0f, (float) splitShaft.viscousExponent());
-                splitShafts.viscousSmoothing[i] = Math.max(0.0f, (float) splitShaft.viscousSmoothing());
-            } else {
-                splitShafts.device[i] = -1;
-                splitShafts.configuredMode[i] = SplitShaftContainer.MODE_DISCONNECTED;
-                splitShafts.initialMode[i] = SplitShaftContainer.MODE_DISCONNECTED;
-                splitShafts.activeMode[i] = SplitShaftContainer.MODE_DISCONNECTED;
-                splitShafts.clutchRatio[i] = 0.0f;
-                splitShafts.defaultClutchRatio[i] = 0.0f;
+                splitShafts.lockSpring[splitIndex] = Math.max(0.0f, lockSpring * springScale);
+                splitShafts.lockDampingRatio[splitIndex] = Math.max(0.0f, (float) splitShaft.lockDampRatio());
+                splitShafts.viscousCoef[splitIndex] = Math.max(0.0f, (float) splitShaft.viscousCoef());
+                splitShafts.viscousCapacity[splitIndex] = Math.max(0.0f, (float) splitShaft.viscousTorque());
+                splitShafts.viscousExponent[splitIndex] = Math.max(0.0f, (float) splitShaft.viscousExponent());
+                splitShafts.viscousSmoothing[splitIndex] = Math.max(0.0f, (float) splitShaft.viscousSmoothing());
+
+                splitShafts.primaryPathStart[splitIndex] = splitPathCursor;
+                splitShafts.primaryPathCount[splitIndex] = (short) splitBuild.primaryPaths.size();
+                splitPathCursor = writeSplitPaths(splitShafts, splitBuild.primaryPaths, splitPathCursor);
+                splitShafts.secondaryPathStart[splitIndex] = splitPathCursor;
+                splitShafts.secondaryPathCount[splitIndex] = (short) splitBuild.secondaryPaths.size();
+                splitPathCursor = writeSplitPaths(splitShafts, splitBuild.secondaryPaths, splitPathCursor);
             }
 
             engines.curveStart[i] = curveCursor; engines.curveCount[i] = (short) engine.torqueCurve().size();
@@ -506,7 +575,7 @@ final class PowertrainCompiler {
             for (PathBuild path : unit.paths) {
                 wheelPaths.pathWheel[pathCursor] = path.wheel;
                 wheelPaths.pathGain[pathCursor] = path.gain;
-                wheelPaths.pathBranch[pathCursor] = path.branch;
+                wheelPaths.pathFlags[pathCursor] = path.flags;
                 pathCursor++;
             }
             reactions.reactionStart[i] = reactionCursor; reactions.reactionCount[i] = (byte) unit.reactions.size();
@@ -520,6 +589,16 @@ final class PowertrainCompiler {
                 reactorCursor++;
             }
         }
+    }
+
+    private static int writeSplitPaths(SplitShaftContainer target, List<PathBuild> paths, int cursor) {
+        for (PathBuild path : paths) {
+            target.pathWheel[cursor] = path.wheel;
+            target.pathGain[cursor] = path.gain;
+            target.pathFlags[cursor] = path.flags;
+            cursor++;
+        }
+        return cursor;
     }
 
     // ---------------------------------------------------------------- engine/gearbox derivation
@@ -677,10 +756,14 @@ final class PowertrainCompiler {
 
     // ---------------------------------------------------------------- build records
 
-    private record PathBuild(int wheel, float gain, byte branch) {
+    private record PathBuild(int wheel, float gain, byte flags) {
     }
 
     private record ReactorBuild(float gain, List<Integer> nodes) {
+    }
+
+    private record SplitBuild(int device, SplitShaftSpec spec,
+                              List<PathBuild> primaryPaths, List<PathBuild> secondaryPaths) {
     }
 
     private record UnitBuild(int engineDevice, int clutchlikeDevice, CombustionEngineSpec engine,
@@ -689,6 +772,6 @@ final class PowertrainCompiler {
                              List<PathBuild> paths, List<Integer> reactions, List<ReactorBuild> reactors,
                              int gearboxDevice, GearboxSpec gearbox,
                              int rangeBoxDevice, GearboxSpec rangeBox,
-                             int splitShaftDevice, SplitShaftSpec splitShaft) {
+                             List<SplitBuild> splitShafts) {
     }
 }

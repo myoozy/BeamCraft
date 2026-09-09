@@ -61,7 +61,7 @@ public final class TorqueConverterSolver {
         float slipAfterFluid = slip - dt * pumpTorque * (
                 1.0f / Math.max(inputInertia, MIN_INERTIA)
                         + multiplication / Math.max(outputInertia, MIN_INERTIA));
-        ImplicitClutchSolver.solveInto(
+        ImplicitCouplingSolver.solveInto(
                 dt, slipAfterFluid, inputInertia, outputInertia,
                 state.lockupSpring[index], state.lockupDampingRatio[index], state.lockupCapacity[index],
                 lockupRatio, state.lockupTorque, state.lockupAngle, index);

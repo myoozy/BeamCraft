@@ -4,7 +4,7 @@ package me.mzy.beamcraft.client.physics.powertrain;
  * Per-unit friction-clutch SoA. One row per compiled engine→clutch unit, kept in the
  * same order as {@link CombustionEngineContainer} so the solver indexes both by unit id.
  *
- * <p>{@code clutchTorque} is written by {@link ImplicitClutchSolver#solveInto} and read
+ * <p>{@code clutchTorque} is written by {@link ImplicitCouplingSolver#solveInto} and read
  * back by the solver to load the engine and the driven wheel paths.
  */
 public final class FrictionClutchContainer {
