@@ -57,6 +57,10 @@ public final class VehicleInternalForceSolver {
         // ==========================================
         solveTirePressure();
 
+        // Deform groups observe geometric strain before plastic relaxation can
+        // move the beam's neutral length toward the current shape.
+        v.updateDeformGroupTriggers();
+
         // ==========================================
         // ==========================================
         solveNormalBeams(plasticRelaxation, invDt);

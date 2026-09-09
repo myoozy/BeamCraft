@@ -59,6 +59,7 @@ class BeamBreakCommitTest {
     private static PhysicsSpecs.BeamSpec beam(String node1, String node2, float strength) {
         return new PhysicsSpecs.BeamSpec(
                 BeamContainer.BEAM_NORMAL, node1, node2, null,
+                List.of(), Float.POSITIVE_INFINITY,
                 List.of("shared"), 0, false,
                 100.0f, 0.0f, Float.MAX_VALUE, strength,
                 0.5f, 0.0f, 0.0f,

@@ -13,6 +13,8 @@ import net.minecraft.world.World;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SoftBodyVehicle {
     public static final float KINDA_SMALL_NUMBER = PhysicsWorld.KINDA_SMALL_NUMBER;
@@ -57,6 +59,7 @@ public class SoftBodyVehicle {
 
     public java.util.Map<String, List<BeamPointer>> breakGroupMap = new java.util.HashMap<>();
     private final java.util.Set<String> triggeredBreakGroups = new java.util.HashSet<>();
+    private final Set<String> triggeredDeformGroups = ConcurrentHashMap.newKeySet();
 
     final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
@@ -545,6 +548,7 @@ public class SoftBodyVehicle {
      */
     public void reset() {
         triggeredBreakGroups.clear();
+        triggeredDeformGroups.clear();
         electrics.resetValues();
         nodes.reset();
         normalBeams.reset();
@@ -586,6 +590,7 @@ public class SoftBodyVehicle {
         renderTimeline.clear();
         breakGroupMap.clear();
         triggeredBreakGroups.clear();
+        triggeredDeformGroups.clear();
         maxTrackedPartId = -1;
 
         System.out.println("Vehicle data cleared and reset");
@@ -710,6 +715,62 @@ public class SoftBodyVehicle {
     }
 
     /**
+     * Latches a BeamNG deform group until the vehicle is reset. Rendering and
+     * effects deliberately do not consume this state yet.
+     */
+    public void triggerDeformGroup(String groupName) {
+        if (groupName != null && !groupName.isEmpty()) {
+            triggeredDeformGroups.add(groupName);
+        }
+    }
+
+    public boolean isDeformGroupTriggered(String groupName) {
+        return groupName != null && triggeredDeformGroups.contains(groupName);
+    }
+
+    public Set<String> triggeredDeformGroups() {
+        return Set.copyOf(triggeredDeformGroups);
+    }
+
+    /** Evaluates only beams that declared a finite deformation trigger ratio. */
+    void updateDeformGroupTriggers() {
+        updateDeformGroupTriggers(normalBeams);
+        updateDeformGroupTriggers(supportBeams);
+        updateDeformGroupTriggers(boundedBeams);
+        updateDeformGroupTriggers(lBeams);
+        updateDeformGroupTriggers(anisotropicBeams);
+    }
+
+    private void updateDeformGroupTriggers(BeamContainer container) {
+        for (int trigger = 0; trigger < container.deformTriggerCount(); trigger++) {
+            int beam = container.deformTriggerIndex(trigger);
+            if (container.broken[beam] || container.deformGroupTriggered[beam]) continue;
+
+            float restLength = container.effectiveRestLength(beam);
+            if (!(restLength > KINDA_SMALL_NUMBER) || !Float.isFinite(restLength)) continue;
+
+            int n1 = container.node1[beam];
+            int n2 = container.node2[beam];
+            double dx = nodes.posX[n2] - nodes.posX[n1];
+            double dy = nodes.posY[n2] - nodes.posY[n1];
+            double dz = nodes.posZ[n2] - nodes.posZ[n1];
+            double currentLength = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            double strain = Math.abs(currentLength / restLength - 1.0);
+            if (strain <= container.deformationTriggerRatio[beam]) continue;
+
+            container.deformGroupTriggered[beam] = true;
+            triggerDeformGroups(container.assignedDeformGroups[beam]);
+        }
+    }
+
+    private void triggerDeformGroups(List<String> groups) {
+        if (groups == null) return;
+        for (String group : groups) {
+            triggerDeformGroup(group);
+        }
+    }
+
+    /**
      * Applies direct beam failures detected during the force-accumulation phase.
      * Keeping this as a separate commit phase prevents beam iteration order from
      * deciding whether another member of the same break group contributes force.
@@ -733,6 +794,8 @@ public class SoftBodyVehicle {
     void breakBeamAt(BeamContainer container, int idx) {
         if (container.broken[idx]) return;
         container.broken[idx] = true;
+        container.deformGroupTriggered[idx] = true;
+        triggerDeformGroups(container.assignedDeformGroups[idx]);
         if (!container.disableTriangleBreaking[idx]) {
             triangles.breakByEdge(container.node1[idx], container.node2[idx]);
         }

@@ -581,6 +581,8 @@ public class JBeamParser {
         float currentTransitionZone = 0.0f;
 
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
+        java.util.List<String> currentDeformGroups = new java.util.ArrayList<>();
+        float currentDeformationTriggerRatio = Float.POSITIVE_INFINITY;
         int currentBreakGroupType = 0;
         boolean currentDisableTriangleBreaking = false;
 
@@ -629,6 +631,11 @@ public class JBeamParser {
                     currentBreakGroups = parseGroups(modifier.get("breakGroup"), entry.variables);
                     currentBreakGroupType = getIntSafe(modifier, "breakGroupType", currentBreakGroupType);
                 }
+                if (modifier.has("deformGroup")) {
+                    currentDeformGroups = parseGroups(modifier.get("deformGroup"), entry.variables);
+                }
+                currentDeformationTriggerRatio = getFloatSafe(
+                        modifier, "deformationTriggerRatio", currentDeformationTriggerRatio, entry.variables);
                 currentDisableTriangleBreaking = getBooleanSafe(
                         modifier, "disableTriangleBreaking", currentDisableTriangleBreaking);
                 continue;
@@ -653,6 +660,8 @@ public class JBeamParser {
                     float inlineTransitionZone = currentTransitionZone;
                     String inlineId3 = null; // for L-Beams
                     java.util.List<String> inlineBreakGroups = currentBreakGroups;
+                    java.util.List<String> inlineDeformGroups = currentDeformGroups;
+                    float inlineDeformationTriggerRatio = currentDeformationTriggerRatio;
                     int inlineBreakGroupType = currentBreakGroupType;
                     boolean inlineDisableTriangleBreaking = currentDisableTriangleBreaking;
 
@@ -691,6 +700,11 @@ public class JBeamParser {
                             inlineBreakGroups = parseGroups(inline.get("breakGroup"), entry.variables);
                             inlineBreakGroupType = getIntSafe(inline, "breakGroupType", inlineBreakGroupType);
                         }
+                        if (inline.has("deformGroup")) {
+                            inlineDeformGroups = parseGroups(inline.get("deformGroup"), entry.variables);
+                        }
+                        inlineDeformationTriggerRatio = getFloatSafe(
+                                inline, "deformationTriggerRatio", inlineDeformationTriggerRatio, entry.variables);
                         inlineDisableTriangleBreaking = getBooleanSafe(
                                 inline, "disableTriangleBreaking", inlineDisableTriangleBreaking);
 
@@ -710,6 +724,7 @@ public class JBeamParser {
                     String id2 = row.get(1).getAsString();
                     PhysicsSpecs.BeamSpec beamSpec = new PhysicsSpecs.BeamSpec(
                             inlineType, id1, id2, inlineId3,
+                            inlineDeformGroups, inlineDeformationTriggerRatio,
                             inlineBreakGroups, inlineBreakGroupType, inlineDisableTriangleBreaking,
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
@@ -969,6 +984,9 @@ public class JBeamParser {
     public static void parseFlexbodies(JsonArray flexbodies, SoftBodyVehicle vehicle, String rootPartName, JBeamAssembler.PartEntry entry) {
         boolean isHeader = true;
         java.util.List<String> currentGroups = new java.util.ArrayList<>();
+        String currentDeformGroup = "";
+        String currentDeformMaterialBase = "";
+        String currentDeformMaterialDamaged = "";
 
         for (JsonElement element : flexbodies) {
             // 拦截并更新全局状态修改器
@@ -977,6 +995,11 @@ public class JBeamParser {
                 if (modifier.has("group")) {
                     currentGroups = parseGroups(modifier.get("group"), entry.variables);
                 }
+                currentDeformGroup = getStringSafe(modifier, "deformGroup", currentDeformGroup);
+                currentDeformMaterialBase = getStringSafe(
+                        modifier, "deformMaterialBase", currentDeformMaterialBase);
+                currentDeformMaterialDamaged = getStringSafe(
+                        modifier, "deformMaterialDamaged", currentDeformMaterialDamaged);
                 continue;
             }
 
@@ -1005,6 +1028,9 @@ public class JBeamParser {
                     float px = 0, py = 0, pz = 0;
                     float rx = 0, ry = 0, rz = 0;
                     float sx = 1, sy = 1, sz = 1;
+                    String deformGroup = currentDeformGroup;
+                    String deformMaterialBase = currentDeformMaterialBase;
+                    String deformMaterialDamaged = currentDeformMaterialDamaged;
 
                     // 提取行内末尾的位移/旋转/缩放字典
                     for (int i = 1; i < row.size(); i++) {
@@ -1028,11 +1054,17 @@ public class JBeamParser {
                                 sy = getFloatSafe(scale, "y", 1, entry.variables);
                                 sz = getFloatSafe(scale, "z", 1, entry.variables);
                             }
+                            deformGroup = getStringSafe(trans, "deformGroup", deformGroup);
+                            deformMaterialBase = getStringSafe(
+                                    trans, "deformMaterialBase", deformMaterialBase);
+                            deformMaterialDamaged = getStringSafe(
+                                    trans, "deformMaterialDamaged", deformMaterialDamaged);
                         }
                     }
 
                     vehicle.flexbodies.registerFlexbody(
                             meshName, rootPartName, targetGroups,
+                            deformGroup, deformMaterialBase, deformMaterialDamaged,
                             px, py, pz,
                             rx, ry, rz,
                             sx, sy, sz,

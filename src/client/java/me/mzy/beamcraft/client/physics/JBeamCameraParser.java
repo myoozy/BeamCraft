@@ -175,6 +175,7 @@ public final class JBeamCameraParser {
             String cameraNode, String anchor, float spring, float damp, float deform, float strength) {
         return new PhysicsSpecs.BeamSpec(
                 BeamContainer.BEAM_NORMAL, cameraNode, anchor, null,
+                List.of(), Float.POSITIVE_INFINITY,
                 List.of(), 0, false,
                 spring, damp, deform, strength,
                 1.0f, 0.0f, 0.0f,

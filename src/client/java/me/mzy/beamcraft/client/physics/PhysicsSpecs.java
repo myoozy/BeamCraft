@@ -39,6 +39,8 @@ public final class PhysicsSpecs {
             String name1,
             String name2,
             String name3,
+            List<String> deformGroups,
+            float deformationTriggerRatio,
             List<String> breakGroups,
             int breakGroupType,
             boolean disableTriangleBreaking,

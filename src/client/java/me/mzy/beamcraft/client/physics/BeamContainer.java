@@ -16,6 +16,7 @@ public class BeamContainer {
     public static final int BEAM_ANISOTROPIC = 5;
 
     public java.util.List<String>[] assignedBreakGroups;
+    public java.util.List<String>[] assignedDeformGroups;
 
     public int count = 0;
     public int[] node1;
@@ -44,6 +45,10 @@ public class BeamContainer {
     private int[] pendingBreakIndices;
     private int pendingBreakCount;
     public int[] breakGroupType;
+    public float[] deformationTriggerRatio;
+    public boolean[] deformGroupTriggered;
+    private int[] deformTriggerIndices;
+    private int deformTriggerCount;
     public boolean[] disableTriangleBreaking;
     public int[] wheelId;
 
@@ -67,8 +72,12 @@ public class BeamContainer {
         pendingBreak = new boolean[INIT_BEAM_CAP];
         pendingBreakIndices = new int[INIT_BEAM_CAP];
         breakGroupType = new int[INIT_BEAM_CAP];
+        deformationTriggerRatio = new float[INIT_BEAM_CAP];
+        deformGroupTriggered = new boolean[INIT_BEAM_CAP];
+        deformTriggerIndices = new int[INIT_BEAM_CAP];
         disableTriangleBreaking = new boolean[INIT_BEAM_CAP];
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
+        assignedDeformGroups = new java.util.List[INIT_BEAM_CAP];
         wheelId = new int[INIT_BEAM_CAP];
     }
 
@@ -82,6 +91,7 @@ public class BeamContainer {
 
     protected void resize(int newSize) {
         assignedBreakGroups = java.util.Arrays.copyOf(assignedBreakGroups, newSize);
+        assignedDeformGroups = java.util.Arrays.copyOf(assignedDeformGroups, newSize);
         node1 = Utility.expand(node1, newSize);
         node2 = Utility.expand(node2, newSize);
         restLength = Utility.expand(restLength, newSize);
@@ -101,6 +111,9 @@ public class BeamContainer {
         pendingBreak = Utility.expand(pendingBreak, newSize);
         pendingBreakIndices = Utility.expand(pendingBreakIndices, newSize);
         breakGroupType = Utility.expand(breakGroupType, newSize);
+        deformationTriggerRatio = Utility.expand(deformationTriggerRatio, newSize);
+        deformGroupTriggered = Utility.expand(deformGroupTriggered, newSize);
+        deformTriggerIndices = Utility.expand(deformTriggerIndices, newSize);
         disableTriangleBreaking = Utility.expand(disableTriangleBreaking, newSize);
         wheelId = Utility.expand(wheelId, newSize);
     }
@@ -113,6 +126,11 @@ public class BeamContainer {
             this.assignedBreakGroups[count] = new java.util.ArrayList<>(spec.breakGroups());
         } else {
             this.assignedBreakGroups[count] = null;
+        }
+        if (spec.deformGroups() != null && !spec.deformGroups().isEmpty()) {
+            this.assignedDeformGroups[count] = new java.util.ArrayList<>(spec.deformGroups());
+        } else {
+            this.assignedDeformGroups[count] = null;
         }
 
         this.node1[idx] = node1Idx;
@@ -144,6 +162,13 @@ public class BeamContainer {
         this.broken[idx] = false;
         this.pendingBreak[idx] = false;
         this.breakGroupType[idx] = spec.breakGroupType();
+        this.deformationTriggerRatio[idx] = spec.deformationTriggerRatio();
+        this.deformGroupTriggered[idx] = false;
+        if (this.assignedDeformGroups[idx] != null
+                && Float.isFinite(spec.deformationTriggerRatio())
+                && spec.deformationTriggerRatio() >= 0.0f) {
+            this.deformTriggerIndices[deformTriggerCount++] = idx;
+        }
         this.disableTriangleBreaking[idx] = spec.disableTriangleBreaking();
         this.wheelId[idx] = -1;
 
@@ -164,17 +189,27 @@ public class BeamContainer {
     public void clear() {
         reset();
         count = 0;
+        deformTriggerCount = 0;
     }
 
     public void reset() {
         clearPendingBreaks();
         for (int i = 0; i < count; i++) {
             broken[i] = false;
+            deformGroupTriggered[i] = false;
             restLength[i] = baseRestLength[i];
             actuationRatio[i] = 1.0f;
             deform[i] = baseDeform[i];
             precompTimer[i] = precompTimeTotal[i];
         }
+    }
+
+    int deformTriggerCount() {
+        return deformTriggerCount;
+    }
+
+    int deformTriggerIndex(int triggerIndex) {
+        return deformTriggerIndices[triggerIndex];
     }
 
     void queueBreak(int beamIndex) {

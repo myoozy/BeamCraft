@@ -560,6 +560,7 @@ public class WheelContainer {
                                            double springExpansion, double dampExpansion, double transitionZone) {
         return new PhysicsSpecs.BeamSpec(
                 type, null, null, null,
+                List.of(), Float.POSITIVE_INFINITY,
                 null, 0, false,
                 (float) spring, (float) damp, (float) deform, (float) strength,
                 1.0f, 0.0f, 0.0f,

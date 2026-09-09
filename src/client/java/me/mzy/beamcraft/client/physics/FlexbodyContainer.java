@@ -22,6 +22,9 @@ public class FlexbodyContainer {
     public String[] meshName = new String[INIT_FLEX_CAP];
     // 存储每个 mesh 绑定的目标 Group 名称列表
     public List<String>[] targetGroups = new List[INIT_FLEX_CAP];
+    public String[] deformGroup = new String[INIT_FLEX_CAP];
+    public String[] deformMaterialBase = new String[INIT_FLEX_CAP];
+    public String[] deformMaterialDamaged = new String[INIT_FLEX_CAP];
     // 基础变换矩阵参数
     public double[] posX = new double[INIT_FLEX_CAP], posY = new double[INIT_FLEX_CAP], posZ = new double[INIT_FLEX_CAP];
     public double[] rotX = new double[INIT_FLEX_CAP], rotY = new double[INIT_FLEX_CAP], rotZ = new double[INIT_FLEX_CAP];
@@ -75,6 +78,9 @@ public class FlexbodyContainer {
             // ==========================
             meshName = Utility.expand(meshName, newSize);
             targetGroups = java.util.Arrays.copyOf(targetGroups, newSize);
+            deformGroup = Utility.expand(deformGroup, newSize);
+            deformMaterialBase = Utility.expand(deformMaterialBase, newSize);
+            deformMaterialDamaged = Utility.expand(deformMaterialDamaged, newSize);
 
             posX = Utility.expand(posX, newSize);
             posY = Utility.expand(posY, newSize);
@@ -151,6 +157,7 @@ public class FlexbodyContainer {
      * @return
      */
     public int registerFlexbody(String name, String namespace, List<String> groups,
+                                String damageGroup, String baseMaterial, String damagedMaterial,
                                 double px, double py, double pz,
                                 double rx, double ry, double rz,
                                 double sx, double sy, double sz,
@@ -160,6 +167,9 @@ public class FlexbodyContainer {
         int idx = meshCount;
         meshName[idx] = name;
         targetGroups[idx] = groups;
+        deformGroup[idx] = damageGroup;
+        deformMaterialBase[idx] = baseMaterial;
+        deformMaterialDamaged[idx] = damagedMaterial;
         // 保持存入原始未转换的 JSON 参数
         posX[idx] = px; posY[idx] = py; posZ[idx] = pz;
         rotX[idx] = rx; rotY[idx] = ry; rotZ[idx] = rz;

@@ -164,6 +164,7 @@ class JBeamHydroTest {
     private static PhysicsSpecs.BeamSpec beamSpec() {
         return new PhysicsSpecs.BeamSpec(
                 BeamContainer.BEAM_HYDRO, "a", "b", null,
+                List.of(), Float.POSITIVE_INFINITY,
                 List.of(), 0, false,
                 1000, 10, Float.MAX_VALUE, Float.MAX_VALUE,
                 1, 0, 0,
