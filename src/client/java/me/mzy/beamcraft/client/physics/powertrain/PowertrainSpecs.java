@@ -32,7 +32,7 @@ public final class PowertrainSpecs {
      * 在所有实现上直接可用。
      */
     public sealed interface DeviceSpec
-            permits CombustionEngineSpec, ClutchlikeSpec, GearboxSpec,
+            permits CombustionEngineSpec, ClutchlikeSpec, GearSelectableSpec,
                     ShaftSpec, SplitShaftSpec, TorsionReactorSpec, DifferentialSpec,
                     DevicePatchSpec, UnsupportedConfig {
         String type();
@@ -44,7 +44,25 @@ public final class PowertrainSpecs {
 
     /** A valid compliant boundary immediately downstream of a combustion engine. */
     public sealed interface ClutchlikeSpec extends DeviceSpec
-            permits FrictionClutchSpec, TorqueConverterSpec {
+            permits FrictionClutchSpec, TorqueConverterSpec, DctGearboxSpec {
+    }
+
+    /** A device that owns selectable transmission ratios. */
+    public sealed interface GearSelectableSpec extends DeviceSpec
+            permits GearboxSpec, DctGearboxSpec {
+        List<Double> gearRatios();
+        boolean fixedFirstGear();
+        double friction();
+        double dynamicFriction();
+        double torqueLossCoef();
+        double shiftTime();
+
+        default double firstPositiveGearRatio() {
+            for (double ratio : gearRatios()) {
+                if (ratio > 0.0) return ratio;
+            }
+            return 0.0;
+        }
     }
 
     /**
@@ -205,7 +223,7 @@ public final class PowertrainSpecs {
             double torqueLossCoef,
             List<ValueModifier> valueModifiers,
             double shiftTime
-    ) implements DeviceSpec {
+    ) implements GearSelectableSpec {
         public GearboxSpec {
             gearRatios = List.copyOf(gearRatios);
             valueModifiers = List.copyOf(valueModifiers);
@@ -264,6 +282,21 @@ public final class PowertrainSpecs {
             List<ValueModifier> valueModifiers
     ) implements DeviceSpec {
         public SplitShaftSpec {
+            valueModifiers = List.copyOf(valueModifiers);
+        }
+    }
+
+    /** One DCT node with two torque paths and no separately integrated input shafts. */
+    public record DctGearboxSpec(
+            String type, String name, String inputName, int inputIndex,
+            List<Double> gearRatios, boolean fixedFirstGear,
+            double friction, double dynamicFriction, double torqueLossCoef,
+            double lockTorque, double lockSpring, double clutchStiffness,
+            double lockDampRatio1, double lockDampRatio2, double additionalEngineInertia,
+            List<ValueModifier> valueModifiers, double shiftTime
+    ) implements ClutchlikeSpec, GearSelectableSpec {
+        public DctGearboxSpec {
+            gearRatios = List.copyOf(gearRatios);
             valueModifiers = List.copyOf(valueModifiers);
         }
     }

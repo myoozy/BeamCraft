@@ -8,6 +8,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngi
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
@@ -53,7 +54,7 @@ public final class JBeamPowertrainParser {
 
     /** 支持的变速箱类型（共享同一 gearRatios/friction/torqueLossCoef 结构）。 */
     private static final List<String> GEARBOX_TYPES =
-            List.of("manualgearbox", "gearbox", "automaticgearbox", "sequentialgearbox", "dctgearbox",
+            List.of("manualgearbox", "gearbox", "automaticgearbox", "sequentialgearbox",
                     "rangebox");
 
     /**
@@ -158,6 +159,12 @@ public final class JBeamPowertrainParser {
         JBeamParser.mergeJsonObjectsRecursive(cfg, inline);
         JsonElement named = part.get(name);
         if (named instanceof JsonObject jo) JBeamParser.mergeJsonObjectsRecursive(cfg, jo);
+        if (type.equalsIgnoreCase("dctGearbox") && !cfg.has("dctClutchTime")) {
+            JsonElement controller = part.get("vehicleController");
+            if (controller instanceof JsonObject controllerConfig && controllerConfig.has("dctClutchTime")) {
+                cfg.add("dctClutchTime", controllerConfig.get("dctClutchTime").deepCopy());
+            }
+        }
 
         return buildDevice(type, name, inputName, inputIndex, cfg, vars);
     }
@@ -172,6 +179,8 @@ public final class JBeamPowertrainParser {
                 return frictionClutch(type, name, inputName, inputIndex, cfg, vars);
             case "torqueconverter":
                 return torqueConverter(type, name, inputName, inputIndex, cfg, vars);
+            case "dctgearbox":
+                return dctGearbox(type, name, inputName, inputIndex, cfg, vars);
             default:
                 if (GEARBOX_TYPES.contains(lower)) {
                     return gearbox(type, name, inputName, inputIndex, cfg, vars);
@@ -314,6 +323,29 @@ public final class JBeamPowertrainParser {
                 d(cfg, "dynamicFriction", 0.0, vars),
                 d(cfg, "torqueLossCoef", 0.0, vars),
                 valueModifiers(cfg, vars)
+        );
+    }
+
+    private static DctGearboxSpec dctGearbox(String type, String name, String inputName, int inputIndex,
+                                             JsonObject cfg, Map<String, Double> vars) {
+        double shiftTime = JBeamParser.getFirstDoubleSafe(
+                cfg, -1.0, vars, "dctClutchTime", "gearChangeTime", "maxGearChangeTime");
+        if (shiftTime <= 0.0) shiftTime = 0.05;
+        return new DctGearboxSpec(
+                type, name, inputName, inputIndex,
+                JBeamParser.getDoubleListSafe(cfg, "gearRatios", vars),
+                false,
+                d(cfg, "friction", 0.0, vars),
+                d(cfg, "dynamicFriction", 0.0, vars),
+                d(cfg, "torqueLossCoef", 0.0, vars),
+                d(cfg, "lockTorque", 0.0, vars),
+                d(cfg, "lockSpring", 0.0, vars),
+                d(cfg, "clutchStiffness", 1.0, vars),
+                d(cfg, "lockDampRatio1", 0.15, vars),
+                d(cfg, "lockDampRatio2", 0.15, vars),
+                d(cfg, "additionalEngineInertia", 0.0, vars),
+                valueModifiers(cfg, vars),
+                shiftTime
         );
     }
 

@@ -19,6 +19,7 @@ public final class PowertrainTopologyContainer {
     public static final byte TYPE_TORQUE_CONVERTER = 7;
     public static final byte TYPE_RANGE_BOX = 8;
     public static final byte TYPE_SPLIT_SHAFT = 9;
+    public static final byte TYPE_DCT_GEARBOX = 10;
 
     public int deviceCount;
     public String[] deviceName = new String[0];

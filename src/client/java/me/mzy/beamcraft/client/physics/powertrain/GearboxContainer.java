@@ -8,8 +8,8 @@ package me.mzy.beamcraft.client.physics.powertrain;
  *
  * <p>The solver reads {@link #activeRatio} to apply the current ratio as a factor over
  * the compile-time first-gear path gains. A gearbox with no gearbox device on its path
- * compiles as an implicit single 1.0 ratio. During a shift (or in neutral) the active
- * ratio is 0, disconnecting the torque path, while the engine still integrates.
+ * compiles as an implicit single 1.0 ratio. Conventional gearboxes disconnect while
+ * shifting; a DCT reports its engagement-weighted ratio while its two clutch paths crossfade.
  *
  * <p>{@code shiftRemaining} counts down in seconds and is only ever decremented by
  * {@code PowertrainSystem.solve(dt)} — never by wall/game clock.

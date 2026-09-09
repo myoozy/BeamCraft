@@ -7,7 +7,9 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ClutchlikeSpec
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearSelectableSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
@@ -18,6 +20,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedCon
 
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_CLUTCH;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_DIFFERENTIAL;
+import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_DCT_GEARBOX;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_ENGINE;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_GEARBOX;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_RANGE_BOX;
@@ -215,18 +218,23 @@ final class PowertrainCompiler {
         ClutchlikeSpec clutchlikeSpec = (ClutchlikeSpec) specs.get(clutchlike);
         FrictionClutchSpec clutchSpec = clutchlikeSpec instanceof FrictionClutchSpec c ? c : null;
         TorqueConverterSpec converterSpec = clutchlikeSpec instanceof TorqueConverterSpec c ? c : null;
-        int gearboxDevice = findGearboxDevice(topology, clutchlike);
-        GearboxSpec gearbox = gearboxDevice >= 0 ? (GearboxSpec) specs.get(gearboxDevice) : null;
+        DctGearboxSpec dctSpec = clutchlikeSpec instanceof DctGearboxSpec d ? d : null;
+        int gearboxDevice = dctSpec != null ? clutchlike : findGearboxDevice(topology, clutchlike);
+        GearSelectableSpec gearbox = gearboxDevice >= 0
+                ? (GearSelectableSpec) specs.get(gearboxDevice) : null;
         int rangeBoxDevice = findDeviceOfType(topology, clutchlike, TYPE_RANGE_BOX);
         GearboxSpec rangeBox = rangeBoxDevice >= 0 ? (GearboxSpec) specs.get(rangeBoxDevice) : null;
         List<PathBuild> paths = new ArrayList<>();
         List<ReactorBuild> reactors = new ArrayList<>();
         List<SplitBuild> splitShafts = new ArrayList<>();
         boolean[] visiting = new boolean[topology.deviceCount];
+        byte initialFlags = dctSpec != null ? DrivenWheelPathContainer.FLAG_GEARBOX : 0;
+        float initialGain = dctSpec != null ? (float) dctSpec.firstPositiveGearRatio() : 1.0f;
+        if (Math.abs(initialGain) <= 1.0e-6f) initialGain = 1.0f;
         for (int i = 0; i < topology.childCount[clutchlike]; i++) {
             collectDomainPaths(vehicle, specs, topology,
-                    topology.children[topology.childStart[clutchlike] + i], 1.0f,
-                    (byte) 0, gearboxDevice, rangeBoxDevice, paths, visiting);
+                    topology.children[topology.childStart[clutchlike] + i], initialGain,
+                    initialFlags, gearboxDevice, rangeBoxDevice, paths, visiting);
         }
         Arrays.fill(visiting, false);
         collectSplitBuilds(vehicle, specs, topology, clutchlike, gearboxDevice,
@@ -249,10 +257,21 @@ final class PowertrainCompiler {
             float springScale = (float) (clutchSpec.lockSpringCoef() * clutchSpec.clutchStiffness());
             if (spring <= 0.0f) spring = capacity / Math.max(1e-3f, (float) clutchSpec.clutchFreePlay());
             spring *= Math.max(0.0f, springScale);
+        } else if (dctSpec != null) {
+            capacity = (float) dctSpec.lockTorque();
+            if (capacity <= 0.0f) {
+                float effectiveEngineInertia = Math.max(0.0f,
+                        (float) (engineSpec.inertia() + dctSpec.additionalEngineInertia()));
+                capacity = Math.max(1.0f, maxTorque * 1.25f
+                        + (float) engineSpec.maxRPM() * effectiveEngineInertia * (float) Math.PI / 30.0f);
+            }
+            spring = (float) dctSpec.lockSpring();
+            if (spring <= 0.0f) spring = capacity / 0.125f;
+            spring *= Math.max(0.0f, (float) dctSpec.clutchStiffness());
         }
 
         List<Integer> reactions = resolveNodes(vehicle, engineSpec.torqueReactionNodes());
-        return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec,
+        return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec, dctSpec,
                 capacity, spring, maxTorque, paths, reactions, reactors,
                 gearboxDevice, gearbox, rangeBoxDevice, rangeBox,
                 splitShafts);
@@ -386,6 +405,7 @@ final class PowertrainCompiler {
         RangeBoxContainer rangeBoxes = data.rangeBoxes;
         ClutchlikeContainer clutchlikes = data.clutchlikes;
         TorqueConverterContainer torqueConverters = data.torqueConverters;
+        DctGearboxContainer dctGearboxes = data.dctGearboxes;
         SplitShaftContainer splitShafts = data.splitShafts;
         PowertrainTopologyContainer topology = data.topology;
 
@@ -408,6 +428,7 @@ final class PowertrainCompiler {
         clutches.allocate(n);
         clutchlikes.allocate(n);
         torqueConverters.allocate(n);
+        dctGearboxes.allocate(n);
         wheelPaths.allocate(n, paths);
         reactions.allocate(n, reactionTotal, reactors);
         gearboxes.allocate(n, Math.max(1, gearSlots));
@@ -421,7 +442,8 @@ final class PowertrainCompiler {
             CombustionEngineSpec engine = unit.engine;
             engines.engineDevice[i] = unit.engineDevice; engines.clutchDevice[i] = unit.clutchlikeDevice;
             float additionalInertia = unit.converter != null
-                    ? Math.max(0.0f, (float) unit.converter.additionalEngineInertia()) : 0.0f;
+                    ? Math.max(0.0f, (float) unit.converter.additionalEngineInertia())
+                    : unit.dct != null ? Math.max(0.0f, (float) unit.dct.additionalEngineInertia()) : 0.0f;
             engines.engineInertia[i] = Math.max(1e-5f, (float) engine.inertia() + additionalInertia);
             engines.idleAV[i] = Math.max(0.0f, (float) engine.idleRPM()) * PowertrainSystem.RPM_TO_AV;
             engines.engineAV[i] = engines.idleAV[i];
@@ -455,7 +477,7 @@ final class PowertrainCompiler {
                 clutchlikes.type[i] = ClutchlikeContainer.TYPE_FRICTION_CLUTCH;
                 clutches.clutchCapacity[i] = unit.capacity; clutches.clutchSpring[i] = unit.spring;
                 clutches.clutchDampingRatio[i] = Math.max(0.0f, (float) unit.clutch.lockDampRatio());
-            } else {
+            } else if (unit.converter != null) {
                 clutchlikes.type[i] = ClutchlikeContainer.TYPE_TORQUE_CONVERTER;
                 TorqueConverterSpec converter = unit.converter;
                 torqueConverters.couplingAVRatio[i] = Math.max(0.05f, (float) converter.couplingAVRatio());
@@ -477,6 +499,13 @@ final class PowertrainCompiler {
                 String signalName = converter.lockupClutchRatioName();
                 if (signalName == null || signalName.isBlank()) signalName = ElectricSignals.LOCKUP_CLUTCH_RATIO;
                 torqueConverters.lockupSignalId[i] = vehicle.electrics.register(signalName);
+            } else {
+                clutchlikes.type[i] = ClutchlikeContainer.TYPE_DCT_GEARBOX;
+                dctGearboxes.device[i] = unit.clutchlikeDevice;
+                dctGearboxes.clutchCapacity[i] = unit.capacity;
+                dctGearboxes.clutchSpring[i] = unit.spring;
+                dctGearboxes.clutchDampingRatio1[i] = Math.max(0.0f, (float) unit.dct.lockDampRatio1());
+                dctGearboxes.clutchDampingRatio2[i] = Math.max(0.0f, (float) unit.dct.lockDampRatio2());
             }
 
             // Gearbox runtime state (implicit single 1.0 ratio when the unit has no gearbox).
@@ -503,6 +532,15 @@ final class PowertrainCompiler {
             gearboxes.shiftRemaining[i] = 0.0f;
             gearboxes.shiftDuration[i] = realGearbox ? Math.max(0.0f, (float) unit.gearbox.shiftTime()) : 0.0f;
             gearboxes.fixedFirstGear[i] = fixedFirst;
+
+            int secondForward = nextPositiveGearIndex(ratios, firstForward);
+            dctGearboxes.gearIndex1[i] = firstForward >= 0 ? firstForward : initial;
+            dctGearboxes.gearIndex2[i] = secondForward >= 0 ? secondForward : dctGearboxes.gearIndex1[i];
+            dctGearboxes.shiftTarget[i] = -1;
+            dctGearboxes.primaryClutch[i] = 0;
+            dctGearboxes.targetClutch[i] = -1;
+            dctGearboxes.engagement1[i] = unit.dct != null && initial == firstForward ? 1.0f : 0.0f;
+            dctGearboxes.engagement2[i] = 0.0f;
 
             rangeBoxes.device[i] = unit.rangeBoxDevice;
             rangeBoxes.deviceName[i] = unit.rangeBox != null ? unit.rangeBox.name() : "none";
@@ -673,6 +711,13 @@ final class PowertrainCompiler {
         return -1;
     }
 
+    private static int nextPositiveGearIndex(List<Double> ratios, int after) {
+        for (int i = Math.max(0, after + 1); i < ratios.size(); i++) {
+            if (ratios.get(i) > 0.0) return i;
+        }
+        return -1;
+    }
+
     private static float smallestPositiveRatio(List<Double> ratios) {
         float result = Float.POSITIVE_INFINITY;
         for (double ratio : ratios) {
@@ -723,6 +768,7 @@ final class PowertrainCompiler {
             case CombustionEngineSpec ignored -> PowertrainTopologyContainer.TYPE_ENGINE;
             case FrictionClutchSpec ignored -> PowertrainTopologyContainer.TYPE_CLUTCH;
             case TorqueConverterSpec ignored -> PowertrainTopologyContainer.TYPE_TORQUE_CONVERTER;
+            case DctGearboxSpec ignored -> PowertrainTopologyContainer.TYPE_DCT_GEARBOX;
             case GearboxSpec gearbox -> "rangebox".equalsIgnoreCase(gearbox.type())
                     ? PowertrainTopologyContainer.TYPE_RANGE_BOX
                     : PowertrainTopologyContainer.TYPE_GEARBOX;
@@ -738,6 +784,7 @@ final class PowertrainCompiler {
     private static float ratioOf(DeviceSpec spec) {
         return switch (spec) {
             case GearboxSpec gearbox -> (float) gearbox.firstPositiveGearRatio();
+            case DctGearboxSpec gearbox -> (float) gearbox.firstPositiveGearRatio();
             case ShaftSpec shaft -> (float) shaft.gearRatio();
             case TorsionReactorSpec reactor -> (float) reactor.gearRatio();
             case DifferentialSpec differential -> (float) differential.gearRatio();
@@ -767,10 +814,10 @@ final class PowertrainCompiler {
     }
 
     private record UnitBuild(int engineDevice, int clutchlikeDevice, CombustionEngineSpec engine,
-                             FrictionClutchSpec clutch, TorqueConverterSpec converter,
+                             FrictionClutchSpec clutch, TorqueConverterSpec converter, DctGearboxSpec dct,
                              float capacity, float spring, float maxTorque,
                              List<PathBuild> paths, List<Integer> reactions, List<ReactorBuild> reactors,
-                             int gearboxDevice, GearboxSpec gearbox,
+                             int gearboxDevice, GearSelectableSpec gearbox,
                              int rangeBoxDevice, GearboxSpec rangeBox,
                              List<SplitBuild> splitShafts) {
     }

@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * BeamNG-compatible rigid powertrain forest with one compliant {@code clutchlike}
- * boundary (friction clutch or torque converter) downstream of each combustion engine.
+ * boundary (friction clutch, torque converter or DCT) downstream of each combustion engine.
  *
  * <p>This class is orchestration, control and debug only. All hot data lives in the flat
  * SoA containers of a {@link PowertrainData} (exposed here for the substep and for HUD
@@ -34,8 +34,8 @@ import java.util.List;
  * </ul>
  *
  * <p>Gearboxes are runtime SoA: the active ratio scales the compile-time first-gear wheel
- * paths, a shift request disconnects the torque path (active ratio 0) for the shift
- * duration, and all shift/limiter timers are decremented only by {@code solve(dt)}.
+ * paths. Conventional boxes disconnect for the shift duration; DCTs linearly hand torque
+ * between their two selected ratios. All shift/limiter timers use {@code solve(dt)} only.
  * The clutch torque is governed solely by {@link ImplicitCouplingSolver} and its friction
  * capacity — it may stall the engine; it is never clamped to the engine's sustainable
  * torque.
@@ -54,6 +54,7 @@ public final class PowertrainSystem {
     public final FrictionClutchContainer clutches = data.clutches;
     public final ClutchlikeContainer clutchlikes = data.clutchlikes;
     public final TorqueConverterContainer torqueConverters = data.torqueConverters;
+    public final DctGearboxContainer dctGearboxes = data.dctGearboxes;
     public final DrivenWheelPathContainer wheelPaths = data.wheelPaths;
     public final TorqueReactionContainer reactions = data.reactions;
     public final GearboxContainer gearboxes = data.gearboxes;
@@ -290,10 +291,11 @@ public final class PowertrainSystem {
             float drivelineCompliance = 0.0f;
             int pStart = wheelPaths.pathStart[unit];
             int pEnd = pStart + wheelPaths.pathCount[unit];
+            boolean isDct = clutchlikes.type[unit] == ClutchlikeContainer.TYPE_DCT_GEARBOX;
             for (int p = pStart; p < pEnd; p++) {
                 int wheel = wheelPaths.pathWheel[p];
                 float gain = adjustedPathGain(wheelPaths.pathGain[p], wheelPaths.pathFlags[p],
-                        gearboxFactor, rangeFactor);
+                        isDct ? 1.0f : gearboxFactor, rangeFactor);
                 drivelineAV += gain * vehicle.wheels.getAngularVelocity(wheel);
                 float inertia = vehicle.wheels.getRotationalInertia(wheel);
                 if (inertia > 1e-7f) drivelineCompliance += gain * gain / inertia;
@@ -312,6 +314,28 @@ public final class PowertrainSystem {
                             torqueConverters, unit);
                     couplerInputTorque = torqueConverters.inputTorque[unit];
                     couplerOutputTorque = torqueConverters.outputTorque[unit];
+                } else if (isDct) {
+                    float ratio1 = gearboxRatio(unit, dctGearboxes.gearIndex1[unit]);
+                    float ratio2 = gearboxRatio(unit, dctGearboxes.gearIndex2[unit]);
+                    float factor1 = pathBaseRatio > 1.0e-6f ? ratio1 / pathBaseRatio : 0.0f;
+                    float factor2 = pathBaseRatio > 1.0e-6f ? ratio2 / pathBaseRatio : 0.0f;
+                    float launch1 = dctLaunchEngagement(unit, dctGearboxes.gearIndex1[unit],
+                            factor1 * drivelineAV, throttle);
+                    float launch2 = dctLaunchEngagement(unit, dctGearboxes.gearIndex2[unit],
+                            factor2 * drivelineAV, throttle);
+                    DctCouplingSolver.solveInto(
+                            dt, engines.engineAV[unit], drivelineAV,
+                            engines.engineInertia[unit], drivelineCompliance,
+                            factor1, factor2, dctGearboxes.clutchSpring[unit],
+                            dctGearboxes.clutchDampingRatio1[unit], dctGearboxes.clutchDampingRatio2[unit],
+                            dctGearboxes.clutchCapacity[unit],
+                            dctGearboxes.engagement1[unit] * engagement * launch1,
+                            dctGearboxes.engagement2[unit] * engagement * launch2,
+                            dctGearboxes, unit);
+                    couplerInputTorque = dctGearboxes.clutchTorque1[unit]
+                            + dctGearboxes.clutchTorque2[unit];
+                    couplerOutputTorque = dctGearboxes.clutchTorque1[unit] * factor1
+                            + dctGearboxes.clutchTorque2[unit] * factor2;
                 } else {
                     ImplicitCouplingSolver.solveInto(
                             dt, engines.engineAV[unit] - drivelineAV,
@@ -325,7 +349,7 @@ public final class PowertrainSystem {
                 engines.engineAV[unit] -= dt * couplerInputTorque / engines.engineInertia[unit];
                 for (int p = pStart; p < pEnd; p++) {
                     float gain = adjustedPathGain(wheelPaths.pathGain[p], wheelPaths.pathFlags[p],
-                            gearboxFactor, rangeFactor);
+                            isDct ? 1.0f : gearboxFactor, rangeFactor);
                     vehicle.wheels.applyDriveTorqueAndReaction(
                             wheelPaths.pathWheel[p], couplerOutputTorque * gain);
                 }
@@ -336,6 +360,10 @@ public final class PowertrainSystem {
                 torqueConverters.outputTorque[unit] = 0.0f;
                 torqueConverters.lockupTorque[unit] = 0.0f;
                 torqueConverters.lockupAngle[unit] = 0.0f;
+                dctGearboxes.clutchTorque1[unit] = 0.0f;
+                dctGearboxes.clutchTorque2[unit] = 0.0f;
+                dctGearboxes.clutchAngle1[unit] = 0.0f;
+                dctGearboxes.clutchAngle2[unit] = 0.0f;
             }
 
             // Split shafts are independent coupling edges. They remain active in an
@@ -395,13 +423,17 @@ public final class PowertrainSystem {
             int rEnd = reactions.reactorStart[unit] + reactions.reactorCount[unit];
             for (int reactor = reactions.reactorStart[unit]; reactor < rEnd; reactor++) {
                 applyReactionTorque(reactions.reactorNodeStart[reactor], reactions.reactorNodeCount[reactor],
-                        couplerOutputTorque * reactions.reactorGain[reactor] * ratioFactor);
+                        couplerOutputTorque * reactions.reactorGain[reactor]
+                                * (isDct ? pathBaseRatio * rangeFactor : ratioFactor));
             }
 
             if (unit == 0) {
                 debugEngineRPM = engines.engineAV[0] * AV_TO_RPM;
                 debugClutchTorque = clutchlikes.type[0] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER
-                        ? torqueConverters.outputTorque[0] : clutches.clutchTorque[0];
+                        ? torqueConverters.outputTorque[0]
+                        : clutchlikes.type[0] == ClutchlikeContainer.TYPE_DCT_GEARBOX
+                        ? dctGearboxes.clutchTorque1[0] + dctGearboxes.clutchTorque2[0]
+                        : clutches.clutchTorque[0];
                 debugCombustionTorque = combustionTorque;
                 debugTorqueCurveCount = engines.curveCount[0];
                 debugActualThrottle = actualThrottle;
@@ -497,6 +529,10 @@ public final class PowertrainSystem {
      * changes here, inside {@link #solve(float)}, never on the wall/game clock.
      */
     private void updateShift(int unit, float dt) {
+        if (clutchlikes.type[unit] == ClutchlikeContainer.TYPE_DCT_GEARBOX) {
+            updateDctShift(unit, dt);
+            return;
+        }
         int pending = gearboxes.pendingGearIndex[unit];
         if (pending >= 0 && pending != gearboxes.currentGearIndex[unit]) {
             gearboxes.shiftRemaining[unit] -= dt;
@@ -519,6 +555,7 @@ public final class PowertrainSystem {
         if (count <= 1 || target < 0 || target >= count) return;
         if (target == gearboxes.currentGearIndex[unit] && gearboxes.pendingGearIndex[unit] < 0) return;
         gearboxes.pendingGearIndex[unit] = target;
+        if (clutchlikes.type[unit] == ClutchlikeContainer.TYPE_DCT_GEARBOX) return;
         if (gearboxes.shiftRemaining[unit] <= 0.0f) {
             gearboxes.shiftRemaining[unit] = Math.max(0.0f, gearboxes.shiftDuration[unit]);
             gearboxes.activeRatio[unit] = 0.0f; // torque path disconnected from shift start
@@ -561,6 +598,116 @@ public final class PowertrainSystem {
         }
     }
 
+    /** Basic manual DCT controller: adjacent preselection followed by a linear clutch handoff. */
+    private void updateDctShift(int unit, float dt) {
+        if (dctGearboxes.shiftTarget[unit] < 0) {
+            int requested = gearboxes.pendingGearIndex[unit];
+            int current = gearboxes.currentGearIndex[unit];
+            if (requested >= 0 && requested != current) {
+                int next = current + Integer.signum(requested - current);
+                startDctHandoff(unit, next);
+            } else {
+                if (requested == current) gearboxes.pendingGearIndex[unit] = -1;
+                gearboxes.activeRatio[unit] = gearboxRatio(unit, current);
+                preselectDctGear(unit);
+                return;
+            }
+        }
+
+        float duration = Math.max(0.0f, gearboxes.shiftDuration[unit]);
+        gearboxes.shiftRemaining[unit] = Math.max(0.0f, gearboxes.shiftRemaining[unit] - dt);
+        float progress = duration <= 1.0e-6f
+                ? 1.0f : Math.clamp(1.0f - gearboxes.shiftRemaining[unit] / duration, 0.0f, 1.0f);
+        int from = dctGearboxes.primaryClutch[unit];
+        int to = dctGearboxes.targetClutch[unit];
+        boolean fromNeutral = Math.abs(gearboxRatio(unit, gearboxes.currentGearIndex[unit])) <= 1.0e-6f;
+        if (to < 0) {
+            setDctEngagements(unit, from == 0 ? 1.0f - progress : 0.0f,
+                    from == 1 ? 1.0f - progress : 0.0f);
+        } else if (fromNeutral) {
+            setDctEngagements(unit, to == 0 ? progress : 0.0f, to == 1 ? progress : 0.0f);
+        } else {
+            setDctEngagements(unit,
+                    from == 0 ? 1.0f - progress : progress,
+                    from == 1 ? 1.0f - progress : progress);
+        }
+        gearboxes.activeRatio[unit] = dctEngagementWeightedRatio(unit);
+
+        if (progress >= 1.0f) {
+            int completed = dctGearboxes.shiftTarget[unit];
+            gearboxes.currentGearIndex[unit] = completed;
+            if (to >= 0) dctGearboxes.primaryClutch[unit] = (byte) to;
+            setDctEngagements(unit, to == 0 ? 1.0f : 0.0f, to == 1 ? 1.0f : 0.0f);
+            dctGearboxes.shiftTarget[unit] = -1;
+            dctGearboxes.targetClutch[unit] = -1;
+            gearboxes.shiftRemaining[unit] = 0.0f;
+            gearboxes.activeRatio[unit] = gearboxRatio(unit, completed);
+            if (gearboxes.pendingGearIndex[unit] == completed) gearboxes.pendingGearIndex[unit] = -1;
+        }
+    }
+
+    private void startDctHandoff(int unit, int targetGear) {
+        float targetRatio = gearboxRatio(unit, targetGear);
+        int targetClutch = -1;
+        if (Math.abs(targetRatio) > 1.0e-6f) {
+            targetClutch = dctClutchForGear(unit, targetGear);
+            if (targetClutch == 0) dctGearboxes.gearIndex1[unit] = targetGear;
+            else dctGearboxes.gearIndex2[unit] = targetGear;
+        }
+        dctGearboxes.shiftTarget[unit] = targetGear;
+        dctGearboxes.targetClutch[unit] = (byte) targetClutch;
+        gearboxes.shiftRemaining[unit] = Math.max(0.0f, gearboxes.shiftDuration[unit]);
+    }
+
+    private int dctClutchForGear(int unit, int gearIndex) {
+        if (dctGearboxes.gearIndex1[unit] == gearIndex) return 0;
+        if (dctGearboxes.gearIndex2[unit] == gearIndex) return 1;
+        float ratio = gearboxRatio(unit, gearIndex);
+        if (ratio < 0.0f) return 0;
+        int forwardOrdinal = 0;
+        int start = gearboxes.gearStart[unit];
+        for (int i = 0; i <= gearIndex && i < gearboxes.gearCount[unit]; i++) {
+            if (gearboxes.gearRatios[start + i] > 1.0e-6f) forwardOrdinal++;
+        }
+        return (forwardOrdinal & 1) == 1 ? 0 : 1;
+    }
+
+    /** Keeps the open shaft on the adjacent manual gear without ever requesting a shift. */
+    private void preselectDctGear(int unit) {
+        int current = gearboxes.currentGearIndex[unit];
+        if (gearboxRatio(unit, current) <= 1.0e-6f) return;
+        int candidate = engines.playerThrottle[unit] > 1.0e-3f ? current + 1 : current - 1;
+        if (candidate < 0 || candidate >= gearboxes.gearCount[unit]
+                || gearboxRatio(unit, candidate) <= 1.0e-6f) return;
+        int clutch = dctClutchForGear(unit, candidate);
+        if (clutch == dctGearboxes.primaryClutch[unit]) return;
+        if (clutch == 0) dctGearboxes.gearIndex1[unit] = candidate;
+        else dctGearboxes.gearIndex2[unit] = candidate;
+    }
+
+    private void setDctEngagements(int unit, float first, float second) {
+        dctGearboxes.engagement1[unit] = Math.clamp(first, 0.0f, 1.0f);
+        dctGearboxes.engagement2[unit] = Math.clamp(second, 0.0f, 1.0f);
+    }
+
+    private float dctEngagementWeightedRatio(int unit) {
+        return gearboxRatio(unit, dctGearboxes.gearIndex1[unit]) * dctGearboxes.engagement1[unit]
+                + gearboxRatio(unit, dctGearboxes.gearIndex2[unit]) * dctGearboxes.engagement2[unit];
+    }
+
+    /** Gentle first/reverse launch and stall prevention; it never chooses a gear. */
+    private float dctLaunchEngagement(int unit, int gearIndex, float gearedDrivelineAV, float throttle) {
+        float ratio = gearboxRatio(unit, gearIndex);
+        if (Math.abs(ratio) <= 1.0e-6f) return 0.0f;
+        int first = firstPositiveGearIndex(unit);
+        if (ratio > 0.0f && gearIndex != first) return 1.0f;
+        float idle = Math.max(engines.idleAV[unit], 1.0f);
+        float referenceAV = Math.max(engines.engineAV[unit], Math.abs(gearedDrivelineAV));
+        float launchStart = idle * (1.0f + 0.25f * Math.clamp(throttle, 0.0f, 1.0f));
+        float linear = Math.clamp((referenceAV - launchStart) / idle, 0.0f, 1.0f);
+        return linear * linear;
+    }
+
     private void setRangeBoxMode(int unit, boolean low) {
         if (unit < 0 || unit >= rangeBoxes.unitCount || rangeBoxes.device[unit] < 0) return;
         rangeBoxes.lowMode[unit] = low;
@@ -582,6 +729,18 @@ public final class PowertrainSystem {
         int count = gearboxes.gearCount[unit];
         if (index >= 0 && index < count) return gearboxes.gearRatios[start + index];
         return 0.0f;
+    }
+
+    private int firstPositiveGearIndex(int unit) {
+        return nextPositiveGearIndex(unit, -1);
+    }
+
+    private int nextPositiveGearIndex(int unit, int after) {
+        int count = gearboxes.gearCount[unit];
+        for (int index = Math.max(0, after + 1); index < count; index++) {
+            if (gearboxRatio(unit, index) > 1.0e-6f) return index;
+        }
+        return -1;
     }
 
     private static float adjustedPathGain(float baseGain, byte flags,
@@ -630,6 +789,21 @@ public final class PowertrainSystem {
             gearboxes.activeRatio[i] = gearboxRatio(i, gearboxes.initialGearIndex[i]);
             setRangeBoxMode(i, false);
             gearboxes.shiftRemaining[i] = 0.0f;
+            if (clutchlikes.type[i] == ClutchlikeContainer.TYPE_DCT_GEARBOX) {
+                int first = firstPositiveGearIndex(i);
+                int second = nextPositiveGearIndex(i, first);
+                dctGearboxes.gearIndex1[i] = first >= 0 ? first : gearboxes.initialGearIndex[i];
+                dctGearboxes.gearIndex2[i] = second >= 0 ? second : dctGearboxes.gearIndex1[i];
+                dctGearboxes.primaryClutch[i] = 0;
+                dctGearboxes.targetClutch[i] = -1;
+                dctGearboxes.shiftTarget[i] = -1;
+                boolean firstEngaged = gearboxes.initialGearIndex[i] == first;
+                setDctEngagements(i, firstEngaged ? 1.0f : 0.0f, 0.0f);
+                dctGearboxes.clutchAngle1[i] = 0.0f;
+                dctGearboxes.clutchAngle2[i] = 0.0f;
+                dctGearboxes.clutchTorque1[i] = 0.0f;
+                dctGearboxes.clutchTorque2[i] = 0.0f;
+            }
         }
         for (int split = 0; split < splitShafts.count; split++) {
             SplitShaftSolver.clear(splitShafts, split);

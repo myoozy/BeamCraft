@@ -8,6 +8,7 @@ package me.mzy.beamcraft.client.physics.powertrain;
 public final class ClutchlikeContainer {
     public static final byte TYPE_FRICTION_CLUTCH = 1;
     public static final byte TYPE_TORQUE_CONVERTER = 2;
+    public static final byte TYPE_DCT_GEARBOX = 3;
 
     public byte[] type = new byte[0];
     public int[] device = new int[0];

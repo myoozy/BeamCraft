@@ -127,6 +127,35 @@ final class PowertrainSpecNormalizer {
                     coupling, stall, stiffness, diameter, limit, extraInertia,
                     c.lockupClutchRatioName(), lockCapacity, lockSpring, lockDamping, List.of());
         }
+        if (spec instanceof DctGearboxSpec d) {
+            double friction = d.friction(), dynamic = d.dynamicFriction(), loss = d.torqueLossCoef();
+            double lockTorque = d.lockTorque(), lockSpring = d.lockSpring();
+            double stiffness = d.clutchStiffness(), damp1 = d.lockDampRatio1(), damp2 = d.lockDampRatio2();
+            double extraInertia = d.additionalEngineInertia(), shiftTime = d.shiftTime();
+            List<Double> ratios = d.gearRatios();
+            switch (key) {
+                case "friction" -> friction = modify(friction, modifier);
+                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
+                case "torqueLossCoef" -> loss = modify(loss, modifier);
+                case "lockTorque" -> lockTorque = modify(lockTorque, modifier);
+                case "lockSpring" -> lockSpring = modify(lockSpring, modifier);
+                case "clutchStiffness" -> stiffness = modify(stiffness, modifier);
+                case "lockDampRatio1" -> damp1 = modify(damp1, modifier);
+                case "lockDampRatio2" -> damp2 = modify(damp2, modifier);
+                case "additionalEngineInertia" -> extraInertia = modify(extraInertia, modifier);
+                case "dctClutchTime", "gearChangeTime", "maxGearChangeTime" ->
+                        shiftTime = modify(shiftTime, modifier);
+                case "gearRatios" -> {
+                    List<Double> changed = new ArrayList<>(ratios.size());
+                    for (double ratio : ratios) changed.add(modify(ratio, modifier));
+                    ratios = changed;
+                }
+                default -> { return spec; }
+            }
+            return new DctGearboxSpec(d.type(), d.name(), d.inputName(), d.inputIndex(), ratios, false,
+                    friction, dynamic, loss, lockTorque, lockSpring, stiffness, damp1, damp2,
+                    extraInertia, List.of(), shiftTime);
+        }
         if (spec instanceof GearboxSpec g) {
             double friction = g.friction(), dynamic = g.dynamicFriction(), loss = g.torqueLossCoef();
             double shiftTime = g.shiftTime();

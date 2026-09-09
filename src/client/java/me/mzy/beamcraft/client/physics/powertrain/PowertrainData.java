@@ -23,6 +23,9 @@ public final class PowertrainData {
     /** Torque-converter parameters/state, indexed in the same order as engines. */
     public final TorqueConverterContainer torqueConverters = new TorqueConverterContainer();
 
+    /** Dual-clutch gearbox parameters and state, indexed by engine unit. */
+    public final DctGearboxContainer dctGearboxes = new DctGearboxContainer();
+
     /** Rigid driven-wheel paths out of each unit. */
     public final DrivenWheelPathContainer wheelPaths = new DrivenWheelPathContainer();
 
@@ -57,6 +60,7 @@ public final class PowertrainData {
         clutches.clear();
         clutchlikes.clear();
         torqueConverters.clear();
+        dctGearboxes.clear();
         wheelPaths.clear();
         reactions.clear();
         gearboxes.clear();

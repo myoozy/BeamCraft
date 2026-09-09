@@ -13,6 +13,75 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PowertrainSystemTest {
     @Test
+    void dctIsOneClutchlikeGearboxNodeWithLinearManualHandoffs() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.wheels.count = 2;
+        vehicle.wheels.nameToIndex.put("FL", 0);
+        vehicle.wheels.nameToIndex.put("FR", 1);
+        PowertrainSystem system = vehicle.powertrain;
+        system.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 800, 7000, 1, 0.01, 2,
+                        List.of(new TorquePoint(1000, 100), new TorquePoint(5000, 200)), List.of(), List.of()),
+                new DctGearboxSpec("dctGearbox", "dct", "engine", 1,
+                        List.of(-3.0, 0.0, 3.0, 2.0, 1.4), false,
+                        0, 0, 0, 400, 1600, 1, 0.15, 0.15, 0.1,
+                        List.of(), 0.05),
+                new DifferentialSpec("differential", "diff", "dct", 1,
+                        4.0, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "right", "diff", 2, 1, "FR", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+
+        system.finalizeSetup();
+
+        assertEquals("ready", system.diagnostic());
+        assertEquals(ClutchlikeContainer.TYPE_DCT_GEARBOX, system.clutchlikes.type[0]);
+        assertEquals(PowertrainTopologyContainer.TYPE_DCT_GEARBOX, system.topology.deviceType[1]);
+        assertEquals(1, system.gearboxes.device[0], "the DCT is itself the selectable gearbox");
+        assertArrayEquals(new float[]{6.0f, 6.0f}, system.wheelPaths.pathGain, 1.0e-6f);
+        assertEquals(2, system.dctGearboxes.gearIndex1[0]);
+        assertEquals(3, system.dctGearboxes.gearIndex2[0]);
+        assertEquals(0.0f, system.dctGearboxes.engagement1[0], 1.0e-6f);
+        assertEquals(0.0f, system.dctGearboxes.engagement2[0], 1.0e-6f);
+
+        system.requestShiftUp();
+        system.solve(0.025f);
+        assertEquals(1, system.gearboxes.currentGearIndex[0]);
+        assertEquals(0.5f, system.dctGearboxes.engagement1[0], 1.0e-6f);
+        assertEquals(0.0f, system.dctGearboxes.engagement2[0], 1.0e-6f);
+        assertEquals(1.5f, system.gearboxes.activeRatio[0], 1.0e-6f);
+        system.solve(0.025f);
+        assertEquals(2, system.gearboxes.currentGearIndex[0]);
+        assertEquals(1.0f, system.dctGearboxes.engagement1[0], 1.0e-6f);
+
+        system.requestShiftUp();
+        system.solve(0.025f);
+        assertEquals(0.5f, system.dctGearboxes.engagement1[0], 1.0e-6f);
+        assertEquals(0.5f, system.dctGearboxes.engagement2[0], 1.0e-6f);
+        assertEquals(2.5f, system.gearboxes.activeRatio[0], 1.0e-6f);
+        system.solve(0.025f);
+        assertEquals(3, system.gearboxes.currentGearIndex[0]);
+        assertEquals(1, system.dctGearboxes.primaryClutch[0]);
+        assertEquals(0.0f, system.dctGearboxes.engagement1[0], 1.0e-6f);
+        assertEquals(1.0f, system.dctGearboxes.engagement2[0], 1.0e-6f);
+
+        system.setControls(1.0f, 0.0f);
+        system.solve(0.001f);
+        assertEquals(4, system.dctGearboxes.gearIndex1[0],
+                "with positive throttle, the open shaft preselects the adjacent higher gear");
+
+        system.reset();
+        assertEquals(1, system.gearboxes.currentGearIndex[0]);
+        assertEquals(2, system.dctGearboxes.gearIndex1[0]);
+        assertEquals(3, system.dctGearboxes.gearIndex2[0]);
+        assertEquals(0.0f, system.dctGearboxes.engagement1[0], 1.0e-6f);
+        assertEquals(0.0f, system.dctGearboxes.engagement2[0], 1.0e-6f);
+    }
+
+    @Test
     void splitShaftCompilesBothVivaceStyleAxlesAndUsesConnectedFallback() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         vehicle.wheels.count = 4;

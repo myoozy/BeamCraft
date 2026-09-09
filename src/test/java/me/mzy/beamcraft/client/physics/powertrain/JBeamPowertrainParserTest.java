@@ -4,10 +4,13 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.mzy.beamcraft.client.material.RelaxedJson;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ClutchlikeSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearSelectableSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
@@ -420,6 +423,34 @@ class JBeamPowertrainParserTest {
         assertEquals(0.16, converter.additionalEngineInertia(), 1e-6);
         assertEquals(-1.0, converter.lockupClutchSpring(), 1e-6);
         assertEquals(0.15, converter.lockupClutchDampRatio(), 1e-6);
+    }
+
+    @Test
+    void dctParsesAsBothClutchlikeAndSelectableGearbox() {
+        List<DeviceSpec> specs = parse("""
+                {
+                  "powertrain": [
+                    ["type","name","inputName","inputIndex"],
+                    ["dctGearbox","dct","engine",1]
+                  ],
+                  "dct": {
+                    "gearRatios": [-3.2, 0, 3.4, 2.1, 1.4],
+                    "lockTorque": 650,
+                    "lockDampRatio1": 0.2,
+                    "lockDampRatio2": 0.25
+                  },
+                  "vehicleController": {"dctClutchTime": 0.08}
+                }
+                """);
+
+        DctGearboxSpec dct = assertInstanceOf(DctGearboxSpec.class, specs.get(0));
+        assertInstanceOf(ClutchlikeSpec.class, dct);
+        assertInstanceOf(GearSelectableSpec.class, dct);
+        assertEquals(List.of(-3.2, 0.0, 3.4, 2.1, 1.4), dct.gearRatios());
+        assertEquals(650.0, dct.lockTorque(), 1.0e-6);
+        assertEquals(0.2, dct.lockDampRatio1(), 1.0e-6);
+        assertEquals(0.25, dct.lockDampRatio2(), 1.0e-6);
+        assertEquals(0.08, dct.shiftTime(), 1.0e-6);
     }
 
     @Test
