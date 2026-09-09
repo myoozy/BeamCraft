@@ -47,6 +47,7 @@ public final class BeamCraftConfig {
         public String starter = "";
         public String shiftUp = "";
         public String shiftDown = "";
+        public String rangeBoxToggle = "";
         public String resetVehicle = "";
     }
 

@@ -11,6 +11,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSp
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
@@ -131,7 +132,9 @@ public final class JBeamPowertrainParser {
             "dctClutchTime", "idleControllerP", "maxIdleThrottle",
             "couplingAVRatio", "stallTorqueRatio", "converterStiffness", "converterDiameter",
             "converterTorque", "additionalEngineInertia", "lockupClutchTorque",
-            "lockupClutchSpring", "lockupClutchDampRatio");
+            "lockupClutchSpring", "lockupClutchDampRatio", "primaryOutputID",
+            "defaultClutchRatio", "viscousCoef", "viscousTorque", "viscousExponent",
+            "viscousSmoothing");
 
     // ---------------------------------------------------------------- row 解析
 
@@ -176,6 +179,8 @@ public final class JBeamPowertrainParser {
                 switch (lower) {
                     case "shaft":
                         return shaft(type, name, inputName, inputIndex, cfg, vars);
+                    case "splitshaft":
+                        return splitShaft(type, name, inputName, inputIndex, cfg, vars);
                     case "torsionreactor":
                         return torsionReactor(type, name, inputName, inputIndex, cfg, vars);
                     case "differential":
@@ -281,6 +286,33 @@ public final class JBeamPowertrainParser {
                 fields.gearRatio, fields.connectedWheel, fields.friction,
                 fields.dynamicFriction, fields.torqueLossCoef,
                 fields.torqueReactionNodes, fields.outputPortOverride,
+                valueModifiers(cfg, vars)
+        );
+    }
+
+    private static SplitShaftSpec splitShaft(String type, String name, String inputName, int inputIndex,
+                                             JsonObject cfg, Map<String, Double> vars) {
+        double viscousCoef = d(cfg, "viscousCoef", 10.0, vars);
+        return new SplitShaftSpec(
+                type, name, inputName, inputIndex,
+                d(cfg, "gearRatio", 1.0, vars),
+                Math.clamp((int) Math.round(d(cfg, "primaryOutputID", 1.0, vars)), 1, 2),
+                s(cfg, "splitType", "locked"),
+                b(cfg, "canDisconnect", false),
+                b(cfg, "isDisconnected", false),
+                d(cfg, "defaultClutchRatio", 1.0, vars),
+                d(cfg, "lockTorque", 500.0, vars),
+                d(cfg, "lockSpring", -1.0, vars),
+                d(cfg, "lockSpringCoef", 1.0, vars),
+                d(cfg, "lockDampRatio", 0.15, vars),
+                d(cfg, "clutchStiffness", 1.0, vars),
+                viscousCoef,
+                d(cfg, "viscousTorque", viscousCoef * 10.0, vars),
+                d(cfg, "viscousExponent", 1.0, vars),
+                d(cfg, "viscousSmoothing", 25.0, vars),
+                d(cfg, "friction", 0.0, vars),
+                d(cfg, "dynamicFriction", 0.0, vars),
+                d(cfg, "torqueLossCoef", 0.0, vars),
                 valueModifiers(cfg, vars)
         );
     }

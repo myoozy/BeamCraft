@@ -57,6 +57,8 @@ public final class PowertrainSystem {
     public final DrivenWheelPathContainer wheelPaths = data.wheelPaths;
     public final TorqueReactionContainer reactions = data.reactions;
     public final GearboxContainer gearboxes = data.gearboxes;
+    public final RangeBoxContainer rangeBoxes = data.rangeBoxes;
+    public final SplitShaftContainer splitShafts = data.splitShafts;
     public final ShaftContainer shafts = data.shafts;
     public final DifferentialContainer differentials = data.differentials;
     public final TorsionReactorContainer torsionReactors = data.torsionReactors;
@@ -66,9 +68,11 @@ public final class PowertrainSystem {
     private final int starterSignalId;
     private final int shiftUpSignalId;
     private final int shiftDownSignalId;
+    private final int rangeBoxToggleSignalId;
     private final int defaultLockupSignalId;
     private long lastShiftUpEvent;
     private long lastShiftDownEvent;
+    private long lastRangeBoxToggleEvent;
     private volatile float debugEngineRPM;
     private volatile float debugThrottle;
     private volatile float debugActualThrottle;
@@ -93,6 +97,7 @@ public final class PowertrainSystem {
         starterSignalId = vehicle.electrics.register(ElectricSignals.STARTER_INPUT);
         shiftUpSignalId = vehicle.electrics.register(ElectricSignals.SHIFT_UP_EVENT);
         shiftDownSignalId = vehicle.electrics.register(ElectricSignals.SHIFT_DOWN_EVENT);
+        rangeBoxToggleSignalId = vehicle.electrics.register(ElectricSignals.RANGE_BOX_TOGGLE_EVENT);
         defaultLockupSignalId = vehicle.electrics.register(ElectricSignals.LOCKUP_CLUTCH_RATIO);
     }
 
@@ -146,6 +151,46 @@ public final class PowertrainSystem {
         vehicle.electrics.set(shiftDownSignalId, vehicle.electrics.get(shiftDownSignalId) + 1.0);
     }
 
+    /** Toggles every compiled range box between BeamNG-compatible high and low modes. */
+    public void requestRangeBoxToggle() {
+        vehicle.electrics.set(rangeBoxToggleSignalId,
+                vehicle.electrics.get(rangeBoxToggleSignalId) + 1.0);
+    }
+
+    /** Selects high or low range immediately without changing the primary gearbox gear. */
+    public void setRangeBoxLow(boolean low) {
+        for (int unit = 0; unit < rangeBoxes.unitCount; unit++) {
+            setRangeBoxMode(unit, low);
+        }
+    }
+
+    /** Selects the basic operating mode of every split shaft with the given device name. */
+    public void setSplitShaftMode(String deviceName, String mode) {
+        byte resolved = switch (mode == null ? "" : mode.toLowerCase(java.util.Locale.ROOT)) {
+            case "locked", "lock" -> SplitShaftContainer.MODE_LOCKED;
+            case "viscous" -> SplitShaftContainer.MODE_VISCOUS;
+            case "disconnected", "disconnect", "open" -> SplitShaftContainer.MODE_DISCONNECTED;
+            default -> -1;
+        };
+        if (resolved < 0) return;
+        for (int unit = 0; unit < splitShafts.unitCount; unit++) {
+            if (splitShafts.device[unit] < 0 || !splitShafts.deviceName[unit].equals(deviceName)) continue;
+            if (resolved == SplitShaftContainer.MODE_DISCONNECTED && !splitShafts.canDisconnect[unit]) continue;
+            splitShafts.activeMode[unit] = resolved;
+            SplitShaftSolver.clear(splitShafts, unit);
+        }
+    }
+
+    /** Updates the lock-clutch command for a named split shaft (0 = open, 1 = engaged). */
+    public void setSplitShaftClutchRatio(String deviceName, float ratio) {
+        float clamped = Math.clamp(ratio, 0.0f, 1.0f);
+        for (int unit = 0; unit < splitShafts.unitCount; unit++) {
+            if (splitShafts.device[unit] >= 0 && splitShafts.deviceName[unit].equals(deviceName)) {
+                splitShafts.clutchRatio[unit] = clamped;
+            }
+        }
+    }
+
     /** Writes the default BeamNG-compatible torque-converter lock-up command (0 = open, 1 = locked). */
     public void setTorqueConverterLockup(float ratio) {
         vehicle.electrics.set(defaultLockupSignalId, Math.clamp(ratio, 0.0f, 1.0f));
@@ -169,6 +214,7 @@ public final class PowertrainSystem {
         if (dt <= 0.0f) return;
         ElectricSnapshot input = electrics == null ? ElectricSnapshot.EMPTY : electrics;
         consumeShiftEvents(input);
+        consumeRangeBoxEvents(input);
         if (engines.unitCount == 0 || dt <= 0.0f) return;
         float throttle = Math.clamp((float) input.get(throttleSignalId), 0.0f, 1.0f);
         float clutchPedal = Math.clamp((float) input.get(clutchSignalId), 0.0f, 1.0f);
@@ -240,8 +286,14 @@ public final class PowertrainSystem {
             if (Math.abs(activeRatio) > 1e-6f) {
                 float pathBaseRatio = gearboxes.pathBaseRatio[unit];
                 ratioFactor = pathBaseRatio > 1e-6f ? activeRatio / pathBaseRatio : 1.0f;
-                float drivelineAV = 0.0f;
-                float compliance = 0.0f;
+                float rangeBaseRatio = rangeBoxes.pathBaseRatio[unit];
+                if (rangeBaseRatio > 1.0e-6f) {
+                    ratioFactor *= rangeBoxes.activeRatio[unit] / rangeBaseRatio;
+                }
+                float primaryAV = 0.0f;
+                float primaryCompliance = 0.0f;
+                float secondaryAV = 0.0f;
+                float secondaryCompliance = 0.0f;
                 int pStart = wheelPaths.pathStart[unit];
                 int pEnd = pStart + wheelPaths.pathCount[unit];
                 for (int p = pStart; p < pEnd; p++) {
@@ -249,18 +301,25 @@ public final class PowertrainSystem {
                     float gain = wheelPaths.pathGain[p] * ratioFactor;
                     // Wheel AV and drive torque are forward-positive, matching the engine
                     // shaft convention, so T*w power needs no compensating sign.
-                    drivelineAV += gain * vehicle.wheels.getAngularVelocity(wheel);
                     float inertia = vehicle.wheels.getRotationalInertia(wheel);
-                    if (inertia > 1e-7f) compliance += gain * gain / inertia;
+                    float reflectedAV = gain * vehicle.wheels.getAngularVelocity(wheel);
+                    float reflectedCompliance = inertia > 1e-7f ? gain * gain / inertia : 0.0f;
+                    if (wheelPaths.pathBranch[p] == DrivenWheelPathContainer.BRANCH_SECONDARY) {
+                        secondaryAV += reflectedAV;
+                        secondaryCompliance += reflectedCompliance;
+                    } else {
+                        primaryAV += reflectedAV;
+                        primaryCompliance += reflectedCompliance;
+                    }
                 }
-                if (compliance > 1e-9f) {
-                    float drivelineInertia = 1.0f / compliance;
+                if (primaryCompliance > 1e-9f) {
+                    float primaryInertia = 1.0f / primaryCompliance;
                     if (clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER) {
                         float lockupRatio = Math.clamp(
                                 (float) input.get(torqueConverters.lockupSignalId[unit]), 0.0f, 1.0f);
                         TorqueConverterSolver.solveInto(
-                                dt, engines.engineAV[unit], drivelineAV,
-                                engines.engineInertia[unit], drivelineInertia,
+                                dt, engines.engineAV[unit], primaryAV,
+                                engines.engineInertia[unit], primaryInertia,
                                 torqueConverters.couplingAVRatio[unit], torqueConverters.stallTorqueRatio[unit],
                                 torqueConverters.converterStiffness[unit], torqueConverters.converterDiameter[unit],
                                 torqueConverters.converterTorqueLimit[unit], lockupRatio,
@@ -269,8 +328,8 @@ public final class PowertrainSystem {
                         couplerOutputTorque = torqueConverters.outputTorque[unit];
                     } else {
                         ImplicitClutchSolver.solveInto(
-                                dt, engines.engineAV[unit] - drivelineAV,
-                                engines.engineInertia[unit], drivelineInertia,
+                                dt, engines.engineAV[unit] - primaryAV,
+                                engines.engineInertia[unit], primaryInertia,
                                 clutches.clutchSpring[unit], clutches.clutchDampingRatio[unit],
                                 clutches.clutchCapacity[unit], engagement,
                                 clutches.clutchTorque, clutches.clutchAngle, unit);
@@ -278,16 +337,27 @@ public final class PowertrainSystem {
                         couplerOutputTorque = couplerInputTorque;
                     }
                     engines.engineAV[unit] -= dt * couplerInputTorque / engines.engineInertia[unit];
+                    float splitTorque = 0.0f;
+                    if (splitShafts.device[unit] >= 0 && secondaryCompliance > 1e-9f) {
+                        splitTorque = SplitShaftSolver.solve(
+                                dt, primaryAV, secondaryAV, primaryInertia,
+                                1.0f / secondaryCompliance, splitShafts, unit);
+                    } else {
+                        SplitShaftSolver.clear(splitShafts, unit);
+                    }
                     for (int p = pStart; p < pEnd; p++) {
                         float gain = wheelPaths.pathGain[p] * ratioFactor;
+                        float pathTorque = wheelPaths.pathBranch[p] == DrivenWheelPathContainer.BRANCH_SECONDARY
+                                ? splitTorque : couplerOutputTorque - splitTorque;
                         vehicle.wheels.applyDriveTorqueAndReaction(
-                                wheelPaths.pathWheel[p], couplerOutputTorque * gain);
+                                wheelPaths.pathWheel[p], pathTorque * gain);
                     }
                 } else {
                     clutches.clutchTorque[unit] = 0.0f;
                     torqueConverters.inputTorque[unit] = 0.0f;
                     torqueConverters.outputTorque[unit] = 0.0f;
                     torqueConverters.lockupTorque[unit] = 0.0f;
+                    SplitShaftSolver.clear(splitShafts, unit);
                 }
             } else {
                 // Neutral / mid-shift: no torque path, clutch released.
@@ -297,6 +367,7 @@ public final class PowertrainSystem {
                 torqueConverters.outputTorque[unit] = 0.0f;
                 torqueConverters.lockupTorque[unit] = 0.0f;
                 torqueConverters.lockupAngle[unit] = 0.0f;
+                SplitShaftSolver.clear(splitShafts, unit);
             }
             if (engines.engineAV[unit] < 0.0f) engines.engineAV[unit] = 0.0f;
 
@@ -463,6 +534,25 @@ public final class PowertrainSystem {
         }
     }
 
+    private void consumeRangeBoxEvents(ElectricSnapshot input) {
+        long toggle = eventSequence(input.get(rangeBoxToggleSignalId));
+        int toggleCount = eventCount(lastRangeBoxToggleEvent, toggle);
+        lastRangeBoxToggleEvent = toggle;
+        if ((toggleCount & 1) == 0) return;
+        for (int unit = 0; unit < rangeBoxes.unitCount; unit++) {
+            if (rangeBoxes.device[unit] >= 0) {
+                setRangeBoxMode(unit, !rangeBoxes.lowMode[unit]);
+            }
+        }
+    }
+
+    private void setRangeBoxMode(int unit, boolean low) {
+        if (unit < 0 || unit >= rangeBoxes.unitCount || rangeBoxes.device[unit] < 0) return;
+        rangeBoxes.lowMode[unit] = low;
+        rangeBoxes.activeRatio[unit] = low
+                ? rangeBoxes.lowRatio[unit] : rangeBoxes.highRatio[unit];
+    }
+
     private static long eventSequence(double value) {
         return Double.isFinite(value) && value > 0.0 ? (long) Math.floor(value) : 0L;
     }
@@ -503,6 +593,9 @@ public final class PowertrainSystem {
             torqueConverters.lockupTorque[i] = 0.0f;
             torqueConverters.inputTorque[i] = 0.0f;
             torqueConverters.outputTorque[i] = 0.0f;
+            SplitShaftSolver.clear(splitShafts, i);
+            splitShafts.activeMode[i] = splitShafts.initialMode[i];
+            splitShafts.clutchRatio[i] = splitShafts.defaultClutchRatio[i];
             engines.sparkEnabled[i] = true;
             engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
@@ -515,15 +608,18 @@ public final class PowertrainSystem {
             gearboxes.currentGearIndex[i] = gearboxes.initialGearIndex[i];
             gearboxes.pendingGearIndex[i] = -1;
             gearboxes.activeRatio[i] = gearboxRatio(i, gearboxes.initialGearIndex[i]);
+            setRangeBoxMode(i, false);
             gearboxes.shiftRemaining[i] = 0.0f;
         }
         lastShiftUpEvent = 0L;
         lastShiftDownEvent = 0L;
+        lastRangeBoxToggleEvent = 0L;
         vehicle.electrics.set(throttleSignalId, 0.0);
         vehicle.electrics.set(clutchSignalId, 0.0);
         vehicle.electrics.set(starterSignalId, 0.0);
         vehicle.electrics.set(shiftUpSignalId, 0.0);
         vehicle.electrics.set(shiftDownSignalId, 0.0);
+        vehicle.electrics.set(rangeBoxToggleSignalId, 0.0);
         vehicle.electrics.set(defaultLockupSignalId, 0.0);
         for (int signalId : torqueConverters.lockupSignalId) vehicle.electrics.set(signalId, 0.0);
         debugEngineRPM = engines.unitCount > 0 ? engines.engineAV[0] * AV_TO_RPM : 0.0f;
@@ -549,6 +645,7 @@ public final class PowertrainSystem {
         data.clear();
         lastShiftUpEvent = 0L;
         lastShiftDownEvent = 0L;
+        lastRangeBoxToggleEvent = 0L;
         debugEngineRPM = 0.0f;
         debugThrottle = 0.0f;
         debugActualThrottle = 0.0f;
@@ -589,6 +686,13 @@ public final class PowertrainSystem {
     public String debugCurrentGearName() { return debugCurrentGearName; }
     public float debugActiveRatio() { return debugActiveRatio; }
     public float debugShiftRemaining() { return debugShiftRemaining; }
+    public String debugRangeBoxMode() {
+        if (rangeBoxes.unitCount == 0 || rangeBoxes.device[0] < 0) return "-";
+        return rangeBoxes.lowMode[0] ? "low" : "high";
+    }
+    public float debugRangeBoxRatio() {
+        return rangeBoxes.unitCount > 0 ? rangeBoxes.activeRatio[0] : 1.0f;
+    }
 
     private float interpolateTorque(int unit, float rpm) {
         int start = engines.curveStart[unit];

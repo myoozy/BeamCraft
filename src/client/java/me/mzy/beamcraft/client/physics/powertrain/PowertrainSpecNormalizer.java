@@ -147,6 +147,37 @@ final class PowertrainSpecNormalizer {
             return new GearboxSpec(g.type(), g.name(), g.inputName(), g.inputIndex(), ratios, g.fixedFirstGear(),
                     friction, dynamic, loss, List.of(), shiftTime);
         }
+        if (spec instanceof SplitShaftSpec s) {
+            double ratio = s.gearRatio(), clutchRatio = s.defaultClutchRatio();
+            double lockTorque = s.lockTorque(), lockSpring = s.lockSpring();
+            double lockSpringCoef = s.lockSpringCoef(), lockDamp = s.lockDampRatio();
+            double stiffness = s.clutchStiffness(), viscousCoef = s.viscousCoef();
+            double viscousTorque = s.viscousTorque(), viscousExponent = s.viscousExponent();
+            double viscousSmoothing = s.viscousSmoothing(), friction = s.friction();
+            double dynamic = s.dynamicFriction(), loss = s.torqueLossCoef();
+            switch (key) {
+                case "gearRatio" -> ratio = modify(ratio, modifier);
+                case "defaultClutchRatio" -> clutchRatio = modify(clutchRatio, modifier);
+                case "lockTorque" -> lockTorque = modify(lockTorque, modifier);
+                case "lockSpring" -> lockSpring = modify(lockSpring, modifier);
+                case "lockSpringCoef" -> lockSpringCoef = modify(lockSpringCoef, modifier);
+                case "lockDampRatio" -> lockDamp = modify(lockDamp, modifier);
+                case "clutchStiffness" -> stiffness = modify(stiffness, modifier);
+                case "viscousCoef" -> viscousCoef = modify(viscousCoef, modifier);
+                case "viscousTorque" -> viscousTorque = modify(viscousTorque, modifier);
+                case "viscousExponent" -> viscousExponent = modify(viscousExponent, modifier);
+                case "viscousSmoothing" -> viscousSmoothing = modify(viscousSmoothing, modifier);
+                case "friction" -> friction = modify(friction, modifier);
+                case "dynamicFriction" -> dynamic = modify(dynamic, modifier);
+                case "torqueLossCoef" -> loss = modify(loss, modifier);
+                default -> { return spec; }
+            }
+            return new SplitShaftSpec(s.type(), s.name(), s.inputName(), s.inputIndex(), ratio,
+                    s.primaryOutputID(), s.splitType(), s.canDisconnect(), s.isDisconnected(), clutchRatio,
+                    lockTorque, lockSpring, lockSpringCoef, lockDamp, stiffness,
+                    viscousCoef, viscousTorque, viscousExponent, viscousSmoothing,
+                    friction, dynamic, loss, List.of());
+        }
         if (spec instanceof ShaftSpec s) {
             RigidValues values = modifyRigid(s.gearRatio(), s.friction(), s.dynamicFriction(),
                     s.torqueLossCoef(), modifier);

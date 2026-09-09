@@ -10,6 +10,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSp
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
@@ -419,6 +420,44 @@ class JBeamPowertrainParserTest {
         assertEquals(0.16, converter.additionalEngineInertia(), 1e-6);
         assertEquals(-1.0, converter.lockupClutchSpring(), 1e-6);
         assertEquals(0.15, converter.lockupClutchDampRatio(), 1e-6);
+    }
+
+    @Test
+    void splitShaftParsesCouplingModesAndLimits() {
+        List<DeviceSpec> specs = parse("""
+                {
+                  "powertrain": [
+                    ["type","name","inputName","inputIndex"],
+                    ["splitShaft","transfercase","gearbox",1]
+                  ],
+                  "transfercase": {
+                    "gearRatio": 1.1,
+                    "primaryOutputID": 2,
+                    "splitType": "viscous",
+                    "canDisconnect": true,
+                    "isDisconnected": false,
+                    "defaultClutchRatio": 0.35,
+                    "lockTorque": 3000,
+                    "viscousCoef": 14,
+                    "viscousTorque": 900,
+                    "viscousExponent": 1.2,
+                    "viscousSmoothing": 30
+                  }
+                }
+                """);
+
+        SplitShaftSpec split = assertInstanceOf(SplitShaftSpec.class, specs.get(0));
+        assertEquals(1.1, split.gearRatio(), 1e-6);
+        assertEquals(2, split.primaryOutputID());
+        assertEquals("viscous", split.splitType());
+        assertTrue(split.canDisconnect());
+        assertFalse(split.isDisconnected());
+        assertEquals(0.35, split.defaultClutchRatio(), 1e-6);
+        assertEquals(3000, split.lockTorque(), 1e-6);
+        assertEquals(14, split.viscousCoef(), 1e-6);
+        assertEquals(900, split.viscousTorque(), 1e-6);
+        assertEquals(1.2, split.viscousExponent(), 1e-6);
+        assertEquals(30, split.viscousSmoothing(), 1e-6);
     }
 
     @Test

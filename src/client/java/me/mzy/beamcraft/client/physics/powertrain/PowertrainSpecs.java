@@ -33,7 +33,8 @@ public final class PowertrainSpecs {
      */
     public sealed interface DeviceSpec
             permits CombustionEngineSpec, ClutchlikeSpec, GearboxSpec,
-                    ShaftSpec, TorsionReactorSpec, DifferentialSpec, DevicePatchSpec, UnsupportedConfig {
+                    ShaftSpec, SplitShaftSpec, TorsionReactorSpec, DifferentialSpec,
+                    DevicePatchSpec, UnsupportedConfig {
         String type();
         String name();
         String inputName();
@@ -236,6 +237,37 @@ public final class PowertrainSpecs {
     }
 
     /** 传动轴：{@code shaft}。 */
+    /** Two-output primary shaft with a disconnectable locked or viscous secondary coupling. */
+    public record SplitShaftSpec(
+            String type,
+            String name,
+            String inputName,
+            int inputIndex,
+            double gearRatio,
+            int primaryOutputID,
+            String splitType,
+            boolean canDisconnect,
+            boolean isDisconnected,
+            double defaultClutchRatio,
+            double lockTorque,
+            double lockSpring,
+            double lockSpringCoef,
+            double lockDampRatio,
+            double clutchStiffness,
+            double viscousCoef,
+            double viscousTorque,
+            double viscousExponent,
+            double viscousSmoothing,
+            double friction,
+            double dynamicFriction,
+            double torqueLossCoef,
+            List<ValueModifier> valueModifiers
+    ) implements DeviceSpec {
+        public SplitShaftSpec {
+            valueModifiers = List.copyOf(valueModifiers);
+        }
+    }
+
     public record ShaftSpec(
             String type,
             String name,

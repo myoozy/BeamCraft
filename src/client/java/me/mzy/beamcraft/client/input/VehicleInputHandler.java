@@ -27,6 +27,7 @@ public final class VehicleInputHandler {
     private static final String DEFAULT_STARTER = "key.keyboard.v";
     private static final String DEFAULT_SHIFT_UP = "key.keyboard.x";
     private static final String DEFAULT_SHIFT_DOWN = "key.keyboard.z";
+    private static final String DEFAULT_RANGE_BOX_TOGGLE = "key.keyboard.b";
     private static final String DEFAULT_RESET_VEHICLE = "key.keyboard.g";
     private static final double MAX_ENTER_DISTANCE_SQUARED = 36.0;
 
@@ -39,10 +40,12 @@ public final class VehicleInputHandler {
     private final InputUtil.Key starter;
     private final InputUtil.Key shiftUp;
     private final InputUtil.Key shiftDown;
+    private final InputUtil.Key rangeBoxToggle;
     private final InputUtil.Key resetVehicle;
 
     private boolean shiftUpWasPressed;
     private boolean shiftDownWasPressed;
+    private boolean rangeBoxToggleWasPressed;
     private boolean resetWasPressed;
     private boolean exitWasPressed;
     private SoftBodyVehicle controlledVehicle;
@@ -58,6 +61,7 @@ public final class VehicleInputHandler {
         starter = resolve(configured.starter, DEFAULT_STARTER, "starter");
         shiftUp = resolve(configured.shiftUp, DEFAULT_SHIFT_UP, "shiftUp");
         shiftDown = resolve(configured.shiftDown, DEFAULT_SHIFT_DOWN, "shiftDown");
+        rangeBoxToggle = resolve(configured.rangeBoxToggle, DEFAULT_RANGE_BOX_TOGGLE, "rangeBoxToggle");
         resetVehicle = resolve(configured.resetVehicle, DEFAULT_RESET_VEHICLE, "resetVehicle");
     }
 
@@ -68,6 +72,7 @@ public final class VehicleInputHandler {
         boolean resetPressed = gameplayInput && pressed(window, resetVehicle);
         boolean shiftUpPressed = gameplayInput && pressed(window, shiftUp);
         boolean shiftDownPressed = gameplayInput && pressed(window, shiftDown);
+        boolean rangeBoxTogglePressed = gameplayInput && pressed(window, rangeBoxToggle);
 
         SoftBodyVehicle nextControlled = findControlledVehicle(client);
         if (controlledVehicle != nextControlled) {
@@ -76,7 +81,7 @@ public final class VehicleInputHandler {
         }
 
         if (controlledVehicle == null) {
-            updateEdgeState(exitPressed, resetPressed, shiftUpPressed, shiftDownPressed);
+            updateEdgeState(exitPressed, resetPressed, shiftUpPressed, shiftDownPressed, rangeBoxTogglePressed);
             return;
         }
 
@@ -108,8 +113,11 @@ public final class VehicleInputHandler {
         if (shiftDownPressed && !shiftDownWasPressed) {
             incrementEvent(electrics, ElectricSignals.SHIFT_DOWN_EVENT);
         }
+        if (rangeBoxTogglePressed && !rangeBoxToggleWasPressed) {
+            incrementEvent(electrics, ElectricSignals.RANGE_BOX_TOGGLE_EVENT);
+        }
 
-        updateEdgeState(exitPressed, resetPressed, shiftUpPressed, shiftDownPressed);
+        updateEdgeState(exitPressed, resetPressed, shiftUpPressed, shiftDownPressed, rangeBoxTogglePressed);
     }
 
     private static SoftBodyVehicle findControlledVehicle(MinecraftClient client) {
@@ -172,11 +180,13 @@ public final class VehicleInputHandler {
     }
 
     private void updateEdgeState(boolean exitPressed, boolean resetPressed,
-                                 boolean shiftUpPressed, boolean shiftDownPressed) {
+                                 boolean shiftUpPressed, boolean shiftDownPressed,
+                                 boolean rangeBoxTogglePressed) {
         exitWasPressed = exitPressed;
         resetWasPressed = resetPressed;
         shiftUpWasPressed = shiftUpPressed;
         shiftDownWasPressed = shiftDownPressed;
+        rangeBoxToggleWasPressed = rangeBoxTogglePressed;
     }
 
     /** Removes vanilla mount movement and sneak-dismount behavior for BeamCraft vehicles. */

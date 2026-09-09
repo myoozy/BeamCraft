@@ -13,6 +13,106 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PowertrainSystemTest {
     @Test
+    void splitShaftCompilesBothVivaceStyleAxlesAndUsesConnectedFallback() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.wheels.count = 4;
+        vehicle.wheels.nameToIndex.put("FL", 0);
+        vehicle.wheels.nameToIndex.put("FR", 1);
+        vehicle.wheels.nameToIndex.put("RL", 2);
+        vehicle.wheels.nameToIndex.put("RR", 3);
+        PowertrainSystem system = vehicle.powertrain;
+        system.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 800, 7000, 1, 0.01, 2,
+                        List.of(new TorquePoint(1000, 100)), List.of(), List.of()),
+                new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
+                        300, 1000, 1, 0.2, 0.125, 1, List.of()),
+                new GearboxSpec("manualGearbox", "gearbox", "clutch", 1,
+                        List.of(3.0), true, 0, 0, 0, List.of()),
+                new SplitShaftSpec("splitShaft", "transfercase", "gearbox", 1,
+                        1, 2, "locked", true, false, 0,
+                        3000, -1, 1, 0.15, 1,
+                        10, 100, 1, 25, 0, 0, 0, List.of()),
+                new DifferentialSpec("differential", "front", "transfercase", 2,
+                        4, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "fl", "front", 1, 1, "FL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "fr", "front", 2, 1, "FR", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "rearProp", "transfercase", 1, 1, null, 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new DifferentialSpec("differential", "rear", "rearProp", 1,
+                        4, 0.5, 0, 0, 0, "open", List.of()),
+                new ShaftSpec("shaft", "rl", "rear", 1, 1, "RL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "rr", "rear", 2, 1, "RR", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+
+        system.finalizeSetup();
+
+        assertEquals("ready", system.diagnostic());
+        assertEquals(4, system.wheelPaths.pathWheel.length);
+        assertArrayEquals(new byte[]{
+                DrivenWheelPathContainer.BRANCH_PRIMARY,
+                DrivenWheelPathContainer.BRANCH_PRIMARY,
+                DrivenWheelPathContainer.BRANCH_SECONDARY,
+                DrivenWheelPathContainer.BRANCH_SECONDARY
+        }, system.wheelPaths.pathBranch);
+        assertEquals(SplitShaftContainer.MODE_LOCKED, system.splitShafts.activeMode[0]);
+        assertEquals(1.0f, system.splitShafts.clutchRatio[0], 1e-6f,
+                "without the electronic controller, a connected AWD split must not become FWD");
+
+        system.setSplitShaftMode("transfercase", "disconnected");
+        assertEquals(SplitShaftContainer.MODE_DISCONNECTED, system.splitShafts.activeMode[0]);
+        system.setSplitShaftMode("transfercase", "viscous");
+        assertEquals(SplitShaftContainer.MODE_VISCOUS, system.splitShafts.activeMode[0]);
+    }
+
+    @Test
+    void rangeBoxTogglesIndependentlyOfPrimaryGearbox() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.wheels.count = 1;
+        vehicle.wheels.nameToIndex.put("W", 0);
+        PowertrainSystem system = vehicle.powertrain;
+        system.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 800, 6000, 1, 0.01, 2,
+                        List.of(new TorquePoint(1000, 100)), List.of(), List.of()),
+                new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
+                        200, 1000, 1, 0.15, 0.1, 1, List.of()),
+                new GearboxSpec("manualGearbox", "gearbox", "clutch", 1,
+                        List.of(3.0), true, 0, 0, 0, List.of()),
+                new GearboxSpec("rangeBox", "rangebox", "gearbox", 1,
+                        List.of(1.0, 2.2), true, 0, 0, 0, List.of()),
+                new ShaftSpec("shaft", "wheel", "rangebox", 1, 1, "W", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+
+        system.finalizeSetup();
+
+        assertEquals(PowertrainTopologyContainer.TYPE_RANGE_BOX, system.topology.deviceType[3]);
+        assertEquals(2, system.gearboxes.device[0]);
+        assertEquals(3, system.rangeBoxes.device[0]);
+        assertEquals(1.0f, system.rangeBoxes.highRatio[0], 1e-6f);
+        assertEquals(2.2f, system.rangeBoxes.lowRatio[0], 1e-6f);
+        assertEquals(1.0f, system.rangeBoxes.activeRatio[0], 1e-6f);
+
+        system.requestRangeBoxToggle();
+        system.solve(0.0005f);
+        assertEquals(2.2f, system.rangeBoxes.activeRatio[0], 1e-6f);
+        assertEquals(3.0f, system.gearboxes.activeRatio[0], 1e-6f,
+                "range selection must not alter the primary gearbox gear");
+
+        system.reset();
+        assertEquals(1.0f, system.rangeBoxes.activeRatio[0], 1e-6f);
+        system.requestRangeBoxToggle();
+        system.solve(0.0005f);
+        assertEquals(2.2f, system.rangeBoxes.activeRatio[0], 1e-6f,
+                "the first toggle after reset must not be swallowed by the old event sequence");
+    }
+
+    @Test
     void compilesTorqueConverterAsClutchlikeAheadOfAutomaticGearbox() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         vehicle.wheels.count = 2;

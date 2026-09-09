@@ -32,6 +32,12 @@ public final class PowertrainData {
     /** Compiled gearbox devices (build-time diagnostics). */
     public final GearboxContainer gearboxes = new GearboxContainer();
 
+    /** Optional selectable high/low range box for each engine unit. */
+    public final RangeBoxContainer rangeBoxes = new RangeBoxContainer();
+
+    /** Optional primary/secondary output coupling for each engine unit. */
+    public final SplitShaftContainer splitShafts = new SplitShaftContainer();
+
     /** Compiled shaft devices (build-time diagnostics). */
     public final ShaftContainer shafts = new ShaftContainer();
 
@@ -54,6 +60,8 @@ public final class PowertrainData {
         wheelPaths.clear();
         reactions.clear();
         gearboxes.clear();
+        rangeBoxes.clear();
+        splitShafts.clear();
         shafts.clear();
         differentials.clear();
         torsionReactors.clear();

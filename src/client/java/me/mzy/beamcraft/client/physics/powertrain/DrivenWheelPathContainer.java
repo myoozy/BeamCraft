@@ -9,16 +9,21 @@ package me.mzy.beamcraft.client.physics.powertrain;
  * engine and to push clutch torque out to the wheels.
  */
 public final class DrivenWheelPathContainer {
+    public static final byte BRANCH_RIGID = 0;
+    public static final byte BRANCH_PRIMARY = 1;
+    public static final byte BRANCH_SECONDARY = 2;
     public int[] pathStart = new int[0];
     public short[] pathCount = new short[0];
     public int[] pathWheel = new int[0];
     public float[] pathGain = new float[0];
+    public byte[] pathBranch = new byte[0];
 
     public void allocate(int units, int paths) {
         pathStart = new int[units];
         pathCount = new short[units];
         pathWheel = new int[paths];
         pathGain = new float[paths];
+        pathBranch = new byte[paths];
     }
 
     /** Resets every array so the container holds zero paths. */

@@ -137,6 +137,8 @@ public class BeamCraftClient implements ClientModInitializer {
 			String gearName = debugVehicle == null ? "?" : debugVehicle.powertrain.debugCurrentGearName();
 			float gearRatio = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugActiveRatio();
 			float shiftTime = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugShiftRemaining();
+			String rangeMode = debugVehicle == null ? "-" : debugVehicle.powertrain.debugRangeBoxMode();
+			float rangeRatio = debugVehicle == null ? 1.0f : debugVehicle.powertrain.debugRangeBoxRatio();
 			String[] lines = {
 					"powertrain: " + powertrainState,
 					String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
@@ -146,7 +148,8 @@ public class BeamCraftClient implements ClientModInitializer {
 					String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
 							sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
 							limiterActive ? "cut" : "ready", limiterTime),
-					String.format("gear: %s | ratio: %.3f | shift: %.3fs", gearName, gearRatio, shiftTime),
+					String.format("gear: %s | ratio: %.3f | shift: %.3fs | range: %s %.3f",
+							gearName, gearRatio, shiftTime, rangeMode, rangeRatio),
 					String.format("clutch engagement: %.0f%% | torque: %.1f Nm", clutchEngagement * 100.0f, clutchTorque),
 					String.format("tickBarrierWait: %.2f ms", lastPhysicsWaitMs),
 					String.format("mcWorldScan: %.2f ms", lastPhysicsMsDetail[1]),
