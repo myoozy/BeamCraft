@@ -13,8 +13,11 @@ import java.util.List;
  * material-level {@code baseColorFactor}, then to white. Its {@code opacityMap}
  * is the opacity source (when present). If no candidate has a diffuse map, the
  * plan is colour-only with the material factor (white default). A
- * null/unparseable material degrades to a colour-only white plan so a broken
- * material can never prevent a vehicle from rendering.
+ * When no diffuse stage exists, the first stage-level opacity factor still
+ * applies to the colour-only fallback; this is how BeamNG's
+ * {@code glass_invisible} suppresses its geometry. A null/unparseable material
+ * degrades to a colour-only white plan so a broken material can never prevent
+ * a vehicle from rendering.
  *
  * <p><b>Deterministic render-mode classification</b> (documented, unit-tested):
  * <ol>
@@ -93,11 +96,15 @@ public final class MaterialRenderPlanner {
         String opacityPath = null;
         RgbaColor baseFactor = fallbackFactor;
         Float stageOpacityFactor = null;
+        Float colorOnlyStageOpacityFactor = null;
         if (material.activeLayers > 0) {
             List<MaterialStage> stages = material.stages;
             int limit = Math.min(material.activeLayers, stages.size());
             for (int i = 0; i < limit; i++) {
                 MaterialStage stage = stages.get(i);
+                if (colorOnlyStageOpacityFactor == null && stage != null && stage.opacityFactor != null) {
+                    colorOnlyStageOpacityFactor = stage.opacityFactor;
+                }
                 if (stage == null || stage.baseColorMap == null || stage.baseColorMap.isEmpty()) {
                     continue;
                 }
@@ -108,6 +115,9 @@ public final class MaterialRenderPlanner {
                 stageOpacityFactor = stage.opacityFactor;
                 break;
             }
+        }
+        if (diffusePath == null) {
+            stageOpacityFactor = colorOnlyStageOpacityFactor;
         }
         Float explicitOpacity = stageOpacityFactor != null ? stageOpacityFactor : material.opacityFactor;
         Float opacityFactor = InteriorGlassOpacityFallback.resolve(explicitOpacity,

@@ -56,7 +56,8 @@ public class ComputeSkinningPipeline {
      * {@link #combinedStartIndex} is the index offset into the combined EBO
      * (already rebased to absolute render-vertex indices, so no base vertex is
      * needed), {@link #indexCount} the number of indices, and
-     * {@link #materialName} the DAE material name for scoped material lookup.
+     * {@link #materialName} the DAE material name for scoped material lookup,
+     * and {@link #meshIndex} the owning flexbody used for damage-material state.
      *
      * <p>{@link #centerX}/{@link #centerY}/{@link #centerZ} is the model-space
      * centroid of the range's vertices, computed during the index build from the
@@ -68,6 +69,7 @@ public class ComputeSkinningPipeline {
      */
     public static final class SubMeshRange {
         public final String materialName;
+        public final int meshIndex;
         public final int combinedStartIndex;
         public final int indexCount;
         /** Model-space centroid of the range's vertices; valid when {@link #hasCentroid}. */
@@ -75,14 +77,20 @@ public class ComputeSkinningPipeline {
         public boolean hasCentroid;
 
         public SubMeshRange(String materialName, int combinedStartIndex, int indexCount) {
+            this(materialName, -1, combinedStartIndex, indexCount);
+        }
+
+        public SubMeshRange(String materialName, int meshIndex, int combinedStartIndex, int indexCount) {
             this.materialName = materialName;
+            this.meshIndex = meshIndex;
             this.combinedStartIndex = combinedStartIndex;
             this.indexCount = indexCount;
         }
 
         @Override
         public String toString() {
-            return "SubMeshRange[" + materialName + ", " + combinedStartIndex + "+" + indexCount
+            return "SubMeshRange[" + materialName + ", mesh=" + meshIndex + ", "
+                    + combinedStartIndex + "+" + indexCount
                     + (hasCentroid ? ", centroid=(" + centerX + ", " + centerY + ", " + centerZ + ")" : "")
                     + ']';
         }
@@ -99,6 +107,12 @@ public class ComputeSkinningPipeline {
      */
     public static List<SubMeshRange> rebaseSubMeshRanges(
             List<DaeMeshLoader.SubMesh> subMeshes, int combinedIndexStart, int geometryIndexCount) {
+        return rebaseSubMeshRanges(subMeshes, -1, combinedIndexStart, geometryIndexCount);
+    }
+
+    static List<SubMeshRange> rebaseSubMeshRanges(
+            List<DaeMeshLoader.SubMesh> subMeshes, int meshIndex,
+            int combinedIndexStart, int geometryIndexCount) {
         List<SubMeshRange> out = new ArrayList<>();
         if (subMeshes == null) {
             return out;
@@ -116,7 +130,7 @@ public class ComputeSkinningPipeline {
             if (combinedStart > Integer.MAX_VALUE || combinedEnd > Integer.MAX_VALUE) {
                 continue; // int overflow in the rebased range
             }
-            out.add(new SubMeshRange(sm.materialName, (int) combinedStart, sm.indexCount));
+            out.add(new SubMeshRange(sm.materialName, meshIndex, (int) combinedStart, sm.indexCount));
         }
         return out;
     }
@@ -420,7 +434,8 @@ public class ComputeSkinningPipeline {
             for (int index = 0; index < geometry.indexCount; index++) {
                 combined[indexOffset++] = vertexOffset + geometry.indices[index];
             }
-            subMeshRanges.addAll(rebaseSubMeshRanges(geometry.subMeshes, geometryIndexStart, geometry.indexCount));
+            subMeshRanges.addAll(rebaseSubMeshRanges(
+                    geometry.subMeshes, mesh, geometryIndexStart, geometry.indexCount));
             vertexOffset += geometry.vertexCount;
         }
 

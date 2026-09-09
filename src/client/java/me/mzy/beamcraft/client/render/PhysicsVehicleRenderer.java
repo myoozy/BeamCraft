@@ -116,7 +116,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             Matrix4f projection = RenderSystem.getProjectionMatrix();
 
             if (!flex.skinningPipeline.getSubMeshRanges().isEmpty()) {
-                renderSubMeshes(flex, modelView, projection, packedLight);
+                renderSubMeshes(vehicle, flex, modelView, projection, packedLight);
             } else {
                 // No per-material ranges computed: draw the whole mesh against the
                 // shared white fallback texture, which is always a valid Sampler0.
@@ -167,12 +167,12 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * {@code entity_cutout} shader and depth-write state; only their textures
      * differ (cutout materials carry an alpha map composed into the diffuse).
      */
-    private void renderSubMeshes(FlexbodyContainer flex, Matrix4f modelView,
+    private void renderSubMeshes(SoftBodyVehicle vehicle, FlexbodyContainer flex, Matrix4f modelView,
                                  Matrix4f projection, int packedLight) {
         List<RangeDraw> opaqueCutout = new ArrayList<>();
         List<RangeDraw> translucent = new ArrayList<>();
         for (SubMeshRange range : flex.skinningPipeline.getSubMeshRanges()) {
-            MaterialDefinition material = resolveMaterial(flex, range);
+            MaterialDefinition material = resolveMaterial(vehicle, flex, range);
             MaterialRenderPlan plan = MaterialRenderPlanner.plan(material);
             if (plan.mode() == MaterialRenderPlan.RenderMode.TRANSLUCENT) {
                 translucent.add(new RangeDraw(range, plan, material));
@@ -594,13 +594,70 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * the namespace's static glowMap aliases, then the common library). Returns
      * null when nothing resolves, after a one-time warning.
      */
-    private MaterialDefinition resolveMaterial(FlexbodyContainer flex, SubMeshRange range) {
+    private MaterialDefinition resolveMaterial(SoftBodyVehicle vehicle, FlexbodyContainer flex,
+                                               SubMeshRange range) {
         String namespace = flex.vehicleNamespace;
-        MaterialDefinition material = MaterialLibrary.getMaterial(namespace, range.materialName);
-        if (material == null) {
+        MaterialDefinition baseMaterial = MaterialLibrary.getMaterial(namespace, range.materialName);
+        String selectedName = range.materialName;
+        if (0 <= range.meshIndex && range.meshIndex < flex.meshCount) {
+            String group = flex.deformGroup[range.meshIndex];
+            selectedName = selectDeformMaterialName(
+                    flex, range.meshIndex, range.materialName, baseMaterial,
+                    vehicle.isDeformGroupTriggered(group));
+        }
+
+        if (!java.util.Objects.equals(selectedName, range.materialName)) {
+            if (shouldKeepInvisibleGlassFallback(selectedName, baseMaterial)) {
+                return baseMaterial;
+            }
+            MaterialDefinition damagedMaterial = MaterialLibrary.getMaterial(namespace, selectedName);
+            if (damagedMaterial != null) {
+                return damagedMaterial;
+            }
+            warnOnceMissingDamagedMaterial(namespace, selectedName, range.materialName);
+        }
+
+        if (baseMaterial == null) {
             warnOnceMissingMaterial(namespace, range.materialName);
         }
-        return material;
+        return baseMaterial;
+    }
+
+    static String selectDeformMaterialName(FlexbodyContainer flex, int meshIndex,
+                                           String rawMaterialName, MaterialDefinition resolvedMaterial,
+                                           boolean deformGroupTriggered) {
+        if (!deformGroupTriggered || flex == null || rawMaterialName == null
+                || meshIndex < 0 || meshIndex >= flex.meshCount) {
+            return rawMaterialName;
+        }
+        String base = flex.deformMaterialBase[meshIndex];
+        String damaged = flex.deformMaterialDamaged[meshIndex];
+        if (base == null || base.isEmpty() || damaged == null || damaged.isEmpty()) {
+            return rawMaterialName;
+        }
+        if (base.equalsIgnoreCase(rawMaterialName)
+                || resolvedMaterial != null && (base.equalsIgnoreCase(resolvedMaterial.name)
+                || base.equalsIgnoreCase(resolvedMaterial.mapTo))) {
+            return damaged;
+        }
+        return rawMaterialName;
+    }
+
+    /**
+     * BeamNG uses {@code glass_mirror} as a dynamic-cubemap-only material on
+     * separate crack geometry (notably BX's {@code *_windshield_dmg} mesh).
+     * Without cubemap support it degrades to an opaque white sheet, so keep the
+     * mesh's intact invisible material and let the primary pane's damaged
+     * texture carry the visible cracks.
+     */
+    static boolean shouldKeepInvisibleGlassFallback(String damagedMaterialName,
+                                                     MaterialDefinition intactMaterial) {
+        if (damagedMaterialName == null || intactMaterial == null
+                || !damagedMaterialName.equalsIgnoreCase("glass_mirror")) {
+            return false;
+        }
+        return "glass_invisible".equalsIgnoreCase(intactMaterial.name)
+                || "glass_invisible".equalsIgnoreCase(intactMaterial.mapTo);
     }
 
     private static void warnOnceMissingMaterial(String namespace, String materialName) {
@@ -609,6 +666,17 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             BeamCraft.LOGGER.warn(
                     "BeamCraft: no material found for DAE submesh '{}' (namespace '{}'); rendering colour-only",
                     materialName, namespace);
+        }
+    }
+
+    private static void warnOnceMissingDamagedMaterial(String namespace, String damagedMaterial,
+                                                       String originalMaterial) {
+        String key = namespace + ":deform:" + damagedMaterial;
+        if (WARNED_MISSING_MATERIALS.add(key)) {
+            BeamCraft.LOGGER.warn(
+                    "BeamCraft: damaged material '{}' (namespace '{}') for DAE submesh '{}' was not found; "
+                            + "keeping its intact material",
+                    damagedMaterial, namespace, originalMaterial);
         }
     }
 

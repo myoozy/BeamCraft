@@ -796,6 +796,7 @@ class MaterialRenderPlannerTest {
                 """);
         MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
         assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, plan.mode());
+        assertEquals(0.0f, plan.colorFactor().a(), 0.0f);
     }
 
     @Test

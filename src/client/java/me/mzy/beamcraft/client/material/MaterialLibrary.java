@@ -51,11 +51,11 @@ import java.util.Set;
  * DAE only knows raw mesh material names (e.g. {@code pickup_lowbeamglass}),
  * which usually have no {@code mapTo} of their own; the alias redirects them to
  * the real lights-off material ({@code pickup_lightglass}). Alias resolution is
- * scoped to the requesting namespace and can never leak across vehicles. This
- * is static only: live emissive switching ({@code on}/{@code on_intense}) and
- * live deformation material switching are out of scope. The JBeam metadata
- * and deform-group trigger state are retained by the physics layer, but this
- * material index still performs no runtime alias switching.
+ * scoped to the requesting namespace and can never leak across vehicles. Live
+ * emissive switching ({@code on}/{@code on_intense}) remains out of scope.
+ * Deformation switching is selected per flexbody by the renderer using the
+ * physics layer's latched deform-group state; this index remains immutable and
+ * simply resolves the selected base or damaged material name.
  *
  * <p><b>Lifecycle</b>: {@link #requireMaterials} / {@link #releaseMaterials}
  * follow the same reference-counting scheme as

@@ -35,6 +35,19 @@ class SubMeshRangeRebaseTest {
     }
 
     @Test
+    void retainsOwningFlexbodyIndexForDamageMaterialSelection() {
+        List<DaeMeshLoader.SubMesh> subMeshes = List.of(
+                new DaeMeshLoader.SubMesh("glass", 0, 12));
+
+        List<SubMeshRange> ranges = ComputeSkinningPipeline.rebaseSubMeshRanges(
+                subMeshes, 7, 30, 12);
+
+        assertEquals(1, ranges.size());
+        assertEquals(7, ranges.get(0).meshIndex);
+        assertEquals(30, ranges.get(0).combinedStartIndex);
+    }
+
+    @Test
     void skipsEmptyInvalidAndNullRanges() {
         List<DaeMeshLoader.SubMesh> subMeshes = Arrays.asList(
                 new DaeMeshLoader.SubMesh("empty", 0, 0),
