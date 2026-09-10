@@ -8,6 +8,8 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSp
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SuperchargerBoostPoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SuperchargerSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboEnginePoint;
@@ -487,6 +489,34 @@ class PowertrainSolveTest {
                 "assembled turbo configuration must contain the ECU wastegate target");
         assertTrue(vehicle.powertrain.engines.availableCombustionTorque[0] > naturallyAspiratedTorque,
                 "positive boost must multiply the naturally aspirated torque curve");
+    }
+
+    @Test
+    void mechanicallyDrivenSuperchargerRaisesTorqueAndIncludesCrankLoss() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        SuperchargerSpec supercharger = new SuperchargerSpec(
+                "supercharger", "mainEngine", "roots",
+                1.5, 9_000, 1.5, 0.04, 250,
+                0, Double.NaN, Double.NaN, Double.NaN,
+                2, false, Double.NaN,
+                List.of(new SuperchargerBoostPoint(0, 0.2),
+                        new SuperchargerBoostPoint(100, 1.0)));
+        addSunburstPowertrain(vehicle, List.of(supercharger));
+        vehicle.powertrain.setControls(1.0f, 1.0f);
+        float heldRPM = 4_000.0f;
+        float naturallyAspiratedTorque = 221.0f;
+
+        for (int step = 0; step < 200; step++) {
+            vehicle.powertrain.engines.engineAV[0] = heldRPM * PowertrainSystem.RPM_TO_AV;
+            vehicle.powertrain.solve(DT);
+        }
+
+        assertTrue(vehicle.powertrain.debugSuperchargerExisting());
+        assertEquals(6_000.0f, vehicle.powertrain.debugSuperchargerRPM(), 1.0f);
+        assertTrue(vehicle.powertrain.debugSuperchargerBoostPSI() > 5.0f);
+        assertEquals(0.24f, vehicle.powertrain.superchargers.lostTorqueCoef[0], 1e-4f);
+        assertTrue(vehicle.powertrain.engines.availableCombustionTorque[0] > naturallyAspiratedTorque,
+                "boost gain must exceed the mechanically driven crank loss at full throttle");
     }
 
     @Test

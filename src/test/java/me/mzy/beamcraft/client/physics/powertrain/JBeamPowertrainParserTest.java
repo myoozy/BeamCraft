@@ -14,6 +14,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearSelectable
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SuperchargerSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
@@ -39,6 +40,48 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 以及 shaft/differential/engine/clutch 的字段解析。
  */
 class JBeamPowertrainParserTest {
+
+    @Test
+    void parsesNamedSuperchargerAttachmentFromAssembledVehicleData() {
+        JsonObject engine = part("""
+                {
+                  "powertrain":[
+                    ["type","name","inputName","inputIndex"],
+                    ["combustionEngine","mainEngine","dummy",0]
+                  ],
+                  "mainEngine":{"supercharger":"supercharger"}
+                }
+                """);
+        JsonObject intake = part("""
+                {
+                  "supercharger":{
+                    "gearRatio":1.2,
+                    "maxRPM":9600,
+                    "clutchEngageRPM":0,
+                    "pressureRatePSI":250,
+                    "pressurePSIPer1kRPM":1.5,
+                    "crankLossPer1kRPM":0.04,
+                    "type":"roots",
+                    "lobes":2,
+                    "twistedLobes":false,
+                    "boostController":[[0,0.2],[100,1]]
+                  }
+                }
+                """);
+
+        List<DeviceSpec> specs = JBeamPowertrainParser.parsePart(
+                JBeamPartMerger.mergeParts(List.of(engine, intake)), Map.of());
+        SuperchargerSpec supercharger = specs.stream().filter(SuperchargerSpec.class::isInstance)
+                .map(SuperchargerSpec.class::cast).findFirst().orElseThrow();
+
+        assertEquals("mainEngine", supercharger.engineName());
+        assertEquals("roots", supercharger.superchargerType());
+        assertEquals(1.2, supercharger.gearRatio(), 1e-6);
+        assertEquals(1.5, supercharger.pressurePSIPer1kRPM(), 1e-6);
+        assertEquals(0.04, supercharger.crankLossPer1kRPM(), 1e-6);
+        assertEquals(2, supercharger.boostController().size());
+        assertEquals(1.0, supercharger.boostController().getLast().factor(), 1e-6);
+    }
 
     @Test
     void parsesNamedTurbochargerAttachmentAndCurves() {

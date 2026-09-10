@@ -17,6 +17,9 @@ public final class PowertrainData {
     /** Turbochargers attached to combustion engines, using the same unit ordering. */
     public final TurbochargerContainer turbochargers = new TurbochargerContainer();
 
+    /** Mechanically driven superchargers attached to combustion engines. */
+    public final SuperchargerContainer superchargers = new SuperchargerContainer();
+
     /** Friction clutches (same unit ordering as {@link #engines}). */
     public final FrictionClutchContainer clutches = new FrictionClutchContainer();
 
@@ -61,6 +64,7 @@ public final class PowertrainData {
         topology.clear();
         engines.clear();
         turbochargers.clear();
+        superchargers.clear();
         clutches.clear();
         clutchlikes.clear();
         torqueConverters.clear();

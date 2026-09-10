@@ -12,6 +12,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearSelectable
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SuperchargerSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
@@ -61,10 +62,13 @@ final class PowertrainCompiler {
         }
 
         Map<String, TurbochargerSpec> turboByEngine = new HashMap<>();
+        Map<String, SuperchargerSpec> superchargerByEngine = new HashMap<>();
         List<DeviceSpec> deviceSpecs = new ArrayList<>();
         for (DeviceSpec spec : rawSpecs) {
             if (spec instanceof TurbochargerSpec turbo) {
                 turboByEngine.put(turbo.engineName(), turbo); // later active parts win
+            } else if (spec instanceof SuperchargerSpec supercharger) {
+                superchargerByEngine.put(supercharger.engineName(), supercharger);
             } else {
                 deviceSpecs.add(spec);
             }
@@ -155,16 +159,21 @@ final class PowertrainCompiler {
                 continue;
             }
             UnitBuild unit = buildUnit(vehicle, specs, topology, engine, clutchlike,
-                    turboByEngine.get(topology.deviceName[engine]));
+                    turboByEngine.get(topology.deviceName[engine]),
+                    superchargerByEngine.get(topology.deviceName[engine]));
             if (!unit.paths.isEmpty()) units.add(unit);
         }
         compileUnits(vehicle, data, units);
         if (data.engines.unitCount > 0) {
             int turboCount = 0;
             for (boolean existing : data.turbochargers.existing) if (existing) turboCount++;
+            int superchargerCount = 0;
+            for (boolean existing : data.superchargers.existing) if (existing) superchargerCount++;
             data.diagnostic = detachedDevices == 0 ? "ready" : "ready; " + detachedDevices + " detached device(s)";
-            LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutchlike unit(s), {} turbocharger(s), {} driven wheel path(s)",
-                    deviceCount, data.engines.unitCount, turboCount, data.wheelPaths.pathWheel.length);
+            LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutchlike unit(s), "
+                            + "{} turbocharger(s), {} supercharger(s), {} driven wheel path(s)",
+                    deviceCount, data.engines.unitCount, turboCount, superchargerCount,
+                    data.wheelPaths.pathWheel.length);
         } else {
             data.diagnostic = "no supported engine-to-wheel path";
         }
@@ -226,7 +235,8 @@ final class PowertrainCompiler {
 
     private static UnitBuild buildUnit(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
                                        PowertrainTopologyContainer topology, int engine, int clutchlike,
-                                       TurbochargerSpec turbocharger) {
+                                       TurbochargerSpec turbocharger,
+                                       SuperchargerSpec supercharger) {
         CombustionEngineSpec engineSpec = (CombustionEngineSpec) specs.get(engine);
         ClutchlikeSpec clutchlikeSpec = (ClutchlikeSpec) specs.get(clutchlike);
         FrictionClutchSpec clutchSpec = clutchlikeSpec instanceof FrictionClutchSpec c ? c : null;
@@ -287,7 +297,7 @@ final class PowertrainCompiler {
         return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec, dctSpec,
                 capacity, spring, maxTorque, paths, reactions, reactors,
                 gearboxDevice, gearbox, rangeBoxDevice, rangeBox,
-                splitShafts, turbocharger);
+                splitShafts, turbocharger, supercharger);
     }
 
     /**
@@ -421,11 +431,13 @@ final class PowertrainCompiler {
         DctGearboxContainer dctGearboxes = data.dctGearboxes;
         SplitShaftContainer splitShafts = data.splitShafts;
         TurbochargerContainer turbochargers = data.turbochargers;
+        SuperchargerContainer superchargers = data.superchargers;
         PowertrainTopologyContainer topology = data.topology;
 
         int n = units.size();
         int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, gearSlots = 0;
         int splitCount = 0, splitPathCount = 0, turboPressurePoints = 0, turboEnginePoints = 0;
+        int superchargerControllerPoints = 0;
         for (UnitBuild unit : units) {
             curves += unit.engine.torqueCurve().size();
             paths += unit.paths.size();
@@ -441,9 +453,13 @@ final class PowertrainCompiler {
                 turboPressurePoints += unit.turbocharger.pressureCurve().size();
                 turboEnginePoints += unit.turbocharger.engineCurve().size();
             }
+            if (unit.supercharger != null) {
+                superchargerControllerPoints += unit.supercharger.boostController().size();
+            }
         }
         engines.allocate(n, curves);
         turbochargers.allocate(n, turboPressurePoints, turboEnginePoints);
+        superchargers.allocate(n, superchargerControllerPoints);
         clutches.allocate(n);
         clutchlikes.allocate(n);
         torqueConverters.allocate(n);
@@ -456,6 +472,7 @@ final class PowertrainCompiler {
 
         int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, gearCursor = 0;
         int splitCursor = 0, splitPathCursor = 0, turboPressureCursor = 0, turboEngineCursor = 0;
+        int superchargerControllerCursor = 0;
         for (int i = 0; i < n; i++) {
             UnitBuild unit = units.get(i);
             CombustionEngineSpec engine = unit.engine;
@@ -528,6 +545,44 @@ final class PowertrainCompiler {
                     turbochargers.exhaustFactor[turboEngineCursor] = Math.max(0.0f,
                             (float) point.exhaustFactor());
                     turboEngineCursor++;
+                }
+            }
+            SuperchargerSpec supercharger = unit.supercharger;
+            if (supercharger != null) {
+                superchargers.existing[i] = true;
+                float ratio = Math.max(0.0f, (float) supercharger.gearRatio());
+                superchargers.gearRatio[i] = ratio;
+                float maxBlowerRPM = Double.isFinite(supercharger.maxRPM())
+                        ? Math.max(0.0f, (float) supercharger.maxRPM())
+                        : Math.max(0.0f, (float) engine.maxRPM()) * ratio;
+                superchargers.maxBlowerRPM[i] = Math.max(1.0f, maxBlowerRPM);
+                superchargers.pressurePSIPerRPM[i] = Math.max(0.0f,
+                        (float) supercharger.pressurePSIPer1kRPM() * 0.001f);
+                superchargers.crankLossPerRPM[i] = Math.max(0.0f,
+                        (float) supercharger.crankLossPer1kRPM() * 0.001f);
+                superchargers.pressureRatePa[i] = Math.max(0.0f,
+                        (float) supercharger.pressureRatePSI() * 6894.7573f);
+                float engageRPM = Math.max(0.0f, (float) supercharger.clutchEngageRPM());
+                superchargers.clutchEngageRPM[i] = engageRPM;
+                superchargers.clutchEngageRange[i] = Double.isFinite(supercharger.clutchEngageRange())
+                        ? Math.max(1.0e-6f, (float) supercharger.clutchEngageRange())
+                        : Math.max(1.0e-6f, engageRPM * 0.2f);
+                float disengageRPM = Double.isFinite(supercharger.clutchDisengageRPM())
+                        ? Math.max(0.0f, (float) supercharger.clutchDisengageRPM())
+                        : Math.max(0.0f, (float) engine.maxRPM()) * 2.0f;
+                superchargers.clutchDisengageRPM[i] = disengageRPM;
+                superchargers.clutchDisengageRange[i] = Double.isFinite(supercharger.clutchDisengageRange())
+                        ? Math.max(1.0e-6f, (float) supercharger.clutchDisengageRange())
+                        : Math.max(1.0e-6f, disengageRPM * 0.05f);
+                configureSuperchargerType(superchargers, i, supercharger);
+                superchargers.controllerStart[i] = superchargerControllerCursor;
+                superchargers.controllerCount[i] = (short) supercharger.boostController().size();
+                for (var point : supercharger.boostController()) {
+                    superchargers.controllerThrottle[superchargerControllerCursor] =
+                            (float) point.throttlePercent();
+                    superchargers.controllerFactor[superchargerControllerCursor] =
+                            Math.max(0.0f, (float) point.factor());
+                    superchargerControllerCursor++;
                 }
             }
             clutchlikes.device[i] = unit.clutchlikeDevice;
@@ -817,6 +872,7 @@ final class PowertrainCompiler {
             case TorsionReactorSpec ignored -> PowertrainTopologyContainer.TYPE_TORSION_REACTOR;
             case SplitShaftSpec ignored -> PowertrainTopologyContainer.TYPE_SPLIT_SHAFT;
             case TurbochargerSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
+            case SuperchargerSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
             case UnsupportedConfig ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
         };
     }
@@ -841,6 +897,38 @@ final class PowertrainCompiler {
         };
     }
 
+    private static void configureSuperchargerType(SuperchargerContainer container, int unit,
+                                                   SuperchargerSpec supercharger) {
+        float pulseFloor;
+        int lobes = Math.clamp(supercharger.lobes(), 2, 4);
+        switch (supercharger.superchargerType().toLowerCase()) {
+            case "screws" -> {
+                lobes = Math.max(3, lobes);
+                container.efficiencyB1[unit] = 0.3f;
+                container.efficiencyB2[unit] = 0.0f;
+                container.efficiencyB3[unit] = 0.7f;
+                pulseFloor = 0.98f;
+            }
+            case "centrifugal" -> {
+                lobes = 0;
+                container.efficiencyB1[unit] = 0.6f;
+                container.efficiencyB2[unit] = 0.0f;
+                container.efficiencyB3[unit] = 0.45f;
+                pulseFloor = 1.0f;
+            }
+            default -> {
+                container.efficiencyB1[unit] = supercharger.twistedLobes() ? -0.35f : -0.55f;
+                container.efficiencyB2[unit] = 0.0f;
+                container.efficiencyB3[unit] = 1.0f;
+                pulseFloor = supercharger.twistedLobes() ? 0.95f : 0.9f;
+            }
+        }
+        container.pulseLobes[unit] = lobes;
+        container.pulseFloor[unit] = Double.isFinite(supercharger.pulseCoefModifier())
+                ? Math.clamp((float) supercharger.pulseCoefModifier(), 0.0f, 1.0f)
+                : pulseFloor;
+    }
+
     // ---------------------------------------------------------------- build records
 
     private record PathBuild(int wheel, float gain, byte flags) {
@@ -859,6 +947,7 @@ final class PowertrainCompiler {
                              List<PathBuild> paths, List<Integer> reactions, List<ReactorBuild> reactors,
                              int gearboxDevice, GearSelectableSpec gearbox,
                              int rangeBoxDevice, GearboxSpec rangeBox,
-                             List<SplitBuild> splitShafts, TurbochargerSpec turbocharger) {
+                             List<SplitBuild> splitShafts, TurbochargerSpec turbocharger,
+                             SuperchargerSpec supercharger) {
     }
 }

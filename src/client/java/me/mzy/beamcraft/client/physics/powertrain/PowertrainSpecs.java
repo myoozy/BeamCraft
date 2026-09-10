@@ -34,7 +34,7 @@ public final class PowertrainSpecs {
     public sealed interface DeviceSpec
             permits CombustionEngineSpec, ClutchlikeSpec, GearSelectableSpec,
                     ShaftSpec, SplitShaftSpec, TorsionReactorSpec, DifferentialSpec,
-                    TurbochargerSpec, UnsupportedConfig {
+                    TurbochargerSpec, SuperchargerSpec, UnsupportedConfig {
         String type();
         String name();
         String inputName();
@@ -80,6 +80,9 @@ public final class PowertrainSpecs {
 
     /** Engine RPM to compressor efficiency and exhaust-drive factor sample. */
     public record TurboEnginePoint(double engineRPM, double efficiency, double exhaustFactor) {}
+
+    /** Throttle percentage to available supercharger boost fraction. */
+    public record SuperchargerBoostPoint(double throttlePercent, double factor) {}
 
     /**
      * A turbocharger attached by name to a combustion engine. It is build-time metadata,
@@ -143,6 +146,48 @@ public final class PowertrainSpecs {
                     maxExhaustPower, backPressureCoef, frictionCoef, pressureRatePSI,
                     wastegatePCoef, wastegateICoef, wastegateDCoef, bovEnabled,
                     bovOpenThreshold, bovOpenChangeThreshold);
+        }
+    }
+
+    /** A belt-driven supercharger attached by name to a combustion engine. */
+    public record SuperchargerSpec(
+            String type,
+            String name,
+            String inputName,
+            int inputIndex,
+            List<ValueModifier> valueModifiers,
+            String engineName,
+            String superchargerType,
+            double gearRatio,
+            double maxRPM,
+            double pressurePSIPer1kRPM,
+            double crankLossPer1kRPM,
+            double pressureRatePSI,
+            double clutchEngageRPM,
+            double clutchEngageRange,
+            double clutchDisengageRPM,
+            double clutchDisengageRange,
+            int lobes,
+            boolean twistedLobes,
+            double pulseCoefModifier,
+            List<SuperchargerBoostPoint> boostController
+    ) implements DeviceSpec {
+        public SuperchargerSpec {
+            valueModifiers = List.copyOf(valueModifiers);
+            boostController = List.copyOf(boostController);
+        }
+
+        public SuperchargerSpec(String name, String engineName, String superchargerType,
+                                double gearRatio, double maxRPM, double pressurePSIPer1kRPM,
+                                double crankLossPer1kRPM, double pressureRatePSI,
+                                double clutchEngageRPM, double clutchEngageRange,
+                                double clutchDisengageRPM, double clutchDisengageRange,
+                                int lobes, boolean twistedLobes, double pulseCoefModifier,
+                                List<SuperchargerBoostPoint> boostController) {
+            this("supercharger", name, null, 0, List.of(), engineName, superchargerType,
+                    gearRatio, maxRPM, pressurePSIPer1kRPM, crankLossPer1kRPM, pressureRatePSI,
+                    clutchEngageRPM, clutchEngageRange, clutchDisengageRPM,
+                    clutchDisengageRange, lobes, twistedLobes, pulseCoefModifier, boostController);
         }
     }
 

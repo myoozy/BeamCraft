@@ -54,6 +54,7 @@ public final class PowertrainSystem {
     public final PowertrainTopologyContainer topology = data.topology;
     public final CombustionEngineContainer engines = data.engines;
     public final TurbochargerContainer turbochargers = data.turbochargers;
+    public final SuperchargerContainer superchargers = data.superchargers;
     public final FrictionClutchContainer clutches = data.clutches;
     public final ClutchlikeContainer clutchlikes = data.clutchlikes;
     public final TorqueConverterContainer torqueConverters = data.torqueConverters;
@@ -85,6 +86,8 @@ public final class PowertrainSystem {
     private volatile float debugCombustionTorque;
     private volatile float debugTurboRPM;
     private volatile float debugTurboBoostPSI;
+    private volatile float debugSuperchargerRPM;
+    private volatile float debugSuperchargerBoostPSI;
     private volatile int debugTorqueCurveCount;
     private volatile boolean debugStarterActive;
     private volatile boolean debugSparkEnabled;
@@ -131,6 +134,8 @@ public final class PowertrainSystem {
         debugLimiterCutRemaining = 0.0f;
         debugTurboRPM = 0.0f;
         debugTurboBoostPSI = 0.0f;
+        debugSuperchargerRPM = 0.0f;
+        debugSuperchargerBoostPSI = 0.0f;
         debugCurrentGearIndex = engines.unitCount > 0 ? gearboxes.currentGearIndex[0] : 0;
         debugCurrentGearName = engines.unitCount > 0 ? gearName(0, gearboxes.currentGearIndex[0]) : "?";
         debugActiveRatio = engines.unitCount > 0 ? gearboxes.activeRatio[0] : 0.0f;
@@ -238,7 +243,8 @@ public final class PowertrainSystem {
 
             boolean crankRunning = engines.engineAV[unit] >= engines.crankingAV[unit];
             boolean belowIdle = crankRunning && engines.engineAV[unit] < engines.idleAV[unit];
-            float forcedInductionCoef = updateTurbocharger(unit, throttle, rpm, crankRunning, dt);
+            float forcedInductionCoef = updateTurbocharger(unit, throttle, rpm, crankRunning, dt)
+                    * updateSupercharger(unit, throttle, rpm, dt);
             float idleOutput = idleControllerOutput(unit, crankRunning, belowIdle, forcedInductionCoef);
             // Above idle, the player command is not held above a synthetic idle opening.
             // The idle controller only takes authority after the crank falls below target.
@@ -443,6 +449,8 @@ public final class PowertrainSystem {
                 debugCombustionTorque = combustionTorque;
                 debugTurboRPM = turbochargers.turboAV[0] * AV_TO_RPM;
                 debugTurboBoostPSI = turbochargers.pressurePa[0] / PSI_TO_PA;
+                debugSuperchargerRPM = superchargers.blowerRPM[0];
+                debugSuperchargerBoostPSI = superchargers.pressurePa[0] / PSI_TO_PA;
                 debugTorqueCurveCount = engines.curveCount[0];
                 debugActualThrottle = actualThrottle;
                 debugStarterActive = starter;
@@ -588,6 +596,69 @@ public final class PowertrainSystem {
 
         float efficiency = interpolateTurboEngineCurve(unit, engineRPM, true);
         return Math.max(0.0f, 1.0f + 0.0000087f * pressure * efficiency);
+    }
+
+    /** Advances the belt-driven blower and pressure response at the physics substep rate. */
+    private float updateSupercharger(int unit, float requestedThrottle, float engineRPM, float dt) {
+        if (!superchargers.existing[unit]) return 1.0f;
+
+        float engage = Math.clamp((engineRPM - superchargers.clutchEngageRPM[unit])
+                / superchargers.clutchEngageRange[unit], 0.0f, 1.0f);
+        float disengage = Math.clamp((superchargers.clutchDisengageRPM[unit]
+                + superchargers.clutchDisengageRange[unit] - engineRPM)
+                / superchargers.clutchDisengageRange[unit], 0.0f, 1.0f);
+        float blowerRPM = engineRPM * superchargers.gearRatio[unit] * Math.min(engage, disengage);
+        superchargers.blowerRPM[unit] = blowerRPM;
+
+        // BeamNG's generated pressure curve returns its last sample above configured maxRPM.
+        float pressureCurveRPM = Math.min(blowerRPM, superchargers.maxBlowerRPM[unit]);
+        float relativeRPM = Math.clamp(pressureCurveRPM
+                / superchargers.maxBlowerRPM[unit], 0.0f, 1.0f);
+        float efficiency = Math.max(0.0f,
+                superchargers.efficiencyB1[unit] * relativeRPM * relativeRPM
+                        + superchargers.efficiencyB2[unit] * relativeRPM
+                        + superchargers.efficiencyB3[unit]);
+        float phase = superchargers.pulsePhase[unit]
+                + superchargers.pulseLobes[unit] * blowerRPM * (1.0f / 60.0f) * dt;
+        if (phase >= 2.0f * Math.PI) phase %= (float) (2.0 * Math.PI);
+        superchargers.pulsePhase[unit] = phase;
+        float pulse = 0.5f * (1.0f + (float) Math.sin(phase));
+        float pulseCoef = Math.fma(1.0f - superchargers.pulseFloor[unit], pulse,
+                superchargers.pulseFloor[unit]);
+        if (pulseCoef > 0.9f) pulseCoef = 1.0f;
+
+        float boostControl = interpolateSuperchargerController(unit, requestedThrottle * 100.0f);
+        float rawPressure = requestedThrottle < 0.01f ? 0.0f
+                : efficiency * superchargers.pressurePSIPerRPM[unit] * pressureCurveRPM
+                * pulseCoef * boostControl * PSI_TO_PA;
+        superchargers.rawPressurePa[unit] = rawPressure;
+        float pressure = superchargers.pressurePa[unit];
+        float maxPressureChange = superchargers.pressureRatePa[unit] * dt;
+        pressure += Math.clamp(rawPressure - pressure, -maxPressureChange, maxPressureChange);
+        superchargers.pressurePa[unit] = Math.max(0.0f, pressure);
+
+        float lostTorqueCoef = superchargers.crankLossPerRPM[unit] * blowerRPM;
+        superchargers.lostTorqueCoef[unit] = lostTorqueCoef;
+        return Math.max(0.0f, 1.0f + 0.0000087f * pressure - lostTorqueCoef);
+    }
+
+    private float interpolateSuperchargerController(int unit, float throttlePercent) {
+        int start = superchargers.controllerStart[unit];
+        int count = superchargers.controllerCount[unit];
+        if (count <= 0) return 1.0f;
+        if (throttlePercent <= superchargers.controllerThrottle[start]) {
+            return superchargers.controllerFactor[start];
+        }
+        int end = start + count - 1;
+        for (int i = start + 1; i <= end; i++) {
+            if (throttlePercent > superchargers.controllerThrottle[i]) continue;
+            float x0 = superchargers.controllerThrottle[i - 1];
+            float x1 = superchargers.controllerThrottle[i];
+            float t = x1 > x0 ? (throttlePercent - x0) / (x1 - x0) : 0.0f;
+            return Math.fma(t, superchargers.controllerFactor[i]
+                    - superchargers.controllerFactor[i - 1], superchargers.controllerFactor[i - 1]);
+        }
+        return superchargers.controllerFactor[end];
     }
 
     private float interpolateTurboPressure(int unit, float rpm) {
@@ -889,6 +960,11 @@ public final class PowertrainSystem {
             turbochargers.wastegateFactor[i] = 1.0f;
             turbochargers.lastCombustionOutput[i] = 0.0f;
             turbochargers.bovEngaged[i] = false;
+            superchargers.blowerRPM[i] = 0.0f;
+            superchargers.pressurePa[i] = 0.0f;
+            superchargers.rawPressurePa[i] = 0.0f;
+            superchargers.lostTorqueCoef[i] = 0.0f;
+            superchargers.pulsePhase[i] = 0.0f;
             engines.limiterCutRemaining[i] = 0.0f;
             gearboxes.currentGearIndex[i] = gearboxes.initialGearIndex[i];
             gearboxes.pendingGearIndex[i] = -1;
@@ -935,6 +1011,8 @@ public final class PowertrainSystem {
         debugCombustionTorque = 0.0f;
         debugTurboRPM = 0.0f;
         debugTurboBoostPSI = 0.0f;
+        debugSuperchargerRPM = 0.0f;
+        debugSuperchargerBoostPSI = 0.0f;
         debugTorqueCurveCount = engines.unitCount > 0 ? engines.curveCount[0] : 0;
         debugStarterActive = false;
         debugSparkEnabled = engines.unitCount > 0 && engines.sparkEnabled[0];
@@ -961,6 +1039,8 @@ public final class PowertrainSystem {
         debugCombustionTorque = 0.0f;
         debugTurboRPM = 0.0f;
         debugTurboBoostPSI = 0.0f;
+        debugSuperchargerRPM = 0.0f;
+        debugSuperchargerBoostPSI = 0.0f;
         debugTorqueCurveCount = 0;
         debugStarterActive = false;
         debugSparkEnabled = false;
@@ -985,6 +1065,11 @@ public final class PowertrainSystem {
     public float debugTurboRPM() { return debugTurboRPM; }
     public float debugTurboBoostPSI() { return debugTurboBoostPSI; }
     public boolean debugTurboExisting() { return turbochargers.existing.length > 0 && turbochargers.existing[0]; }
+    public float debugSuperchargerRPM() { return debugSuperchargerRPM; }
+    public float debugSuperchargerBoostPSI() { return debugSuperchargerBoostPSI; }
+    public boolean debugSuperchargerExisting() {
+        return superchargers.existing.length > 0 && superchargers.existing[0];
+    }
 
     /** Number of torque-curve points compiled for unit 0 (0 when no unit is compiled). */
     public int debugTorqueCurveCount() { return debugTorqueCurveCount; }

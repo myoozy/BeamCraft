@@ -12,6 +12,8 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutch
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SuperchargerBoostPoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SuperchargerSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboEnginePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboPressurePoint;
@@ -76,6 +78,7 @@ public final class JBeamPowertrainParser {
         List<DeviceSpec> out = new ArrayList<>();
         if (ptEl == null || !ptEl.isJsonArray()) {
             collectTurbochargerAttachments(part, variables, out);
+            collectSuperchargerAttachments(part, variables, out);
             return List.copyOf(out);
         }
         JsonObject blackboard = new JsonObject();
@@ -103,32 +106,22 @@ public final class JBeamPowertrainParser {
             }
         }
         collectTurbochargerAttachments(part, variables, out);
+        collectSuperchargerAttachments(part, variables, out);
         return List.copyOf(out);
     }
 
     /** Resolves BeamNG's engine-name -> sibling turbocharger object attachment. */
     private static void collectTurbochargerAttachments(JsonObject part, Map<String, Double> vars,
                                                         List<DeviceSpec> out) {
-        for (Map.Entry<String, JsonElement> entry : part.entrySet()) {
-            if (!entry.getValue().isJsonObject()) continue;
-            JsonObject engineConfig = entry.getValue().getAsJsonObject();
-            JsonElement reference = engineConfig.get("turbocharger");
-            if (reference == null || !reference.isJsonPrimitive()) continue;
-            String turboName;
-            try {
-                turboName = reference.getAsString();
-            } catch (RuntimeException ignored) {
-                continue;
-            }
-            JsonElement turboElement = part.get(turboName);
-            if (turboElement == null || !turboElement.isJsonObject()) continue;
-            JsonObject turbo = turboElement.getAsJsonObject();
+        for (NamedAttachment attachment : findNamedAttachments(part, "turbocharger")) {
+            JsonObject turbo = attachment.config();
             List<TurboPressurePoint> pressureCurve = turboPressureTable(turbo, "pressurePSI", vars);
             List<TurboEnginePoint> engineCurve = turboEngineTable(turbo, "engineDef", vars);
             if (pressureCurve.isEmpty() || engineCurve.isEmpty()) continue;
             double wastegateStart = firstNumeric(turbo.get("wastegateStart"), 0.0, vars);
             double wastegateLimit = firstNumeric(turbo.get("wastegateLimit"), Double.NaN, vars);
-            out.add(new TurbochargerSpec(turboName, entry.getKey(), pressureCurve, engineCurve,
+            out.add(new TurbochargerSpec(attachment.attachmentName(), attachment.engineName(),
+                    pressureCurve, engineCurve,
                     d(turbo, "inertia", 0.01, vars), wastegateStart, wastegateLimit,
                     d(turbo, "maxExhaustPower", 1.0, vars),
                     d(turbo, "backPressureCoef", 0.0005, vars),
@@ -142,6 +135,56 @@ public final class JBeamPowertrainParser {
                     d(turbo, "bovOpenChangeThreshold", 0.3, vars)));
         }
     }
+
+    /** Resolves BeamNG's engine-name -> sibling supercharger configuration attachment. */
+    private static void collectSuperchargerAttachments(JsonObject part, Map<String, Double> vars,
+                                                        List<DeviceSpec> out) {
+        for (NamedAttachment attachment : findNamedAttachments(part, "supercharger")) {
+            JsonObject supercharger = attachment.config();
+            List<SuperchargerBoostPoint> controller = superchargerBoostTable(
+                    supercharger, "boostController", vars);
+            if (controller.isEmpty()) continue;
+            String superchargerType = s(supercharger, "type", "roots").toLowerCase();
+            if (!List.of("roots", "screws", "centrifugal").contains(superchargerType)) continue;
+            out.add(new SuperchargerSpec(attachment.attachmentName(), attachment.engineName(),
+                    superchargerType,
+                    d(supercharger, "gearRatio", 1.0, vars),
+                    d(supercharger, "maxRPM", Double.NaN, vars),
+                    d(supercharger, "pressurePSIPer1kRPM", 0.0, vars),
+                    d(supercharger, "crankLossPer1kRPM", 5.0, vars),
+                    d(supercharger, "pressureRatePSI", 50.0, vars),
+                    d(supercharger, "clutchEngageRPM", 1000.0, vars),
+                    d(supercharger, "clutchEngageRange", Double.NaN, vars),
+                    d(supercharger, "clutchDisengageRPM", Double.NaN, vars),
+                    d(supercharger, "clutchDisengageRange", Double.NaN, vars),
+                    Math.clamp((int) Math.round(d(supercharger, "lobes", 3.0, vars)), 2, 4),
+                    b(supercharger, "twistedLobes", false),
+                    d(supercharger, "pulseCoefModifier", Double.NaN, vars), controller));
+        }
+    }
+
+    private static List<NamedAttachment> findNamedAttachments(JsonObject part, String referenceKey) {
+        List<NamedAttachment> attachments = new ArrayList<>();
+        for (Map.Entry<String, JsonElement> entry : part.entrySet()) {
+            if (!entry.getValue().isJsonObject()) continue;
+            JsonElement reference = entry.getValue().getAsJsonObject().get(referenceKey);
+            if (reference == null || !reference.isJsonPrimitive()) continue;
+            String attachmentName;
+            try {
+                attachmentName = reference.getAsString();
+            } catch (RuntimeException ignored) {
+                continue;
+            }
+            JsonElement config = part.get(attachmentName);
+            if (config != null && config.isJsonObject()) {
+                attachments.add(new NamedAttachment(entry.getKey(), attachmentName,
+                        config.getAsJsonObject()));
+            }
+        }
+        return attachments;
+    }
+
+    private record NamedAttachment(String engineName, String attachmentName, JsonObject config) {}
 
     private static double firstNumeric(JsonElement value, double def, Map<String, Double> vars) {
         if (value == null) return def;
@@ -500,7 +543,7 @@ public final class JBeamPowertrainParser {
     }
 
     private static List<TurboEnginePoint> turboEngineTable(JsonObject cfg, String key,
-                                                           Map<String, Double> vars) {
+                                                            Map<String, Double> vars) {
         JsonElement el = cfg.get(key);
         if (el == null || !el.isJsonArray()) return List.of();
         List<TurboEnginePoint> out = new ArrayList<>();
@@ -512,6 +555,24 @@ public final class JBeamPowertrainParser {
             double exhaust = JBeamParser.getDoubleCell(row.get(2), Double.NaN, vars);
             if (!Double.isNaN(rpm) && !Double.isNaN(efficiency) && !Double.isNaN(exhaust)) {
                 out.add(new TurboEnginePoint(rpm, efficiency, exhaust));
+            }
+        }
+        return out;
+    }
+
+    private static List<SuperchargerBoostPoint> superchargerBoostTable(
+            JsonObject cfg, String key, Map<String, Double> vars) {
+        JsonElement element = cfg.get(key);
+        if (element == null || !element.isJsonArray()) return List.of();
+        List<SuperchargerBoostPoint> out = new ArrayList<>();
+        for (JsonElement rowElement : element.getAsJsonArray()) {
+            if (!rowElement.isJsonArray()) continue;
+            JsonArray row = rowElement.getAsJsonArray();
+            if (row.size() < 2) continue;
+            double throttle = JBeamParser.getDoubleCell(row.get(0), Double.NaN, vars);
+            double factor = JBeamParser.getDoubleCell(row.get(1), Double.NaN, vars);
+            if (!Double.isNaN(throttle) && !Double.isNaN(factor)) {
+                out.add(new SuperchargerBoostPoint(throttle, factor));
             }
         }
         return out;

@@ -131,6 +131,11 @@ public class BeamCraftClient implements ClientModInitializer {
 			float turboRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugTurboRPM();
 			float turboBoostPSI = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugTurboBoostPSI();
 			boolean turboExisting = debugVehicle != null && debugVehicle.powertrain.debugTurboExisting();
+			float superchargerRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugSuperchargerRPM();
+			float superchargerBoostPSI = debugVehicle == null ? 0.0f
+					: debugVehicle.powertrain.debugSuperchargerBoostPSI();
+			boolean superchargerExisting = debugVehicle != null
+					&& debugVehicle.powertrain.debugSuperchargerExisting();
 			int torqueCurvePoints = debugVehicle == null ? 0 : debugVehicle.powertrain.debugTorqueCurveCount();
 			boolean starterActive = debugVehicle != null && debugVehicle.powertrain.debugStarterActive();
 			boolean sparkEnabled = debugVehicle != null && debugVehicle.powertrain.debugSparkEnabled();
@@ -151,6 +156,10 @@ public class BeamCraftClient implements ClientModInitializer {
 					turboExisting
 							? String.format("turbo: %.0f rpm | boost: %.1f psi", turboRPM, turboBoostPSI)
 							: "turbo: off",
+					superchargerExisting
+							? String.format("supercharger: %.0f rpm | boost: %.1f psi",
+									superchargerRPM, superchargerBoostPSI)
+							: "supercharger: off",
 					String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
 							sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
 							limiterActive ? "cut" : "ready", limiterTime),
