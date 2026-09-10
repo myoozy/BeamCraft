@@ -36,14 +36,9 @@ public final class CombustionEngineContainer {
     public float[] starterMaxAV = new float[0];
     // Minimum crank speed (rad/s) at which combustion is allowed.
     public float[] crankingAV = new float[0];
-    // Closed-throttle/top-screw opening (0..1) that covers steady internal losses.
-    public float[] idleLossThrottle = new float[0];
     // Stateful below-idle recovery opening. Kept separate from the player pedal.
     public float[] idleControlThrottle = new float[0];
-    /** BeamNG-compatible proportional idle controller parameters. */
-    public float[] idleControllerP = new float[0];
-    public float[] maxIdleThrottle = new float[0];
-    /** Player pedal command and physical throttle opening are deliberately separate. */
+    /** Player pedal command and controller-adjusted throttle command are deliberately separate. */
     public float[] playerThrottle = new float[0];
     public float[] actualThrottle = new float[0];
     /** Torque available at the current RPM before throttle/cuts, and realized combustion output. */
@@ -82,10 +77,7 @@ public final class CombustionEngineContainer {
         starterTorque = new float[units];
         starterMaxAV = new float[units];
         crankingAV = new float[units];
-        idleLossThrottle = new float[units];
         idleControlThrottle = new float[units];
-        idleControllerP = new float[units];
-        maxIdleThrottle = new float[units];
         playerThrottle = new float[units];
         actualThrottle = new float[units];
         availableCombustionTorque = new float[units];

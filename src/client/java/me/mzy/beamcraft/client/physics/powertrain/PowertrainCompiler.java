@@ -454,12 +454,9 @@ final class PowertrainCompiler {
             engines.crankingAV[i] = Math.max(0.0f, (float) engine.crankingRPM()) * PowertrainSystem.RPM_TO_AV;
             float peakTorque = peakTorqueOf(engine);
             engines.starterTorque[i] = Math.max(0.0f, starterTorqueOf(engine, peakTorque));
-            engines.idleLossThrottle[i] = idleLossThrottleOf(engine, engines.idleAV[i]);
-            engines.idleControlThrottle[i] = engines.idleLossThrottle[i];
-            engines.idleControllerP[i] = Math.max(0.0f, (float) engine.idleControllerP());
-            engines.maxIdleThrottle[i] = Math.clamp((float) engine.maxIdleThrottle(), 0.0f, 1.0f);
+            engines.idleControlThrottle[i] = 0.0f;
             engines.playerThrottle[i] = 0.0f;
-            engines.actualThrottle[i] = engines.idleLossThrottle[i];
+            engines.actualThrottle[i] = 0.0f;
             engines.availableCombustionTorque[i] = 0.0f;
             engines.combustionTorque[i] = 0.0f;
             engines.normalizedCombustionOutput[i] = 0.0f;
@@ -655,24 +652,6 @@ final class PowertrainCompiler {
     private static float starterTorqueOf(CombustionEngineSpec engine, float peakTorque) {
         if (engine.starterTorque() > 0.0) return (float) engine.starterTorque();
         return Math.max(40.0f, 0.4f * peakTorque);
-    }
-
-    /**
-     * Initial idle feedforward throttle. The solver recalculates the same loss balance at
-     * the current crank speed whenever RPM falls below the idle target.
-     */
-    private static float idleLossThrottleOf(CombustionEngineSpec engine, float idleAV) {
-        float friction = Math.max(0.0f, (float) engine.friction());
-        float dynamic = Math.max(0.0f, (float) engine.dynamicFriction());
-        float idleRPM = Math.max(0.0f, (float) engine.idleRPM());
-        float torqueAtIdle = interpolateCurve(engine.torqueCurve(), idleRPM);
-        if (torqueAtIdle <= 1e-3f) {
-            return (friction + dynamic * idleAV) > 1e-3f ? 1.0f : 0.0f;
-        }
-        // Solve ff*T_idle = friction + dynamic*idleAV. Additional engine braking is
-        // load-dependent in BeamNG and stays inactive until that model exists here.
-        float feedforward = (friction + dynamic * idleAV) / torqueAtIdle;
-        return Math.clamp(feedforward, 0.0f, 1.0f);
     }
 
     private static float interpolateCurve(List<TorquePoint> curve, float rpm) {

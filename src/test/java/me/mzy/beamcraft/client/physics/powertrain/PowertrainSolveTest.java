@@ -411,7 +411,7 @@ class PowertrainSolveTest {
     }
 
     @Test
-    void zeroPedalKeepsIdleThrottleOpeningButCutsCombustionAboveIdle() {
+    void zeroPedalLeavesThrottleClosedAndCutsCombustionAboveIdle() {
         SoftBodyVehicle vehicle = sunburstLikeVehicle();
         addSunburstPowertrain(vehicle);
         vehicle.powertrain.setControls(0.0f, 1.0f);
@@ -419,10 +419,32 @@ class PowertrainSolveTest {
 
         vehicle.powertrain.solve(DT);
 
-        assertTrue(vehicle.powertrain.debugActualThrottle() > 0.0f,
-                "the physical throttle plate keeps its steady idle opening");
+        assertEquals(0.0f, vehicle.powertrain.debugActualThrottle(), 1e-6f,
+                "above idle, zero pedal must not retain the below-idle rescue opening");
         assertEquals(0.0f, vehicle.powertrain.debugCombustionTorque(), 1e-6f,
                 "zero pedal above idle must cut combustion instead of accelerating the engine");
+    }
+
+    @Test
+    void normalizedCombustionOutputControlsLoadDependentEngineBraking() {
+        SoftBodyVehicle braked = sunburstLikeVehicle();
+        SoftBodyVehicle unbraked = sunburstLikeVehicle();
+        addSunburstPowertrain(braked);
+        addSunburstPowertrain(unbraked);
+        braked.powertrain.setControls(0.0f, 1.0f);
+        unbraked.powertrain.setControls(0.0f, 1.0f);
+        float initialAV = braked.powertrain.engines.idleAV[0] + 100.0f;
+        braked.powertrain.engines.engineAV[0] = initialAV;
+        unbraked.powertrain.engines.engineAV[0] = initialAV;
+        unbraked.powertrain.engines.engineBrakeTorque[0] = 0.0f;
+
+        braked.powertrain.solve(DT);
+        unbraked.powertrain.solve(DT);
+
+        assertEquals(0.0f, braked.powertrain.engines.normalizedCombustionOutput[0], 1e-6f,
+                "zero-pedal overrun has no realized combustion output");
+        assertTrue(braked.powertrain.engines.engineAV[0] < unbraked.powertrain.engines.engineAV[0],
+                "load-dependent engineBrakeTorque must increase zero-pedal deceleration");
     }
 
     @Test
@@ -520,11 +542,8 @@ class PowertrainSolveTest {
                 "a stalled engine must not self-recover without the starter");
         assertTrue(vehicle.powertrain.debugSparkEnabled() && vehicle.powertrain.debugFuelEnabled(),
                 "spark/fuel stay enabled below cranking (no limiter involvement)");
-        assertTrue(vehicle.powertrain.debugActualThrottle() > 0.0f,
-                "the idle controller keeps a restart feedforward after the engine stalls");
+        assertEquals(0.0f, vehicle.powertrain.debugActualThrottle(), 1e-6f,
+                "the idle controller must not command throttle after the engine has stalled");
         assertEquals(0.0f, vehicle.powertrain.engines.playerThrottle[0], 1e-6f);
-        assertTrue(vehicle.powertrain.engines.actualThrottle[0]
-                >= vehicle.powertrain.engines.idleLossThrottle[0],
-                "physical throttle must include the calculated low-speed loss feedforward");
     }
 }

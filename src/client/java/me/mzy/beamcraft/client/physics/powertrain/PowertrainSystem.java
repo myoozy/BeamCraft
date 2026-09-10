@@ -26,8 +26,8 @@ import java.util.List;
  *       by the rev limiter) and crank speed is above {@code crankingAV};</li>
  *   <li>a starter motor (external torque, boolean input) cranks a stalled engine back up
  *       past the combustion threshold;</li>
- *   <li>a BeamNG-style proportional idle controller separates the player throttle from
- *       the actual throttle; a calculated top-screw floor covers idle losses plus 5%;</li>
+ *   <li>below the idle target, the controller directly solves the throttle needed to
+ *       balance current losses/load plus a 5% recovery margin; above idle it yields;</li>
  *   <li>a time/soft rev limiter cuts spark+fuel for {@code revLimiterCutTime} and only
  *       retriggers while the crank is still above the hysteresis threshold — RPM is never
  *       clamped directly.</li>
@@ -231,13 +231,10 @@ public final class PowertrainSystem {
 
             boolean crankRunning = engines.engineAV[unit] >= engines.crankingAV[unit];
             boolean belowIdle = crankRunning && engines.engineAV[unit] < engines.idleAV[unit];
-            float idleOutput = idleControllerOutput(unit, crankRunning, belowIdle, dt);
-            // KinetiForge-style pedal mapping: the physical throttle plate spans from
-            // the steady idle opening to wide open throttle. Fuel is nevertheless cut
-            // at zero pedal once the crank has recovered to the idle target.
-            float pedalThrottle = Math.fma(1.0f - engines.idleLossThrottle[unit], throttle,
-                    engines.idleLossThrottle[unit]);
-            float actualThrottle = belowIdle ? Math.max(pedalThrottle, idleOutput) : pedalThrottle;
+            float idleOutput = idleControllerOutput(unit, crankRunning, belowIdle);
+            // Above idle, the player command is not held above a synthetic idle opening.
+            // The idle controller only takes authority after the crank falls below target.
+            float actualThrottle = belowIdle ? Math.max(throttle, idleOutput) : throttle;
             boolean combustionRequested = throttle > 1.0e-6f || belowIdle;
             boolean combustionEnabled = crankRunning && combustionRequested
                     && engines.sparkEnabled[unit] && engines.fuelEnabled[unit];
@@ -257,11 +254,11 @@ public final class PowertrainSystem {
                     ? engines.starterTorque[unit] : 0.0f;
 
             float engineAVBeforeExternal = Math.max(0.0f, engines.engineAV[unit]);
+            float engineBrakeTorque = engines.engineBrakeTorque[unit]
+                    * (1.0f - normalizedCombustionOutput);
             float loss = engines.engineFriction[unit]
-                    + engines.engineDynamicFriction[unit] * engineAVBeforeExternal;
-            // BeamNG's additional engineBrakeTorque depends on instantEngineLoad. Leave
-            // it inactive until BeamCraft has that intake/load model instead of inventing
-            // a throttle or clutch-load proxy.
+                    + engines.engineDynamicFriction[unit] * engineAVBeforeExternal
+                    + engineBrakeTorque;
             float driveTorque = Math.max(0.0f, combustionTorque + starterTorque);
             // Integrate driving torque first and preserve that no-loss result. Resistance
             // is dissipative: if applying it crosses zero, the crank stopped during this
@@ -492,12 +489,11 @@ public final class PowertrainSystem {
         }
     }
 
-    /** Smooth below-idle recovery with a model-based converter-load floor. */
-    private float idleControllerOutput(int unit, boolean running, boolean belowIdle, float dt) {
-        float baseThrottle = engines.idleLossThrottle[unit];
+    /** Below-idle rescue obtained by solving the current loss/load torque balance. */
+    private float idleControllerOutput(int unit, boolean running, boolean belowIdle) {
         if (!running || !belowIdle) {
-            engines.idleControlThrottle[unit] = baseThrottle;
-            return baseThrottle;
+            engines.idleControlThrottle[unit] = 0.0f;
+            return 0.0f;
         }
 
         float engineAV = Math.max(0.0f, engines.engineAV[unit]);
@@ -510,18 +506,16 @@ public final class PowertrainSystem {
         float converterLoad = clutchlikes.type[unit] == ClutchlikeContainer.TYPE_TORQUE_CONVERTER
                 ? Math.max(0.0f, torqueConverters.inputTorque[unit])
                 : 0.0f;
-        float requiredByLoad = torque > 1.0e-3f
-                ? Math.clamp((loss + converterLoad) / torque, 0.0f, 1.0f)
+        // At idle the normalized combustion output equals the commanded throttle in the
+        // current linear model. Solve
+        //   throttle*T = loss + brake*(1-throttle) + converterLoad
+        // for the feedforward opening needed to stop the RPM fall.
+        float brake = engines.engineBrakeTorque[unit];
+        float requiredByLoad = torque + brake > 1.0e-3f
+                ? Math.clamp((loss + brake + converterLoad) / (torque + brake) + 0.05f, 0.0f, 1.0f)
                 : 1.0f;
-
-        // Equivalent to FInterpTo(current, 1, dt, 1): a deliberately slow recovery
-        // avoids the substep-to-substep chatter of a raw proportional controller.
-        float alpha = Math.clamp(dt, 0.0f, 1.0f);
-        float smoothedRecovery = Math.fma(1.0f - engines.idleControlThrottle[unit], alpha,
-                engines.idleControlThrottle[unit]);
-        float result = Math.max(requiredByLoad, smoothedRecovery);
-        engines.idleControlThrottle[unit] = result;
-        return result;
+        engines.idleControlThrottle[unit] = requiredByLoad;
+        return requiredByLoad;
     }
 
     /**
@@ -768,7 +762,7 @@ public final class PowertrainSystem {
     public void reset() {
         for (int i = 0; i < engines.unitCount; i++) {
             engines.engineAV[i] = engines.idleAV[i];
-            engines.idleControlThrottle[i] = engines.idleLossThrottle[i];
+            engines.idleControlThrottle[i] = 0.0f;
             clutches.clutchAngle[i] = 0.0f;
             clutches.clutchTorque[i] = 0.0f;
             torqueConverters.lockupAngle[i] = 0.0f;
@@ -779,7 +773,7 @@ public final class PowertrainSystem {
             engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
             engines.playerThrottle[i] = 0.0f;
-            engines.actualThrottle[i] = engines.idleLossThrottle[i];
+            engines.actualThrottle[i] = 0.0f;
             engines.availableCombustionTorque[i] = 0.0f;
             engines.combustionTorque[i] = 0.0f;
             engines.normalizedCombustionOutput[i] = 0.0f;
