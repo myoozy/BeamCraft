@@ -185,11 +185,12 @@ public class JBeamAssembler {
             }
             System.out.println("✅ Pass 3 Complete: Wheels generated.");
 
-            // Powertrain specs are accumulated only after wheels exist, then
-            // compiled once in finalizePhysicsSetup into hot-loop SoA arrays.
-            for (PartEntry entry : activeParts) {
-                vehicle.powertrain.addSpecs(JBeamPowertrainParser.parsePart(entry.json, entry.variables));
-            }
+            // BeamNG exposes one vehicle-wide JBeam data view after selected parts have been
+            // unified. Configuration parsers consume that view once; structural parsers above
+            // still use the original parts because their transforms and origins are per-part.
+            JsonObject assembledData = JBeamPartMerger.mergeParts(
+                    activeParts.stream().map(entry -> entry.json).toList());
+            vehicle.powertrain.addSpecs(JBeamPowertrainParser.parsePart(assembledData, globalVariables));
 
             // Pass 4: Resolve Couplers
             System.out.println("====== 🔗 Resolving Couplers ======");

@@ -34,7 +34,7 @@ public final class PowertrainSpecs {
     public sealed interface DeviceSpec
             permits CombustionEngineSpec, ClutchlikeSpec, GearSelectableSpec,
                     ShaftSpec, SplitShaftSpec, TorsionReactorSpec, DifferentialSpec,
-                    DevicePatchSpec, TurbochargerSpec, TurbochargerPatchSpec, UnsupportedConfig {
+                    TurbochargerSpec, UnsupportedConfig {
         String type();
         String name();
         String inputName();
@@ -71,27 +71,6 @@ public final class PowertrainSpecs {
      * 由于基准值可能来自父 part，构建期解析只把它原样记录，不执行运算。
      */
     public record ValueModifier(String targetKey, char operation, double value) {}
-
-    /**
-     * A named-device override contributed by a separate active part. BeamNG final-drive
-     * parts commonly contain only {@code "differential_F": {"gearRatio": 3.9}}
-     * and no {@code powertrain} table of their own.
-     */
-    public record DevicePatchSpec(
-            String type,
-            String name,
-            String inputName,
-            int inputIndex,
-            List<ValueModifier> valueModifiers
-    ) implements DeviceSpec {
-        public DevicePatchSpec(String name, List<ValueModifier> valueModifiers) {
-            this("devicePatch", name, null, 0, valueModifiers);
-        }
-
-        public DevicePatchSpec {
-            valueModifiers = List.copyOf(valueModifiers);
-        }
-    }
 
     /** 扭矩曲线上的一个采样点（rpm → 扭矩 N·m）。 */
     public record TorquePoint(double rpm, double torque) {}
@@ -164,23 +143,6 @@ public final class PowertrainSpecs {
                     maxExhaustPower, backPressureCoef, frictionCoef, pressureRatePSI,
                     wastegatePCoef, wastegateICoef, wastegateDCoef, bovEnabled,
                     bovOpenThreshold, bovOpenChangeThreshold);
-        }
-    }
-
-    /** Cross-part numeric overrides for a named turbocharger configuration object. */
-    public record TurbochargerPatchSpec(
-            String type,
-            String name,
-            String inputName,
-            int inputIndex,
-            List<ValueModifier> valueModifiers
-    ) implements DeviceSpec {
-        public TurbochargerPatchSpec(String name, List<ValueModifier> valueModifiers) {
-            this("turbochargerPatch", name, null, 0, valueModifiers);
-        }
-
-        public TurbochargerPatchSpec {
-            valueModifiers = List.copyOf(valueModifiers);
         }
     }
 

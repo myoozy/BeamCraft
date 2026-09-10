@@ -2,11 +2,11 @@ package me.mzy.beamcraft.client.physics.powertrain;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.mzy.beamcraft.client.physics.JBeamPartMerger;
 import me.mzy.beamcraft.client.material.RelaxedJson;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ClutchlikeSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
@@ -18,7 +18,6 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 import org.junit.jupiter.api.Test;
@@ -59,7 +58,11 @@ class JBeamPowertrainParserTest {
                 }
                 """).getAsJsonObject();
 
-        List<DeviceSpec> specs = JBeamPowertrainParser.parsePart(part, Map.of());
+        JsonObject ecu = JsonParser.parseString("""
+                {"turbocharger":{"wastegateStart":[19.0]}}
+                """).getAsJsonObject();
+        JsonObject assembled = JBeamPartMerger.mergeParts(List.of(part, ecu));
+        List<DeviceSpec> specs = JBeamPowertrainParser.parsePart(assembled, Map.of());
         TurbochargerSpec turbo = specs.stream().filter(TurbochargerSpec.class::isInstance)
                 .map(TurbochargerSpec.class::cast).findFirst().orElseThrow();
 
@@ -68,15 +71,7 @@ class JBeamPowertrainParserTest {
         assertEquals(3, turbo.engineCurve().size());
         assertEquals(0.25, turbo.inertia(), 1e-6);
         assertEquals(10.0, turbo.wastegateLimitPSI(), 1e-6);
-
-        JsonObject ecu = JsonParser.parseString("""
-                {"turbocharger":{"wastegateStart":[19.0]}}
-                """).getAsJsonObject();
-        TurbochargerPatchSpec patch = JBeamPowertrainParser.parsePart(ecu, Map.of()).stream()
-                .filter(TurbochargerPatchSpec.class::isInstance)
-                .map(TurbochargerPatchSpec.class::cast).findFirst().orElseThrow();
-        assertEquals("turbocharger", patch.name());
-        assertEquals(19.0, patch.valueModifiers().getFirst().value(), 1e-6);
+        assertEquals(19.0, turbo.wastegateStartPSI(), 1e-6);
     }
 
     private static JsonObject part(String json) {
@@ -101,20 +96,24 @@ class JBeamPowertrainParserTest {
     }
 
     @Test
-    void finalDrivePartWithoutPowertrainProducesNamedDevicePatch() {
-        List<DeviceSpec> specs = parse("""
+    void assembledFinalDrivePartOverridesNamedDeviceWithoutFieldWhitelist() {
+        JsonObject base = part("""
                 {
-                  "slotType": "sunburst2_finaldrive_F",
-                  "differential_F": {"gearRatio": 3.90}
+                  "powertrain":[
+                    ["type","name","inputName","inputIndex"],
+                    ["differential","differential_F","gearbox",1]
+                  ],
+                  "differential_F":{"gearRatio":1.0,"diffTorqueSplit":0.5}
                 }
                 """);
+        JsonObject finalDrive = part("""
+                {"differential_F":{"gearRatio":3.90}}
+                """);
 
-        DevicePatchSpec patch = assertInstanceOf(DevicePatchSpec.class, specs.get(0));
-        assertEquals("differential_F", patch.name());
-        assertEquals(1, patch.valueModifiers().size());
-        assertEquals("gearRatio", patch.valueModifiers().get(0).targetKey());
-        assertEquals('=', patch.valueModifiers().get(0).operation());
-        assertEquals(3.90, patch.valueModifiers().get(0).value(), 1e-6);
+        List<DeviceSpec> specs = JBeamPowertrainParser.parsePart(
+                JBeamPartMerger.mergeParts(List.of(base, finalDrive)), Map.of());
+        DifferentialSpec differential = assertInstanceOf(DifferentialSpec.class, specs.get(0));
+        assertEquals(3.90, differential.gearRatio(), 1e-6);
     }
 
     @Test
@@ -532,8 +531,17 @@ class JBeamPowertrainParserTest {
     }
 
     @Test
-    void converterOnlyPartProducesNamedDevicePatch() {
-        List<DeviceSpec> specs = parse("""
+    void assembledConverterPartOverridesNamedDeviceConfiguration() {
+        JsonObject base = part("""
+                {
+                  "powertrain":[
+                    ["type","name","inputName","inputIndex"],
+                    ["torqueConverter","torqueConverter","mainEngine",1]
+                  ],
+                  "torqueConverter":{"converterDiameter":0.3,"converterStiffness":10}
+                }
+                """);
+        JsonObject converter = part("""
                 {
                   "torqueConverter": {
                     "converterDiameter": 0.322,
@@ -542,15 +550,13 @@ class JBeamPowertrainParserTest {
                   }
                 }
                 """);
+        List<DeviceSpec> specs = JBeamPowertrainParser.parsePart(
+                JBeamPartMerger.mergeParts(List.of(base, converter)), Map.of());
 
-        DevicePatchSpec patch = assertInstanceOf(DevicePatchSpec.class, specs.get(0));
-        assertEquals("torqueConverter", patch.name());
-        assertTrue(patch.valueModifiers().stream().anyMatch(
-                modifier -> modifier.targetKey().equals("converterDiameter")
-                        && Math.abs(modifier.value() - 0.322) < 1e-6));
-        assertTrue(patch.valueModifiers().stream().anyMatch(
-                modifier -> modifier.targetKey().equals("lockupClutchTorque")
-                        && Math.abs(modifier.value() - 600.0) < 1e-6));
+        TorqueConverterSpec parsed = assertInstanceOf(TorqueConverterSpec.class, specs.get(0));
+        assertEquals(0.322, parsed.converterDiameter(), 1e-6);
+        assertEquals(12.0, parsed.converterStiffness(), 1e-6);
+        assertEquals(600.0, parsed.lockupClutchTorque(), 1e-6);
     }
 
     // ---------------------------------------------------------------- 真实 Sunburst 风格数据

@@ -6,7 +6,6 @@ import com.google.gson.JsonObject;
 import me.mzy.beamcraft.client.physics.JBeamParser;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
@@ -17,7 +16,6 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboEnginePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboPressurePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
@@ -67,20 +65,21 @@ public final class JBeamPowertrainParser {
      * @param part      清洗过的 part JSON（含 {@code powertrain} 数组）
      * @param variables 该 part 上下文中的变量表（用于 {@code $=...} 表达式求值）
      */
+    /**
+     * Parses the vehicle-wide section view produced by {@code JBeamPartMerger}. Direct unit tests
+     * may also pass a single already-unified part.
+     */
     public static List<DeviceSpec> parsePart(JsonObject part, Map<String, Double> variables) {
         if (part == null) return List.of();
         JsonElement ptEl = part.get("powertrain");
 
         List<DeviceSpec> out = new ArrayList<>();
         if (ptEl == null || !ptEl.isJsonArray()) {
-            collectNamedDevicePatches(part, variables, List.of(), out);
             collectTurbochargerAttachments(part, variables, out);
-            collectTurbochargerPatches(part, variables, out);
             return List.copyOf(out);
         }
         JsonObject blackboard = new JsonObject();
         boolean headerSeen = false;
-        List<String> declaredNames = new ArrayList<>();
 
         for (JsonElement element : ptEl.getAsJsonArray()) {
             // 独立配置修改器 {...} → 更新黑板
@@ -101,12 +100,9 @@ public final class JBeamPowertrainParser {
             DeviceSpec spec = parseRow(part, row, blackboard, variables);
             if (spec != null) {
                 out.add(spec);
-                declaredNames.add(spec.name());
             }
         }
-        collectNamedDevicePatches(part, variables, declaredNames, out);
         collectTurbochargerAttachments(part, variables, out);
-        collectTurbochargerPatches(part, variables, out);
         return List.copyOf(out);
     }
 
@@ -147,36 +143,6 @@ public final class JBeamPowertrainParser {
         }
     }
 
-    /** Captures ECU/tuning parts that patch the separately selected turbo configuration. */
-    private static void collectTurbochargerPatches(JsonObject part, Map<String, Double> vars,
-                                                    List<DeviceSpec> out) {
-        for (Map.Entry<String, JsonElement> entry : part.entrySet()) {
-            if (!entry.getKey().equalsIgnoreCase("turbocharger")) continue;
-            if (!entry.getValue().isJsonObject()) continue;
-            JsonObject cfg = entry.getValue().getAsJsonObject();
-            if (cfg.has("pressurePSI") || cfg.has("engineDef")) continue; // full attachment data
-            List<ValueModifier> modifiers = new ArrayList<>();
-            for (String key : List.of("inertia", "wastegateStart", "wastegateLimit",
-                    "maxExhaustPower", "backPressureCoef", "frictionCoef", "pressureRatePSI",
-                    "wastegatePCoef", "wastegateICoef", "wastegateDCoef",
-                    "bovOpenThreshold", "bovOpenChangeThreshold")) {
-                if (!cfg.has(key)) continue;
-                double value = firstNumeric(cfg.get(key), Double.NaN, vars);
-                if (!Double.isNaN(value)) modifiers.add(new ValueModifier(key, '=', value));
-            }
-            for (ValueModifier modifier : valueModifiers(cfg, vars)) {
-                if (modifier.targetKey().equals("inertia")
-                        || modifier.targetKey().equals("maxExhaustPower")
-                        || modifier.targetKey().equals("backPressureCoef")
-                        || modifier.targetKey().equals("frictionCoef")
-                        || modifier.targetKey().equals("pressureRatePSI")) {
-                    modifiers.add(modifier);
-                }
-            }
-            if (!modifiers.isEmpty()) out.add(new TurbochargerPatchSpec(entry.getKey(), modifiers));
-        }
-    }
-
     private static double firstNumeric(JsonElement value, double def, Map<String, Double> vars) {
         if (value == null) return def;
         if (value.isJsonArray()) {
@@ -188,41 +154,6 @@ public final class JBeamPowertrainParser {
         }
         return JBeamParser.getDoubleCell(value, def, vars);
     }
-
-    /** Captures cross-part named-device overrides such as a selectable final drive. */
-    private static void collectNamedDevicePatches(JsonObject part, Map<String, Double> vars,
-                                                  List<String> declaredNames, List<DeviceSpec> out) {
-        for (Map.Entry<String, JsonElement> entry : part.entrySet()) {
-            if (declaredNames.contains(entry.getKey()) || !entry.getValue().isJsonObject()) continue;
-            List<ValueModifier> assignments = directAssignments(entry.getValue().getAsJsonObject(), vars);
-            if (!assignments.isEmpty()) out.add(new DevicePatchSpec(entry.getKey(), assignments));
-        }
-    }
-
-    private static List<ValueModifier> directAssignments(JsonObject cfg, Map<String, Double> vars) {
-        List<ValueModifier> out = new ArrayList<>();
-        for (String key : DIRECT_PATCH_FIELDS) {
-            if (!cfg.has(key)) continue;
-            double value = JBeamParser.getDoubleSafe(cfg, key, Double.NaN, vars);
-            if (!Double.isNaN(value)) out.add(new ValueModifier(key, '=', value));
-        }
-        out.addAll(valueModifiers(cfg, vars));
-        return out;
-    }
-
-    private static final List<String> DIRECT_PATCH_FIELDS = List.of(
-            "gearRatio", "diffTorqueSplit", "friction", "dynamicFriction", "torqueLossCoef",
-            "inertia", "idleRPM", "maxRPM", "engineBrakeTorque", "starterTorque",
-            "starterMaxRPM", "starterRPM", "startRPM", "crankingRPM", "revLimiterRPM",
-            "revLimiterCutTime", "revLimiterMaxRPMDrop", "revLimiterRPMChange",
-            "lockTorque", "lockSpring", "lockSpringCoef", "lockDampRatio",
-            "clutchFreePlay", "clutchStiffness", "gearChangeTime", "maxGearChangeTime",
-            "dctClutchTime", "idleControllerP", "maxIdleThrottle",
-            "couplingAVRatio", "stallTorqueRatio", "converterStiffness", "converterDiameter",
-            "converterTorque", "additionalEngineInertia", "lockupClutchTorque",
-            "lockupClutchSpring", "lockupClutchDampRatio", "primaryOutputID",
-            "defaultClutchRatio", "viscousCoef", "viscousTorque", "viscousExponent",
-            "viscousSmoothing");
 
     // ---------------------------------------------------------------- row 解析
 

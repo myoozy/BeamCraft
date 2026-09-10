@@ -5,7 +5,6 @@ import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ClutchlikeSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DevicePatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
@@ -17,7 +16,6 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_CLUTCH;
@@ -39,8 +37,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Build-time powertrain compiler. Turns the accumulated, still-mutable {@link List}<{@link DeviceSpec}>
- * rows into the flat SoA containers of a {@link PowertrainData}: it normalizes value modifiers
- * across active parts, validates the device graph (duplicate names, input resolution, occupied
+ * rows into the flat SoA containers of a {@link PowertrainData}: it resolves any remaining device
+ * value modifiers, validates the device graph (duplicate names, input resolution, occupied
  * ports, cycles), compiles engine→clutch units, driven wheel paths and torque reactions, and
  * resolves every node reference to a {@link me.mzy.beamcraft.client.physics.NodeContainer} index.
  *
@@ -63,24 +61,10 @@ final class PowertrainCompiler {
         }
 
         Map<String, TurbochargerSpec> turboByEngine = new HashMap<>();
-        Map<String, List<TurbochargerPatchSpec>> pendingTurboPatches = new HashMap<>();
         List<DeviceSpec> deviceSpecs = new ArrayList<>();
         for (DeviceSpec spec : rawSpecs) {
             if (spec instanceof TurbochargerSpec turbo) {
-                List<TurbochargerPatchSpec> pending = pendingTurboPatches.remove(turbo.name());
-                if (pending != null) {
-                    for (TurbochargerPatchSpec patch : pending) turbo = applyTurboPatch(turbo, patch);
-                }
                 turboByEngine.put(turbo.engineName(), turbo); // later active parts win
-            } else if (spec instanceof TurbochargerPatchSpec patch) {
-                boolean applied = false;
-                for (Map.Entry<String, TurbochargerSpec> entry : turboByEngine.entrySet()) {
-                    if (!entry.getValue().name().equals(patch.name())) continue;
-                    entry.setValue(applyTurboPatch(entry.getValue(), patch));
-                    applied = true;
-                }
-                if (!applied) pendingTurboPatches.computeIfAbsent(patch.name(), ignored -> new ArrayList<>())
-                        .add(patch);
             } else {
                 deviceSpecs.add(spec);
             }
@@ -832,9 +816,7 @@ final class PowertrainCompiler {
             case DifferentialSpec ignored -> PowertrainTopologyContainer.TYPE_DIFFERENTIAL;
             case TorsionReactorSpec ignored -> PowertrainTopologyContainer.TYPE_TORSION_REACTOR;
             case SplitShaftSpec ignored -> PowertrainTopologyContainer.TYPE_SPLIT_SHAFT;
-            case DevicePatchSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
             case TurbochargerSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
-            case TurbochargerPatchSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
             case UnsupportedConfig ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
         };
     }
@@ -856,46 +838,6 @@ final class PowertrainCompiler {
             case ShaftSpec shaft -> shaft.connectedWheel();
             case TorsionReactorSpec reactor -> reactor.connectedWheel();
             default -> null;
-        };
-    }
-
-    private static TurbochargerSpec applyTurboPatch(TurbochargerSpec turbo, TurbochargerPatchSpec patch) {
-        double inertia = turbo.inertia(), start = turbo.wastegateStartPSI(), limit = turbo.wastegateLimitPSI();
-        double exhaust = turbo.maxExhaustPower(), backPressure = turbo.backPressureCoef();
-        double friction = turbo.frictionCoef(), pressureRate = turbo.pressureRatePSI();
-        double p = turbo.wastegatePCoef(), i = turbo.wastegateICoef(), d = turbo.wastegateDCoef();
-        double bovOpen = turbo.bovOpenThreshold(), bovDrop = turbo.bovOpenChangeThreshold();
-        for (var modifier : patch.valueModifiers()) {
-            switch (modifier.targetKey()) {
-                case "inertia" -> inertia = modifyTurbo(inertia, modifier);
-                case "wastegateStart" -> start = modifyTurbo(start, modifier);
-                case "wastegateLimit" -> limit = modifyTurbo(limit, modifier);
-                case "maxExhaustPower" -> exhaust = modifyTurbo(exhaust, modifier);
-                case "backPressureCoef" -> backPressure = modifyTurbo(backPressure, modifier);
-                case "frictionCoef" -> friction = modifyTurbo(friction, modifier);
-                case "pressureRatePSI" -> pressureRate = modifyTurbo(pressureRate, modifier);
-                case "wastegatePCoef" -> p = modifyTurbo(p, modifier);
-                case "wastegateICoef" -> i = modifyTurbo(i, modifier);
-                case "wastegateDCoef" -> d = modifyTurbo(d, modifier);
-                case "bovOpenThreshold" -> bovOpen = modifyTurbo(bovOpen, modifier);
-                case "bovOpenChangeThreshold" -> bovDrop = modifyTurbo(bovDrop, modifier);
-                default -> { }
-            }
-        }
-        return new TurbochargerSpec(turbo.type(), turbo.name(), turbo.inputName(), turbo.inputIndex(),
-                List.of(), turbo.engineName(), turbo.pressureCurve(), turbo.engineCurve(), inertia,
-                start, limit, exhaust, backPressure, friction, pressureRate, p, i, d,
-                turbo.bovEnabled(), bovOpen, bovDrop);
-    }
-
-    private static double modifyTurbo(double base, PowertrainSpecs.ValueModifier modifier) {
-        return switch (modifier.operation()) {
-            case '=' -> modifier.value();
-            case '+' -> base + modifier.value();
-            case '-' -> base - modifier.value();
-            case '*' -> base * modifier.value();
-            case '/' -> modifier.value() == 0.0 ? base : base / modifier.value();
-            default -> base;
         };
     }
 

@@ -13,7 +13,6 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverte
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboEnginePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboPressurePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
-import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 import org.junit.jupiter.api.Test;
 
@@ -468,11 +467,9 @@ class PowertrainSolveTest {
                         new TurboPressurePoint(100_000, 20)),
                 List.of(new TurboEnginePoint(0, 0, 0), new TurboEnginePoint(2_000, 0.8, 0.8),
                         new TurboEnginePoint(6_000, 1.0, 1.0)),
-                0.25, 0, Double.NaN, 500, 0.000002, 18.5, 50,
+                0.25, 19, Double.NaN, 500, 0.000002, 18.5, 50,
                 0.0001, 0.0015, 0, true, 0.05, 0.3);
-        addSunburstPowertrain(vehicle, List.of(turbo,
-                new TurbochargerPatchSpec("turbocharger",
-                        List.of(new ValueModifier("wastegateStart", '=', 19.0)))));
+        addSunburstPowertrain(vehicle, List.of(turbo));
         vehicle.powertrain.setControls(1.0f, 1.0f);
         float heldRPM = 4_000.0f;
         float naturallyAspiratedTorque = 221.0f;
@@ -487,7 +484,7 @@ class PowertrainSolveTest {
         assertTrue(vehicle.powertrain.debugTurboBoostPSI() > 0.0f,
                 "spooled turbo must produce positive compressor pressure");
         assertEquals(19.0f * 6894.7573f, vehicle.powertrain.turbochargers.wastegateStartPa[0], 1.0f,
-                "ECU turbocharger patch must override the selected turbo's wastegate target");
+                "assembled turbo configuration must contain the ECU wastegate target");
         assertTrue(vehicle.powertrain.engines.availableCombustionTorque[0] > naturallyAspiratedTorque,
                 "positive boost must multiply the naturally aspirated torque curve");
     }

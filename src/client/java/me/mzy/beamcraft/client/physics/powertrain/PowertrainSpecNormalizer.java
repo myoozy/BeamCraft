@@ -7,7 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Applies cross-part named patches and JBeam numeric modifiers before graph compilation. */
+/** Applies unresolved JBeam numeric modifiers before graph compilation. */
 final class PowertrainSpecNormalizer {
     private PowertrainSpecNormalizer() {
     }
@@ -15,24 +15,11 @@ final class PowertrainSpecNormalizer {
     static List<DeviceSpec> normalize(List<DeviceSpec> rawSpecs) {
         List<DeviceSpec> result = new ArrayList<>();
         Map<String, Integer> byName = new HashMap<>();
-        Map<String, List<ValueModifier>> pendingPatches = new HashMap<>();
         for (DeviceSpec spec : rawSpecs) {
-            if (spec instanceof DevicePatchSpec patch) {
-                Integer existing = byName.get(patch.name());
-                if (existing != null) {
-                    result.set(existing, applyModifiers(result.get(existing), patch.valueModifiers()));
-                } else {
-                    pendingPatches.computeIfAbsent(patch.name(), ignored -> new ArrayList<>())
-                            .addAll(patch.valueModifiers());
-                }
-                continue;
-            }
             Integer existing = byName.get(spec.name());
             if (existing == null) {
                 byName.put(spec.name(), result.size());
                 DeviceSpec normalized = applyModifiers(spec, spec.valueModifiers());
-                List<ValueModifier> pending = pendingPatches.remove(spec.name());
-                if (pending != null) normalized = applyModifiers(normalized, pending);
                 result.add(normalized);
             } else if (!spec.valueModifiers().isEmpty()
                     && result.get(existing).type().equalsIgnoreCase(spec.type())) {

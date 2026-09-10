@@ -241,14 +241,12 @@ class PowertrainSystemTest {
         vehicle.wheels.nameToIndex.put("FL", 0);
         vehicle.wheels.nameToIndex.put("FR", 1);
         PowertrainSystem system = vehicle.powertrain;
-        system.addSpecs(List.of(new DevicePatchSpec("converter", List.of(
-                new ValueModifier("converterDiameter", '=', 0.32)))));
         system.addSpecs(List.of(
                 new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
                         0.2, 800, 7000, 1, 0.01, 2,
                         List.of(new TorquePoint(1000, 100), new TorquePoint(5000, 200)), List.of(), List.of()),
                 new TorqueConverterSpec("torqueConverter", "converter", "engine", 1,
-                        0.9, 1.8, 10, 0.31, 0, 0.15,
+                        0.9, 1.8, 10, 0.32, 0, 0.15,
                         ElectricSignals.LOCKUP_CLUTCH_RATIO, 500, -1, 0.15, List.of()),
                 new GearboxSpec("automaticGearbox", "gearbox", "converter", 1,
                         List.of(-3.0, 0.0, 4.0, 2.0), false, 0, 0, 0, List.of()),
@@ -278,14 +276,12 @@ class PowertrainSystemTest {
     }
 
     @Test
-    void separateFinalDrivePartOverridesDifferentialRatioEvenWhenLoadedFirst() {
+    void compiledDifferentialRatioPropagatesToWheelPaths() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         vehicle.wheels.count = 2;
         vehicle.wheels.nameToIndex.put("FL", 0);
         vehicle.wheels.nameToIndex.put("FR", 1);
         PowertrainSystem system = vehicle.powertrain;
-        system.addSpecs(List.of(new DevicePatchSpec(
-                "differential_F", List.of(new ValueModifier("gearRatio", '=', 3.9)))));
         system.addSpecs(List.of(
                 new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
                         0.1, 800, 6000, 0, 0, 0,
@@ -295,7 +291,7 @@ class PowertrainSystemTest {
                 new GearboxSpec("manualGearbox", "gearbox", "clutch", 1,
                         List.of(-3.0, 0.0, 3.45), false, 0, 0, 0, List.of()),
                 new DifferentialSpec("differential", "differential_F", "gearbox", 1,
-                        1.0, 0.5, 0, 0, 0, "open", List.of()),
+                        3.9, 0.5, 0, 0, 0, "open", List.of()),
                 new ShaftSpec("shaft", "left", "differential_F", 1,
                         1, "FL", 0, 0, 0, List.of(), List.of(), List.of()),
                 new ShaftSpec("shaft", "right", "differential_F", 2,
