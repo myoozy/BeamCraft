@@ -10,9 +10,15 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboEnginePoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboPressurePoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -77,7 +83,12 @@ class PowertrainSolveTest {
     }
 
     private static void addSunburstPowertrain(SoftBodyVehicle vehicle) {
-        vehicle.powertrain.addSpecs(List.of(
+        addSunburstPowertrain(vehicle, List.of());
+    }
+
+    private static void addSunburstPowertrain(SoftBodyVehicle vehicle,
+                                              List<PowertrainSpecs.DeviceSpec> extras) {
+        List<PowertrainSpecs.DeviceSpec> specs = new ArrayList<>(List.of(
                 new CombustionEngineSpec("combustionEngine", "mainEngine", "dummy", 1,
                         0.072, IDLE_RPM, 7500, 11.5, 0.024, 38, sunburstTorque(), List.of(), List.of()),
                 new FrictionClutchSpec("frictionClutch", "clutch", "mainEngine", 1,
@@ -89,6 +100,8 @@ class PowertrainSolveTest {
                 new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0, List.of(), List.of(), List.of()),
                 new ShaftSpec("shaft", "right", "diff", 2, 1, "FR", 0, 0, 0, List.of(), List.of(), List.of())
         ));
+        specs.addAll(extras);
+        vehicle.powertrain.addSpecs(specs);
         vehicle.powertrain.finalizeSetup();
     }
 
@@ -445,6 +458,38 @@ class PowertrainSolveTest {
                 "zero-pedal overrun has no realized combustion output");
         assertTrue(braked.powertrain.engines.engineAV[0] < unbraked.powertrain.engines.engineAV[0],
                 "load-dependent engineBrakeTorque must increase zero-pedal deceleration");
+    }
+
+    @Test
+    void turboShaftSpoolsAtPhysicsRateAndRaisesAvailableTorque() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        TurbochargerSpec turbo = new TurbochargerSpec("mainEngine",
+                List.of(new TurboPressurePoint(0, 0), new TurboPressurePoint(30_000, 5),
+                        new TurboPressurePoint(100_000, 20)),
+                List.of(new TurboEnginePoint(0, 0, 0), new TurboEnginePoint(2_000, 0.8, 0.8),
+                        new TurboEnginePoint(6_000, 1.0, 1.0)),
+                0.25, 0, Double.NaN, 500, 0.000002, 18.5, 50,
+                0.0001, 0.0015, 0, true, 0.05, 0.3);
+        addSunburstPowertrain(vehicle, List.of(turbo,
+                new TurbochargerPatchSpec("turbocharger",
+                        List.of(new ValueModifier("wastegateStart", '=', 19.0)))));
+        vehicle.powertrain.setControls(1.0f, 1.0f);
+        float heldRPM = 4_000.0f;
+        float naturallyAspiratedTorque = 221.0f;
+
+        for (int step = 0; step < 3_000; step++) {
+            vehicle.powertrain.engines.engineAV[0] = heldRPM * PowertrainSystem.RPM_TO_AV;
+            vehicle.powertrain.solve(DT);
+        }
+
+        assertTrue(vehicle.powertrain.debugTurboRPM() > 30_000.0f,
+                "exhaust drive must spin the turbo shaft at the 2000 Hz physics rate");
+        assertTrue(vehicle.powertrain.debugTurboBoostPSI() > 0.0f,
+                "spooled turbo must produce positive compressor pressure");
+        assertEquals(19.0f * 6894.7573f, vehicle.powertrain.turbochargers.wastegateStartPa[0], 1.0f,
+                "ECU turbocharger patch must override the selected turbo's wastegate target");
+        assertTrue(vehicle.powertrain.engines.availableCombustionTorque[0] > naturallyAspiratedTorque,
+                "positive boost must multiply the naturally aspirated torque curve");
     }
 
     @Test

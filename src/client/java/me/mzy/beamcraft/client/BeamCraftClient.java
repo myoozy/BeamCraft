@@ -128,6 +128,9 @@ public class BeamCraftClient implements ClientModInitializer {
 			float clutchEngagement = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugClutchEngagement();
 			float clutchTorque = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugClutchTorque();
 			float combustionTorque = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugCombustionTorque();
+			float turboRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugTurboRPM();
+			float turboBoostPSI = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugTurboBoostPSI();
+			boolean turboExisting = debugVehicle != null && debugVehicle.powertrain.debugTurboExisting();
 			int torqueCurvePoints = debugVehicle == null ? 0 : debugVehicle.powertrain.debugTorqueCurveCount();
 			boolean starterActive = debugVehicle != null && debugVehicle.powertrain.debugStarterActive();
 			boolean sparkEnabled = debugVehicle != null && debugVehicle.powertrain.debugSparkEnabled();
@@ -145,6 +148,9 @@ public class BeamCraftClient implements ClientModInitializer {
 							throttleInput * 100.0f, actualThrottle * 100.0f),
 					String.format("combustion: %.1f Nm | curve: %d | starter: %s", combustionTorque,
 							torqueCurvePoints, starterActive ? "on" : "off"),
+					turboExisting
+							? String.format("turbo: %.0f rpm | boost: %.1f psi", turboRPM, turboBoostPSI)
+							: "turbo: off",
 					String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
 							sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
 							limiterActive ? "cut" : "ready", limiterTime),

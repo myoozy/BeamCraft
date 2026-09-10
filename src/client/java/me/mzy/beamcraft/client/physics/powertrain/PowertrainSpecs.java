@@ -34,7 +34,7 @@ public final class PowertrainSpecs {
     public sealed interface DeviceSpec
             permits CombustionEngineSpec, ClutchlikeSpec, GearSelectableSpec,
                     ShaftSpec, SplitShaftSpec, TorsionReactorSpec, DifferentialSpec,
-                    DevicePatchSpec, UnsupportedConfig {
+                    DevicePatchSpec, TurbochargerSpec, TurbochargerPatchSpec, UnsupportedConfig {
         String type();
         String name();
         String inputName();
@@ -95,6 +95,94 @@ public final class PowertrainSpecs {
 
     /** 扭矩曲线上的一个采样点（rpm → 扭矩 N·m）。 */
     public record TorquePoint(double rpm, double torque) {}
+
+    /** Sparse turbo-shaft RPM to compressor pressure (PSI) sample. */
+    public record TurboPressurePoint(double turboRPM, double pressurePSI) {}
+
+    /** Engine RPM to compressor efficiency and exhaust-drive factor sample. */
+    public record TurboEnginePoint(double engineRPM, double efficiency, double exhaustFactor) {}
+
+    /**
+     * A turbocharger attached by name to a combustion engine. It is build-time metadata,
+     * not a node in the rotational powertrain tree.
+     */
+    public record TurbochargerSpec(
+            String type,
+            String name,
+            String inputName,
+            int inputIndex,
+            List<ValueModifier> valueModifiers,
+            String engineName,
+            List<TurboPressurePoint> pressureCurve,
+            List<TurboEnginePoint> engineCurve,
+            double inertia,
+            double wastegateStartPSI,
+            double wastegateLimitPSI,
+            double maxExhaustPower,
+            double backPressureCoef,
+            double frictionCoef,
+            double pressureRatePSI,
+            double wastegatePCoef,
+            double wastegateICoef,
+            double wastegateDCoef,
+            boolean bovEnabled,
+            double bovOpenThreshold,
+            double bovOpenChangeThreshold
+    ) implements DeviceSpec {
+        public TurbochargerSpec {
+            valueModifiers = List.copyOf(valueModifiers);
+            pressureCurve = List.copyOf(pressureCurve);
+            engineCurve = List.copyOf(engineCurve);
+        }
+
+        public TurbochargerSpec(String engineName, List<TurboPressurePoint> pressureCurve,
+                                List<TurboEnginePoint> engineCurve, double inertia,
+                                double wastegateStartPSI, double wastegateLimitPSI,
+                                double maxExhaustPower, double backPressureCoef,
+                                double frictionCoef, double pressureRatePSI,
+                                double wastegatePCoef, double wastegateICoef,
+                                double wastegateDCoef, boolean bovEnabled,
+                                double bovOpenThreshold, double bovOpenChangeThreshold) {
+            this("turbocharger", "turbocharger", null, 0, List.of(), engineName,
+                    pressureCurve, engineCurve, inertia, wastegateStartPSI, wastegateLimitPSI,
+                    maxExhaustPower, backPressureCoef, frictionCoef, pressureRatePSI,
+                    wastegatePCoef, wastegateICoef, wastegateDCoef, bovEnabled,
+                    bovOpenThreshold, bovOpenChangeThreshold);
+        }
+
+        public TurbochargerSpec(String turboName, String engineName,
+                                List<TurboPressurePoint> pressureCurve,
+                                List<TurboEnginePoint> engineCurve, double inertia,
+                                double wastegateStartPSI, double wastegateLimitPSI,
+                                double maxExhaustPower, double backPressureCoef,
+                                double frictionCoef, double pressureRatePSI,
+                                double wastegatePCoef, double wastegateICoef,
+                                double wastegateDCoef, boolean bovEnabled,
+                                double bovOpenThreshold, double bovOpenChangeThreshold) {
+            this("turbocharger", turboName, null, 0, List.of(), engineName,
+                    pressureCurve, engineCurve, inertia, wastegateStartPSI, wastegateLimitPSI,
+                    maxExhaustPower, backPressureCoef, frictionCoef, pressureRatePSI,
+                    wastegatePCoef, wastegateICoef, wastegateDCoef, bovEnabled,
+                    bovOpenThreshold, bovOpenChangeThreshold);
+        }
+    }
+
+    /** Cross-part numeric overrides for a named turbocharger configuration object. */
+    public record TurbochargerPatchSpec(
+            String type,
+            String name,
+            String inputName,
+            int inputIndex,
+            List<ValueModifier> valueModifiers
+    ) implements DeviceSpec {
+        public TurbochargerPatchSpec(String name, List<ValueModifier> valueModifiers) {
+            this("turbochargerPatch", name, null, 0, valueModifiers);
+        }
+
+        public TurbochargerPatchSpec {
+            valueModifiers = List.copyOf(valueModifiers);
+        }
+    }
 
     /**
      * 内燃机：{@code combustionEngine}。

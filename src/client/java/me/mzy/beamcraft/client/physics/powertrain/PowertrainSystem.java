@@ -43,6 +43,8 @@ import java.util.List;
 public final class PowertrainSystem {
     static final float RPM_TO_AV = (float) (Math.PI / 30.0);
     static final float AV_TO_RPM = 1.0f / RPM_TO_AV;
+    private static final float PSI_TO_PA = 6894.7573f;
+    private static final float TURBO_REFERENCE_DT = 0.01f;
 
     private final SoftBodyVehicle vehicle;
     private final List<DeviceSpec> pendingSpecs = new ArrayList<>();
@@ -51,6 +53,7 @@ public final class PowertrainSystem {
     private PowertrainData data = new PowertrainData();
     public final PowertrainTopologyContainer topology = data.topology;
     public final CombustionEngineContainer engines = data.engines;
+    public final TurbochargerContainer turbochargers = data.turbochargers;
     public final FrictionClutchContainer clutches = data.clutches;
     public final ClutchlikeContainer clutchlikes = data.clutchlikes;
     public final TorqueConverterContainer torqueConverters = data.torqueConverters;
@@ -80,6 +83,8 @@ public final class PowertrainSystem {
     private volatile float debugClutchEngagement;
     private volatile float debugClutchTorque;
     private volatile float debugCombustionTorque;
+    private volatile float debugTurboRPM;
+    private volatile float debugTurboBoostPSI;
     private volatile int debugTorqueCurveCount;
     private volatile boolean debugStarterActive;
     private volatile boolean debugSparkEnabled;
@@ -124,6 +129,8 @@ public final class PowertrainSystem {
         debugFuelEnabled = engines.unitCount > 0 && engines.fuelEnabled[0];
         debugLimiterActive = false;
         debugLimiterCutRemaining = 0.0f;
+        debugTurboRPM = 0.0f;
+        debugTurboBoostPSI = 0.0f;
         debugCurrentGearIndex = engines.unitCount > 0 ? gearboxes.currentGearIndex[0] : 0;
         debugCurrentGearName = engines.unitCount > 0 ? gearName(0, gearboxes.currentGearIndex[0]) : "?";
         debugActiveRatio = engines.unitCount > 0 ? gearboxes.activeRatio[0] : 0.0f;
@@ -231,7 +238,8 @@ public final class PowertrainSystem {
 
             boolean crankRunning = engines.engineAV[unit] >= engines.crankingAV[unit];
             boolean belowIdle = crankRunning && engines.engineAV[unit] < engines.idleAV[unit];
-            float idleOutput = idleControllerOutput(unit, crankRunning, belowIdle);
+            float forcedInductionCoef = updateTurbocharger(unit, throttle, rpm, crankRunning, dt);
+            float idleOutput = idleControllerOutput(unit, crankRunning, belowIdle, forcedInductionCoef);
             // Above idle, the player command is not held above a synthetic idle opening.
             // The idle controller only takes authority after the crank falls below target.
             float actualThrottle = belowIdle ? Math.max(throttle, idleOutput) : throttle;
@@ -240,7 +248,8 @@ public final class PowertrainSystem {
                     && engines.sparkEnabled[unit] && engines.fuelEnabled[unit];
             engines.playerThrottle[unit] = throttle;
             engines.actualThrottle[unit] = actualThrottle;
-            float availableCombustionTorque = Math.max(0.0f, interpolateTorque(unit, rpm));
+            float availableCombustionTorque = Math.max(0.0f,
+                    interpolateTorque(unit, rpm) * forcedInductionCoef);
             float combustionTorque = combustionEnabled
                     ? actualThrottle * availableCombustionTorque : 0.0f;
             float normalizedCombustionOutput = availableCombustionTorque > 1.0e-6f
@@ -432,6 +441,8 @@ public final class PowertrainSystem {
                         ? dctGearboxes.clutchTorque1[0] + dctGearboxes.clutchTorque2[0]
                         : clutches.clutchTorque[0];
                 debugCombustionTorque = combustionTorque;
+                debugTurboRPM = turbochargers.turboAV[0] * AV_TO_RPM;
+                debugTurboBoostPSI = turbochargers.pressurePa[0] / PSI_TO_PA;
                 debugTorqueCurveCount = engines.curveCount[0];
                 debugActualThrottle = actualThrottle;
                 debugStarterActive = starter;
@@ -490,14 +501,15 @@ public final class PowertrainSystem {
     }
 
     /** Below-idle rescue obtained by solving the current loss/load torque balance. */
-    private float idleControllerOutput(int unit, boolean running, boolean belowIdle) {
+    private float idleControllerOutput(int unit, boolean running, boolean belowIdle,
+                                       float forcedInductionCoef) {
         if (!running || !belowIdle) {
             engines.idleControlThrottle[unit] = 0.0f;
             return 0.0f;
         }
 
         float engineAV = Math.max(0.0f, engines.engineAV[unit]);
-        float torque = interpolateTorque(unit, engineAV * AV_TO_RPM);
+        float torque = interpolateTorque(unit, engineAV * AV_TO_RPM) * forcedInductionCoef;
         float loss = engines.engineFriction[unit]
                 + engines.engineDynamicFriction[unit] * engineAV;
         // The current converter reaction is available on the following physics substep.
@@ -516,6 +528,98 @@ public final class PowertrainSystem {
                 : 1.0f;
         engines.idleControlThrottle[unit] = requiredByLoad;
         return requiredByLoad;
+    }
+
+    /** Advances one BeamNG-compatible empirical turbo model at the physics substep rate. */
+    private float updateTurbocharger(int unit, float requestedThrottle, float engineRPM,
+                                     boolean running, float dt) {
+        if (!turbochargers.existing[unit]) return 1.0f;
+
+        float currentLoad = engines.normalizedCombustionOutput[unit];
+        boolean lowLoad = currentLoad < turbochargers.bovOpenThreshold[unit]
+                || requestedThrottle <= 1.0e-6f;
+        boolean suddenDrop = turbochargers.lastCombustionOutput[unit] - currentLoad
+                > turbochargers.bovOpenChangeThreshold[unit];
+        boolean bov = turbochargers.bovEnabled[unit] && (lowLoad || suddenDrop);
+        turbochargers.bovEngaged[unit] = bov;
+        turbochargers.lastCombustionOutput[unit] = currentLoad;
+
+        float targetBoost = 0.5f * (turbochargers.wastegateStartPa[unit]
+                + turbochargers.wastegateLimitPa[unit]);
+        float boostError = turbochargers.rawPressurePa[unit] - targetBoost;
+        float integral = Math.clamp(turbochargers.wastegateIntegral[unit] + boostError * dt,
+                -50.0f, 500.0f);
+        float derivative = dt > 1.0e-9f
+                ? (boostError - turbochargers.lastBoostError[unit]) / dt : 0.0f;
+        float wastegate = bov ? 0.0f : Math.clamp(1.0f
+                - boostError * turbochargers.wastegateP[unit]
+                - integral * turbochargers.wastegateI[unit]
+                - derivative * turbochargers.wastegateD[unit], 0.0f, 1.0f);
+        turbochargers.wastegateIntegral[unit] = integral;
+        turbochargers.lastBoostError[unit] = boostError;
+        turbochargers.wastegateFactor[unit] = wastegate;
+
+        float engineSpeedRatio = Math.clamp(engineRPM
+                / Math.max(1.0f, engines.revLimiterRPM[unit]), 0.0f, 1.0f);
+        float exhaustCurve = interpolateTurboEngineCurve(unit, engineRPM, false);
+        float exhaustDrive = (0.1f + currentLoad * 0.8f)
+                * requestedThrottle * requestedThrottle * engineSpeedRatio * exhaustCurve
+                * turbochargers.maxExhaustPower[unit];
+        float turboAV = turbochargers.turboAV[unit];
+        float bovBackPressure = bov ? 0.4f : 1.0f;
+        float compressorLoad = turboAV * turboAV * turbochargers.backPressureCoef[unit]
+                * bovBackPressure;
+        float axisTorque = ((exhaustDrive * wastegate) - compressorLoad
+                - turbochargers.frictionCoef[unit]) * TURBO_REFERENCE_DT;
+        turboAV = Math.clamp(turboAV + dt * axisTorque / turbochargers.inertia[unit],
+                0.0f, turbochargers.maxAV[unit]);
+        turbochargers.turboAV[unit] = turboAV;
+
+        float turboRPM = turboAV * AV_TO_RPM;
+        float rawPressure = running ? interpolateTurboPressure(unit, turboRPM) * PSI_TO_PA : 0.0f;
+        turbochargers.rawPressurePa[unit] = rawPressure;
+        float pressureTarget = bov ? 0.0f : rawPressure;
+        float pressure = turbochargers.pressurePa[unit];
+        float pressureRate = pressureTarget > pressure ? 200.0f * PSI_TO_PA
+                : turbochargers.pressureFallRatePa[unit];
+        float maxPressureStep = Math.max(0.0f, pressureRate) * dt;
+        pressure += Math.clamp(pressureTarget - pressure, -maxPressureStep, maxPressureStep);
+        turbochargers.pressurePa[unit] = pressure;
+
+        float efficiency = interpolateTurboEngineCurve(unit, engineRPM, true);
+        return Math.max(0.0f, 1.0f + 0.0000087f * pressure * efficiency);
+    }
+
+    private float interpolateTurboPressure(int unit, float rpm) {
+        int start = turbochargers.pressureStart[unit];
+        int count = turbochargers.pressureCount[unit];
+        if (count <= 0) return 0.0f;
+        if (rpm <= turbochargers.pressureRPM[start]) return turbochargers.pressurePSI[start];
+        int end = start + count - 1;
+        for (int i = start + 1; i <= end; i++) {
+            if (rpm > turbochargers.pressureRPM[i]) continue;
+            float x0 = turbochargers.pressureRPM[i - 1], x1 = turbochargers.pressureRPM[i];
+            float t = x1 > x0 ? (rpm - x0) / (x1 - x0) : 0.0f;
+            return Math.fma(t, turbochargers.pressurePSI[i] - turbochargers.pressurePSI[i - 1],
+                    turbochargers.pressurePSI[i - 1]);
+        }
+        return turbochargers.pressurePSI[end];
+    }
+
+    private float interpolateTurboEngineCurve(int unit, float rpm, boolean efficiencyCurve) {
+        int start = turbochargers.engineStart[unit];
+        int count = turbochargers.engineCount[unit];
+        if (count <= 0) return 0.0f;
+        float[] values = efficiencyCurve ? turbochargers.efficiency : turbochargers.exhaustFactor;
+        if (rpm <= turbochargers.engineRPM[start]) return values[start];
+        int end = start + count - 1;
+        for (int i = start + 1; i <= end; i++) {
+            if (rpm > turbochargers.engineRPM[i]) continue;
+            float x0 = turbochargers.engineRPM[i - 1], x1 = turbochargers.engineRPM[i];
+            float t = x1 > x0 ? (rpm - x0) / (x1 - x0) : 0.0f;
+            return Math.fma(t, values[i] - values[i - 1], values[i - 1]);
+        }
+        return values[end];
     }
 
     /**
@@ -777,6 +881,14 @@ public final class PowertrainSystem {
             engines.availableCombustionTorque[i] = 0.0f;
             engines.combustionTorque[i] = 0.0f;
             engines.normalizedCombustionOutput[i] = 0.0f;
+            turbochargers.turboAV[i] = 0.0f;
+            turbochargers.pressurePa[i] = 0.0f;
+            turbochargers.rawPressurePa[i] = 0.0f;
+            turbochargers.wastegateIntegral[i] = 0.0f;
+            turbochargers.lastBoostError[i] = 0.0f;
+            turbochargers.wastegateFactor[i] = 1.0f;
+            turbochargers.lastCombustionOutput[i] = 0.0f;
+            turbochargers.bovEngaged[i] = false;
             engines.limiterCutRemaining[i] = 0.0f;
             gearboxes.currentGearIndex[i] = gearboxes.initialGearIndex[i];
             gearboxes.pendingGearIndex[i] = -1;
@@ -821,6 +933,8 @@ public final class PowertrainSystem {
         debugClutchEngagement = 1.0f;
         debugClutchTorque = 0.0f;
         debugCombustionTorque = 0.0f;
+        debugTurboRPM = 0.0f;
+        debugTurboBoostPSI = 0.0f;
         debugTorqueCurveCount = engines.unitCount > 0 ? engines.curveCount[0] : 0;
         debugStarterActive = false;
         debugSparkEnabled = engines.unitCount > 0 && engines.sparkEnabled[0];
@@ -845,6 +959,8 @@ public final class PowertrainSystem {
         debugClutchEngagement = 0.0f;
         debugClutchTorque = 0.0f;
         debugCombustionTorque = 0.0f;
+        debugTurboRPM = 0.0f;
+        debugTurboBoostPSI = 0.0f;
         debugTorqueCurveCount = 0;
         debugStarterActive = false;
         debugSparkEnabled = false;
@@ -866,6 +982,9 @@ public final class PowertrainSystem {
 
     /** Combustion torque (actual throttle × interpolated torque curve) of unit 0. */
     public float debugCombustionTorque() { return debugCombustionTorque; }
+    public float debugTurboRPM() { return debugTurboRPM; }
+    public float debugTurboBoostPSI() { return debugTurboBoostPSI; }
+    public boolean debugTurboExisting() { return turbochargers.existing.length > 0 && turbochargers.existing[0]; }
 
     /** Number of torque-curve points compiled for unit 0 (0 when no unit is compiled). */
     public int debugTorqueCurveCount() { return debugTorqueCurveCount; }

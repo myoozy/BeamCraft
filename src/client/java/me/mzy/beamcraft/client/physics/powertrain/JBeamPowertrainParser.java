@@ -14,6 +14,10 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboEnginePoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurboPressurePoint;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
@@ -70,6 +74,8 @@ public final class JBeamPowertrainParser {
         List<DeviceSpec> out = new ArrayList<>();
         if (ptEl == null || !ptEl.isJsonArray()) {
             collectNamedDevicePatches(part, variables, List.of(), out);
+            collectTurbochargerAttachments(part, variables, out);
+            collectTurbochargerPatches(part, variables, out);
             return List.copyOf(out);
         }
         JsonObject blackboard = new JsonObject();
@@ -99,7 +105,88 @@ public final class JBeamPowertrainParser {
             }
         }
         collectNamedDevicePatches(part, variables, declaredNames, out);
+        collectTurbochargerAttachments(part, variables, out);
+        collectTurbochargerPatches(part, variables, out);
         return List.copyOf(out);
+    }
+
+    /** Resolves BeamNG's engine-name -> sibling turbocharger object attachment. */
+    private static void collectTurbochargerAttachments(JsonObject part, Map<String, Double> vars,
+                                                        List<DeviceSpec> out) {
+        for (Map.Entry<String, JsonElement> entry : part.entrySet()) {
+            if (!entry.getValue().isJsonObject()) continue;
+            JsonObject engineConfig = entry.getValue().getAsJsonObject();
+            JsonElement reference = engineConfig.get("turbocharger");
+            if (reference == null || !reference.isJsonPrimitive()) continue;
+            String turboName;
+            try {
+                turboName = reference.getAsString();
+            } catch (RuntimeException ignored) {
+                continue;
+            }
+            JsonElement turboElement = part.get(turboName);
+            if (turboElement == null || !turboElement.isJsonObject()) continue;
+            JsonObject turbo = turboElement.getAsJsonObject();
+            List<TurboPressurePoint> pressureCurve = turboPressureTable(turbo, "pressurePSI", vars);
+            List<TurboEnginePoint> engineCurve = turboEngineTable(turbo, "engineDef", vars);
+            if (pressureCurve.isEmpty() || engineCurve.isEmpty()) continue;
+            double wastegateStart = firstNumeric(turbo.get("wastegateStart"), 0.0, vars);
+            double wastegateLimit = firstNumeric(turbo.get("wastegateLimit"), Double.NaN, vars);
+            out.add(new TurbochargerSpec(turboName, entry.getKey(), pressureCurve, engineCurve,
+                    d(turbo, "inertia", 0.01, vars), wastegateStart, wastegateLimit,
+                    d(turbo, "maxExhaustPower", 1.0, vars),
+                    d(turbo, "backPressureCoef", 0.0005, vars),
+                    d(turbo, "frictionCoef", 0.01, vars),
+                    d(turbo, "pressureRatePSI", 30.0, vars),
+                    d(turbo, "wastegatePCoef", 0.0001, vars),
+                    d(turbo, "wastegateICoef", 0.0015, vars),
+                    d(turbo, "wastegateDCoef", 0.0, vars),
+                    b(turbo, "bovEnabled", true),
+                    d(turbo, "bovOpenThreshold", 0.05, vars),
+                    d(turbo, "bovOpenChangeThreshold", 0.3, vars)));
+        }
+    }
+
+    /** Captures ECU/tuning parts that patch the separately selected turbo configuration. */
+    private static void collectTurbochargerPatches(JsonObject part, Map<String, Double> vars,
+                                                    List<DeviceSpec> out) {
+        for (Map.Entry<String, JsonElement> entry : part.entrySet()) {
+            if (!entry.getKey().equalsIgnoreCase("turbocharger")) continue;
+            if (!entry.getValue().isJsonObject()) continue;
+            JsonObject cfg = entry.getValue().getAsJsonObject();
+            if (cfg.has("pressurePSI") || cfg.has("engineDef")) continue; // full attachment data
+            List<ValueModifier> modifiers = new ArrayList<>();
+            for (String key : List.of("inertia", "wastegateStart", "wastegateLimit",
+                    "maxExhaustPower", "backPressureCoef", "frictionCoef", "pressureRatePSI",
+                    "wastegatePCoef", "wastegateICoef", "wastegateDCoef",
+                    "bovOpenThreshold", "bovOpenChangeThreshold")) {
+                if (!cfg.has(key)) continue;
+                double value = firstNumeric(cfg.get(key), Double.NaN, vars);
+                if (!Double.isNaN(value)) modifiers.add(new ValueModifier(key, '=', value));
+            }
+            for (ValueModifier modifier : valueModifiers(cfg, vars)) {
+                if (modifier.targetKey().equals("inertia")
+                        || modifier.targetKey().equals("maxExhaustPower")
+                        || modifier.targetKey().equals("backPressureCoef")
+                        || modifier.targetKey().equals("frictionCoef")
+                        || modifier.targetKey().equals("pressureRatePSI")) {
+                    modifiers.add(modifier);
+                }
+            }
+            if (!modifiers.isEmpty()) out.add(new TurbochargerPatchSpec(entry.getKey(), modifiers));
+        }
+    }
+
+    private static double firstNumeric(JsonElement value, double def, Map<String, Double> vars) {
+        if (value == null) return def;
+        if (value.isJsonArray()) {
+            for (JsonElement element : value.getAsJsonArray()) {
+                double parsed = JBeamParser.getDoubleCell(element, Double.NaN, vars);
+                if (!Double.isNaN(parsed)) return parsed;
+            }
+            return def;
+        }
+        return JBeamParser.getDoubleCell(value, def, vars);
     }
 
     /** Captures cross-part named-device overrides such as a selectable final drive. */
@@ -462,6 +549,39 @@ public final class JBeamPowertrainParser {
             double torque = JBeamParser.getDoubleCell(row.get(1), Double.NaN, vars);
             if (Double.isNaN(rpm) || Double.isNaN(torque)) continue;
             out.add(new TorquePoint(rpm, torque));
+        }
+        return out;
+    }
+
+    private static List<TurboPressurePoint> turboPressureTable(JsonObject cfg, String key,
+                                                               Map<String, Double> vars) {
+        JsonElement el = cfg.get(key);
+        if (el == null || !el.isJsonArray()) return List.of();
+        List<TurboPressurePoint> out = new ArrayList<>();
+        for (JsonElement rowEl : el.getAsJsonArray()) {
+            if (!rowEl.isJsonArray() || rowEl.getAsJsonArray().size() < 2) continue;
+            JsonArray row = rowEl.getAsJsonArray();
+            double rpm = JBeamParser.getDoubleCell(row.get(0), Double.NaN, vars);
+            double psi = JBeamParser.getDoubleCell(row.get(1), Double.NaN, vars);
+            if (!Double.isNaN(rpm) && !Double.isNaN(psi)) out.add(new TurboPressurePoint(rpm, psi));
+        }
+        return out;
+    }
+
+    private static List<TurboEnginePoint> turboEngineTable(JsonObject cfg, String key,
+                                                           Map<String, Double> vars) {
+        JsonElement el = cfg.get(key);
+        if (el == null || !el.isJsonArray()) return List.of();
+        List<TurboEnginePoint> out = new ArrayList<>();
+        for (JsonElement rowEl : el.getAsJsonArray()) {
+            if (!rowEl.isJsonArray() || rowEl.getAsJsonArray().size() < 3) continue;
+            JsonArray row = rowEl.getAsJsonArray();
+            double rpm = JBeamParser.getDoubleCell(row.get(0), Double.NaN, vars);
+            double efficiency = JBeamParser.getDoubleCell(row.get(1), Double.NaN, vars);
+            double exhaust = JBeamParser.getDoubleCell(row.get(2), Double.NaN, vars);
+            if (!Double.isNaN(rpm) && !Double.isNaN(efficiency) && !Double.isNaN(exhaust)) {
+                out.add(new TurboEnginePoint(rpm, efficiency, exhaust));
+            }
         }
         return out;
     }

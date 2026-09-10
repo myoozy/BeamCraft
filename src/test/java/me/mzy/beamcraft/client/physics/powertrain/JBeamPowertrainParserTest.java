@@ -17,6 +17,8 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ValueModifier;
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,44 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 以及 shaft/differential/engine/clutch 的字段解析。
  */
 class JBeamPowertrainParserTest {
+
+    @Test
+    void parsesNamedTurbochargerAttachmentAndCurves() {
+        JsonObject part = JsonParser.parseString("""
+                {
+                  "mainEngine":{"turbocharger":"turbocharger"},
+                  "turbocharger":{
+                    "inertia":0.25,
+                    "wastegateStart":8,
+                    "wastegateLimit":10,
+                    "maxExhaustPower":500,
+                    "backPressureCoef":0.000002,
+                    "frictionCoef":18.5,
+                    "pressurePSI":[[0,-2.5],[30000,5],[100000,20]],
+                    "engineDef":[[0,0,0],[3000,0.93,0.95],[6000,0.96,1]]
+                  }
+                }
+                """).getAsJsonObject();
+
+        List<DeviceSpec> specs = JBeamPowertrainParser.parsePart(part, Map.of());
+        TurbochargerSpec turbo = specs.stream().filter(TurbochargerSpec.class::isInstance)
+                .map(TurbochargerSpec.class::cast).findFirst().orElseThrow();
+
+        assertEquals("mainEngine", turbo.engineName());
+        assertEquals(3, turbo.pressureCurve().size());
+        assertEquals(3, turbo.engineCurve().size());
+        assertEquals(0.25, turbo.inertia(), 1e-6);
+        assertEquals(10.0, turbo.wastegateLimitPSI(), 1e-6);
+
+        JsonObject ecu = JsonParser.parseString("""
+                {"turbocharger":{"wastegateStart":[19.0]}}
+                """).getAsJsonObject();
+        TurbochargerPatchSpec patch = JBeamPowertrainParser.parsePart(ecu, Map.of()).stream()
+                .filter(TurbochargerPatchSpec.class::isInstance)
+                .map(TurbochargerPatchSpec.class::cast).findFirst().orElseThrow();
+        assertEquals("turbocharger", patch.name());
+        assertEquals(19.0, patch.valueModifiers().getFirst().value(), 1e-6);
+    }
 
     private static JsonObject part(String json) {
         return JsonParser.parseString(json).getAsJsonObject();

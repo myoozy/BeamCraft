@@ -16,6 +16,8 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorqueConverterSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TurbochargerPatchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.UnsupportedConfig;
 
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_CLUTCH;
@@ -60,7 +62,30 @@ final class PowertrainCompiler {
             return;
         }
 
-        List<DeviceSpec> specs = PowertrainSpecNormalizer.normalize(rawSpecs);
+        Map<String, TurbochargerSpec> turboByEngine = new HashMap<>();
+        Map<String, List<TurbochargerPatchSpec>> pendingTurboPatches = new HashMap<>();
+        List<DeviceSpec> deviceSpecs = new ArrayList<>();
+        for (DeviceSpec spec : rawSpecs) {
+            if (spec instanceof TurbochargerSpec turbo) {
+                List<TurbochargerPatchSpec> pending = pendingTurboPatches.remove(turbo.name());
+                if (pending != null) {
+                    for (TurbochargerPatchSpec patch : pending) turbo = applyTurboPatch(turbo, patch);
+                }
+                turboByEngine.put(turbo.engineName(), turbo); // later active parts win
+            } else if (spec instanceof TurbochargerPatchSpec patch) {
+                boolean applied = false;
+                for (Map.Entry<String, TurbochargerSpec> entry : turboByEngine.entrySet()) {
+                    if (!entry.getValue().name().equals(patch.name())) continue;
+                    entry.setValue(applyTurboPatch(entry.getValue(), patch));
+                    applied = true;
+                }
+                if (!applied) pendingTurboPatches.computeIfAbsent(patch.name(), ignored -> new ArrayList<>())
+                        .add(patch);
+            } else {
+                deviceSpecs.add(spec);
+            }
+        }
+        List<DeviceSpec> specs = PowertrainSpecNormalizer.normalize(deviceSpecs);
         PowertrainTopologyContainer topology = data.topology;
         int deviceCount = specs.size();
         topology.allocateDevices(deviceCount);
@@ -145,14 +170,17 @@ final class PowertrainCompiler {
                         topology.deviceName[engine]);
                 continue;
             }
-            UnitBuild unit = buildUnit(vehicle, specs, topology, engine, clutchlike);
+            UnitBuild unit = buildUnit(vehicle, specs, topology, engine, clutchlike,
+                    turboByEngine.get(topology.deviceName[engine]));
             if (!unit.paths.isEmpty()) units.add(unit);
         }
         compileUnits(vehicle, data, units);
         if (data.engines.unitCount > 0) {
+            int turboCount = 0;
+            for (boolean existing : data.turbochargers.existing) if (existing) turboCount++;
             data.diagnostic = detachedDevices == 0 ? "ready" : "ready; " + detachedDevices + " detached device(s)";
-            LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutchlike unit(s), {} driven wheel path(s)",
-                    deviceCount, data.engines.unitCount, data.wheelPaths.pathWheel.length);
+            LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutchlike unit(s), {} turbocharger(s), {} driven wheel path(s)",
+                    deviceCount, data.engines.unitCount, turboCount, data.wheelPaths.pathWheel.length);
         } else {
             data.diagnostic = "no supported engine-to-wheel path";
         }
@@ -213,7 +241,8 @@ final class PowertrainCompiler {
     // ---------------------------------------------------------------- unit compilation
 
     private static UnitBuild buildUnit(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
-                                       PowertrainTopologyContainer topology, int engine, int clutchlike) {
+                                       PowertrainTopologyContainer topology, int engine, int clutchlike,
+                                       TurbochargerSpec turbocharger) {
         CombustionEngineSpec engineSpec = (CombustionEngineSpec) specs.get(engine);
         ClutchlikeSpec clutchlikeSpec = (ClutchlikeSpec) specs.get(clutchlike);
         FrictionClutchSpec clutchSpec = clutchlikeSpec instanceof FrictionClutchSpec c ? c : null;
@@ -274,7 +303,7 @@ final class PowertrainCompiler {
         return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec, dctSpec,
                 capacity, spring, maxTorque, paths, reactions, reactors,
                 gearboxDevice, gearbox, rangeBoxDevice, rangeBox,
-                splitShafts);
+                splitShafts, turbocharger);
     }
 
     /**
@@ -407,11 +436,12 @@ final class PowertrainCompiler {
         TorqueConverterContainer torqueConverters = data.torqueConverters;
         DctGearboxContainer dctGearboxes = data.dctGearboxes;
         SplitShaftContainer splitShafts = data.splitShafts;
+        TurbochargerContainer turbochargers = data.turbochargers;
         PowertrainTopologyContainer topology = data.topology;
 
         int n = units.size();
         int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, gearSlots = 0;
-        int splitCount = 0, splitPathCount = 0;
+        int splitCount = 0, splitPathCount = 0, turboPressurePoints = 0, turboEnginePoints = 0;
         for (UnitBuild unit : units) {
             curves += unit.engine.torqueCurve().size();
             paths += unit.paths.size();
@@ -423,8 +453,13 @@ final class PowertrainCompiler {
             for (SplitBuild split : unit.splitShafts) {
                 splitPathCount += split.primaryPaths.size() + split.secondaryPaths.size();
             }
+            if (unit.turbocharger != null) {
+                turboPressurePoints += unit.turbocharger.pressureCurve().size();
+                turboEnginePoints += unit.turbocharger.engineCurve().size();
+            }
         }
         engines.allocate(n, curves);
+        turbochargers.allocate(n, turboPressurePoints, turboEnginePoints);
         clutches.allocate(n);
         clutchlikes.allocate(n);
         torqueConverters.allocate(n);
@@ -436,7 +471,7 @@ final class PowertrainCompiler {
         splitShafts.allocate(n, splitCount, splitPathCount);
 
         int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, gearCursor = 0;
-        int splitCursor = 0, splitPathCursor = 0;
+        int splitCursor = 0, splitPathCursor = 0, turboPressureCursor = 0, turboEngineCursor = 0;
         for (int i = 0; i < n; i++) {
             UnitBuild unit = units.get(i);
             CombustionEngineSpec engine = unit.engine;
@@ -469,6 +504,48 @@ final class PowertrainCompiler {
             engines.sparkEnabled[i] = true; engines.fuelEnabled[i] = true;
             engines.starterActive[i] = false;
             engines.limiterCutRemaining[i] = 0.0f;
+            TurbochargerSpec turbo = unit.turbocharger;
+            turbochargers.wastegateFactor[i] = 1.0f;
+            if (turbo != null) {
+                turbochargers.existing[i] = true;
+                // BeamNG calibrates its axis inertia as 0.000003 * (inertia * 100) * 2.5.
+                turbochargers.inertia[i] = Math.max(1.0e-9f, (float) turbo.inertia() * 0.00075f);
+                turbochargers.wastegateStartPa[i] = (float) turbo.wastegateStartPSI() * 6894.7573f;
+                double wastegateLimit = Double.isFinite(turbo.wastegateLimitPSI())
+                        ? turbo.wastegateLimitPSI() : turbo.wastegateStartPSI() + 0.01;
+                turbochargers.wastegateLimitPa[i] = (float) wastegateLimit * 6894.7573f;
+                turbochargers.maxExhaustPower[i] = Math.max(0.0f, (float) turbo.maxExhaustPower());
+                turbochargers.backPressureCoef[i] = Math.max(0.0f, (float) turbo.backPressureCoef());
+                turbochargers.frictionCoef[i] = Math.max(0.0f, (float) turbo.frictionCoef());
+                turbochargers.pressureFallRatePa[i] = Math.max(0.0f,
+                        (float) turbo.pressureRatePSI() * 6894.7573f);
+                turbochargers.wastegateP[i] = Math.max(0.0f, (float) turbo.wastegatePCoef());
+                turbochargers.wastegateI[i] = Math.max(0.0f, (float) turbo.wastegateICoef());
+                turbochargers.wastegateD[i] = Math.max(0.0f, (float) turbo.wastegateDCoef());
+                turbochargers.bovEnabled[i] = turbo.bovEnabled();
+                turbochargers.bovOpenThreshold[i] = Math.max(0.0f, (float) turbo.bovOpenThreshold());
+                turbochargers.bovOpenChangeThreshold[i] = Math.max(0.0f,
+                        (float) turbo.bovOpenChangeThreshold());
+                turbochargers.pressureStart[i] = turboPressureCursor;
+                turbochargers.pressureCount[i] = (short) turbo.pressureCurve().size();
+                float maxTurboRPM = 0.0f;
+                for (var point : turbo.pressureCurve()) {
+                    turbochargers.pressureRPM[turboPressureCursor] = (float) point.turboRPM();
+                    turbochargers.pressurePSI[turboPressureCursor] = (float) point.pressurePSI();
+                    maxTurboRPM = Math.max(maxTurboRPM, (float) point.turboRPM());
+                    turboPressureCursor++;
+                }
+                turbochargers.maxAV[i] = Math.max(1.0f, maxTurboRPM * PowertrainSystem.RPM_TO_AV);
+                turbochargers.engineStart[i] = turboEngineCursor;
+                turbochargers.engineCount[i] = (short) turbo.engineCurve().size();
+                for (var point : turbo.engineCurve()) {
+                    turbochargers.engineRPM[turboEngineCursor] = (float) point.engineRPM();
+                    turbochargers.efficiency[turboEngineCursor] = Math.clamp((float) point.efficiency(), 0.0f, 1.0f);
+                    turbochargers.exhaustFactor[turboEngineCursor] = Math.max(0.0f,
+                            (float) point.exhaustFactor());
+                    turboEngineCursor++;
+                }
+            }
             clutchlikes.device[i] = unit.clutchlikeDevice;
             if (unit.clutch != null) {
                 clutchlikes.type[i] = ClutchlikeContainer.TYPE_FRICTION_CLUTCH;
@@ -756,6 +833,8 @@ final class PowertrainCompiler {
             case TorsionReactorSpec ignored -> PowertrainTopologyContainer.TYPE_TORSION_REACTOR;
             case SplitShaftSpec ignored -> PowertrainTopologyContainer.TYPE_SPLIT_SHAFT;
             case DevicePatchSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
+            case TurbochargerSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
+            case TurbochargerPatchSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
             case UnsupportedConfig ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
         };
     }
@@ -780,6 +859,46 @@ final class PowertrainCompiler {
         };
     }
 
+    private static TurbochargerSpec applyTurboPatch(TurbochargerSpec turbo, TurbochargerPatchSpec patch) {
+        double inertia = turbo.inertia(), start = turbo.wastegateStartPSI(), limit = turbo.wastegateLimitPSI();
+        double exhaust = turbo.maxExhaustPower(), backPressure = turbo.backPressureCoef();
+        double friction = turbo.frictionCoef(), pressureRate = turbo.pressureRatePSI();
+        double p = turbo.wastegatePCoef(), i = turbo.wastegateICoef(), d = turbo.wastegateDCoef();
+        double bovOpen = turbo.bovOpenThreshold(), bovDrop = turbo.bovOpenChangeThreshold();
+        for (var modifier : patch.valueModifiers()) {
+            switch (modifier.targetKey()) {
+                case "inertia" -> inertia = modifyTurbo(inertia, modifier);
+                case "wastegateStart" -> start = modifyTurbo(start, modifier);
+                case "wastegateLimit" -> limit = modifyTurbo(limit, modifier);
+                case "maxExhaustPower" -> exhaust = modifyTurbo(exhaust, modifier);
+                case "backPressureCoef" -> backPressure = modifyTurbo(backPressure, modifier);
+                case "frictionCoef" -> friction = modifyTurbo(friction, modifier);
+                case "pressureRatePSI" -> pressureRate = modifyTurbo(pressureRate, modifier);
+                case "wastegatePCoef" -> p = modifyTurbo(p, modifier);
+                case "wastegateICoef" -> i = modifyTurbo(i, modifier);
+                case "wastegateDCoef" -> d = modifyTurbo(d, modifier);
+                case "bovOpenThreshold" -> bovOpen = modifyTurbo(bovOpen, modifier);
+                case "bovOpenChangeThreshold" -> bovDrop = modifyTurbo(bovDrop, modifier);
+                default -> { }
+            }
+        }
+        return new TurbochargerSpec(turbo.type(), turbo.name(), turbo.inputName(), turbo.inputIndex(),
+                List.of(), turbo.engineName(), turbo.pressureCurve(), turbo.engineCurve(), inertia,
+                start, limit, exhaust, backPressure, friction, pressureRate, p, i, d,
+                turbo.bovEnabled(), bovOpen, bovDrop);
+    }
+
+    private static double modifyTurbo(double base, PowertrainSpecs.ValueModifier modifier) {
+        return switch (modifier.operation()) {
+            case '=' -> modifier.value();
+            case '+' -> base + modifier.value();
+            case '-' -> base - modifier.value();
+            case '*' -> base * modifier.value();
+            case '/' -> modifier.value() == 0.0 ? base : base / modifier.value();
+            default -> base;
+        };
+    }
+
     // ---------------------------------------------------------------- build records
 
     private record PathBuild(int wheel, float gain, byte flags) {
@@ -798,6 +917,6 @@ final class PowertrainCompiler {
                              List<PathBuild> paths, List<Integer> reactions, List<ReactorBuild> reactors,
                              int gearboxDevice, GearSelectableSpec gearbox,
                              int rangeBoxDevice, GearboxSpec rangeBox,
-                             List<SplitBuild> splitShafts) {
+                             List<SplitBuild> splitShafts, TurbochargerSpec turbocharger) {
     }
 }

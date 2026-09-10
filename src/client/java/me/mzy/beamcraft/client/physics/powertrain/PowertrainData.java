@@ -14,6 +14,9 @@ public final class PowertrainData {
     /** Combustion engines (one row per compiled engine→clutch unit). */
     public final CombustionEngineContainer engines = new CombustionEngineContainer();
 
+    /** Turbochargers attached to combustion engines, using the same unit ordering. */
+    public final TurbochargerContainer turbochargers = new TurbochargerContainer();
+
     /** Friction clutches (same unit ordering as {@link #engines}). */
     public final FrictionClutchContainer clutches = new FrictionClutchContainer();
 
@@ -57,6 +60,7 @@ public final class PowertrainData {
     public void clear() {
         topology.clear();
         engines.clear();
+        turbochargers.clear();
         clutches.clear();
         clutchlikes.clear();
         torqueConverters.clear();
