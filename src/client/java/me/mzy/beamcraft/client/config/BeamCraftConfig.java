@@ -34,21 +34,91 @@ public final class BeamCraftConfig {
     }
 
     /**
-     * Physical input translation keys consumed by the client input handler.
-     * Empty strings intentionally mean "use BeamCraft's current built-in default".
+     * Optional physical input overrides consumed by the client input handler. Missing or
+     * empty values use runtime defaults and are deliberately not written into the config.
+     * Pedal actions may define linear keyboard ramp times in seconds.
      */
     public static final class Input {
-        public String exitVehicle = "";
-        public String steerLeft = "";
-        public String steerRight = "";
-        public String throttle = "";
-        public String brake = "";
-        public String clutch = "";
-        public String starter = "";
-        public String shiftUp = "";
-        public String shiftDown = "";
-        public String rangeBoxToggle = "";
-        public String resetVehicle = "";
+        public KeyBinding exitVehicle;
+        public DirectionalBinding steering;
+        public AxisBinding throttle;
+        public AxisBinding brake;
+        public AxisBinding clutch;
+        public KeyBinding starter;
+        public KeyBinding shiftUp;
+        public KeyBinding shiftDown;
+        public KeyBinding rangeBoxToggle;
+        public KeyBinding resetVehicle;
+
+        /** Runtime defaults; these are deliberately not serialized into a new config file. */
+        public static Input defaults() {
+            Input defaults = new Input();
+            defaults.exitVehicle = new KeyBinding("key.keyboard.left.shift");
+            defaults.steering = new DirectionalBinding(
+                    new AxisKey("key.keyboard.left", -1.0),
+                    new AxisKey("key.keyboard.right", 1.0));
+            defaults.throttle = new AxisBinding(0.15, 0.25,
+                    new AxisKey("key.keyboard.up", 1.0));
+            defaults.brake = new AxisBinding(0.05, 0.15,
+                    new AxisKey("key.keyboard.down", 1.0));
+            defaults.clutch = new AxisBinding(0.10, 0.10,
+                    new AxisKey("key.keyboard.c", 1.0));
+            defaults.starter = new KeyBinding("key.keyboard.v");
+            defaults.shiftUp = new KeyBinding("key.keyboard.x");
+            defaults.shiftDown = new KeyBinding("key.keyboard.z");
+            defaults.rangeBoxToggle = new KeyBinding("key.keyboard.b");
+            defaults.resetVehicle = new KeyBinding("key.keyboard.g");
+            return defaults;
+        }
+    }
+
+    public static class KeyBinding {
+        public List<String> keys;
+
+        public KeyBinding() {
+        }
+
+        public KeyBinding(String... keys) {
+            this.keys = new ArrayList<>(List.of(keys));
+        }
+    }
+
+    public static class DirectionalBinding {
+        public List<AxisKey> keys;
+
+        public DirectionalBinding() {
+        }
+
+        public DirectionalBinding(AxisKey... keys) {
+            this.keys = new ArrayList<>(List.of(keys));
+        }
+    }
+
+    public static final class AxisBinding extends DirectionalBinding {
+        public Double riseTime;
+        public Double fallTime;
+
+        public AxisBinding() {
+        }
+
+        public AxisBinding(double riseTime, double fallTime, AxisKey... keys) {
+            super(keys);
+            this.riseTime = riseTime;
+            this.fallTime = fallTime;
+        }
+    }
+
+    public static final class AxisKey {
+        public String key = "";
+        public double value = 0.0;
+
+        public AxisKey() {
+        }
+
+        public AxisKey(String key, double value) {
+            this.key = key;
+            this.value = value;
+        }
     }
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -76,7 +146,8 @@ public final class BeamCraftConfig {
                 json = parsed.getAsJsonObject();
             }
 
-            boolean changed = mergeMissing(json, GSON.toJsonTree(new BeamCraftConfig()).getAsJsonObject());
+            boolean changed = resetInvalidInputSection(json);
+            changed |= mergeMissing(json, GSON.toJsonTree(new BeamCraftConfig()).getAsJsonObject());
             if (Files.notExists(file) || changed) {
                 Files.writeString(file, GSON.toJson(json), StandardCharsets.UTF_8);
             }
@@ -115,6 +186,23 @@ public final class BeamCraftConfig {
             }
         }
         return changed;
+    }
+
+    /** Keeps unrelated settings usable when the input section has an invalid schema. */
+    private static boolean resetInvalidInputSection(JsonObject root) {
+        JsonElement input = root.get("input");
+        if (input == null || input.isJsonNull()) {
+            return false;
+        }
+        try {
+            GSON.fromJson(input, Input.class);
+            return false;
+        } catch (RuntimeException exception) {
+            System.err.println("[BeamCraft] Invalid input config; resetting only the input section: "
+                    + exception.getMessage());
+            root.add("input", GSON.toJsonTree(new Input()));
+            return true;
+        }
     }
 
     public List<File> resolveAssetRoots(File gameDir) {

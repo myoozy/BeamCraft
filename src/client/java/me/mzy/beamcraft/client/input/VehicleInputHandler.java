@@ -16,32 +16,27 @@ import net.minecraft.entity.Entity;
 import net.minecraft.util.hit.EntityHitResult;
 import org.lwjgl.glfw.GLFW;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Polls configured vehicle controls and owns their edge-triggered state. */
 public final class VehicleInputHandler {
-    private static final String DEFAULT_EXIT_VEHICLE = "key.keyboard.left.shift";
-    private static final String DEFAULT_STEER_LEFT = "key.keyboard.left";
-    private static final String DEFAULT_STEER_RIGHT = "key.keyboard.right";
-    private static final String DEFAULT_THROTTLE = "key.keyboard.up";
-    private static final String DEFAULT_BRAKE = "key.keyboard.down";
-    private static final String DEFAULT_CLUTCH = "key.keyboard.c";
-    private static final String DEFAULT_STARTER = "key.keyboard.v";
-    private static final String DEFAULT_SHIFT_UP = "key.keyboard.x";
-    private static final String DEFAULT_SHIFT_DOWN = "key.keyboard.z";
-    private static final String DEFAULT_RANGE_BOX_TOGGLE = "key.keyboard.b";
-    private static final String DEFAULT_RESET_VEHICLE = "key.keyboard.g";
     private static final double MAX_ENTER_DISTANCE_SQUARED = 36.0;
 
-    private final InputUtil.Key exitVehicle;
-    private final InputUtil.Key steerLeft;
-    private final InputUtil.Key steerRight;
-    private final InputUtil.Key throttle;
-    private final InputUtil.Key brake;
-    private final InputUtil.Key clutch;
-    private final InputUtil.Key starter;
-    private final InputUtil.Key shiftUp;
-    private final InputUtil.Key shiftDown;
-    private final InputUtil.Key rangeBoxToggle;
-    private final InputUtil.Key resetVehicle;
+    private final List<InputUtil.Key> exitVehicle;
+    private final List<AxisKey> steering;
+    private final List<AxisKey> throttle;
+    private final List<AxisKey> brake;
+    private final List<AxisKey> clutch;
+    private final List<InputUtil.Key> starter;
+    private final List<InputUtil.Key> shiftUp;
+    private final List<InputUtil.Key> shiftDown;
+    private final List<InputUtil.Key> rangeBoxToggle;
+    private final List<InputUtil.Key> resetVehicle;
+
+    private final LinearRamp throttleRamp;
+    private final LinearRamp brakeRamp;
+    private final LinearRamp clutchRamp;
 
     private boolean shiftUpWasPressed;
     private boolean shiftDownWasPressed;
@@ -51,21 +46,25 @@ public final class VehicleInputHandler {
     private SoftBodyVehicle controlledVehicle;
 
     public VehicleInputHandler(BeamCraftConfig.Input input) {
+        BeamCraftConfig.Input defaults = BeamCraftConfig.Input.defaults();
         BeamCraftConfig.Input configured = input == null ? new BeamCraftConfig.Input() : input;
-        exitVehicle = resolve(configured.exitVehicle, DEFAULT_EXIT_VEHICLE, "exitVehicle");
-        steerLeft = resolve(configured.steerLeft, DEFAULT_STEER_LEFT, "steerLeft");
-        steerRight = resolve(configured.steerRight, DEFAULT_STEER_RIGHT, "steerRight");
-        throttle = resolve(configured.throttle, DEFAULT_THROTTLE, "throttle");
-        brake = resolve(configured.brake, DEFAULT_BRAKE, "brake");
-        clutch = resolve(configured.clutch, DEFAULT_CLUTCH, "clutch");
-        starter = resolve(configured.starter, DEFAULT_STARTER, "starter");
-        shiftUp = resolve(configured.shiftUp, DEFAULT_SHIFT_UP, "shiftUp");
-        shiftDown = resolve(configured.shiftDown, DEFAULT_SHIFT_DOWN, "shiftDown");
-        rangeBoxToggle = resolve(configured.rangeBoxToggle, DEFAULT_RANGE_BOX_TOGGLE, "rangeBoxToggle");
-        resetVehicle = resolve(configured.resetVehicle, DEFAULT_RESET_VEHICLE, "resetVehicle");
+        exitVehicle = resolve(configured.exitVehicle, defaults.exitVehicle, "exitVehicle");
+        steering = resolve(configured.steering, defaults.steering, "steering");
+        throttle = resolve(configured.throttle, defaults.throttle, "throttle");
+        brake = resolve(configured.brake, defaults.brake, "brake");
+        clutch = resolve(configured.clutch, defaults.clutch, "clutch");
+        starter = resolve(configured.starter, defaults.starter, "starter");
+        shiftUp = resolve(configured.shiftUp, defaults.shiftUp, "shiftUp");
+        shiftDown = resolve(configured.shiftDown, defaults.shiftDown, "shiftDown");
+        rangeBoxToggle = resolve(configured.rangeBoxToggle, defaults.rangeBoxToggle, "rangeBoxToggle");
+        resetVehicle = resolve(configured.resetVehicle, defaults.resetVehicle, "resetVehicle");
+
+        throttleRamp = ramp(configured.throttle, defaults.throttle);
+        brakeRamp = ramp(configured.brake, defaults.brake);
+        clutchRamp = ramp(configured.clutch, defaults.clutch);
     }
 
-    public void tick(MinecraftClient client) {
+    public void tick(MinecraftClient client, float deltaTime) {
         long window = client.getWindow().getHandle();
         boolean gameplayInput = client.currentScreen == null;
         boolean exitPressed = gameplayInput && pressed(window, exitVehicle);
@@ -77,6 +76,7 @@ public final class VehicleInputHandler {
         SoftBodyVehicle nextControlled = findControlledVehicle(client);
         if (controlledVehicle != nextControlled) {
             releaseContinuousInputs(controlledVehicle);
+            resetContinuousState();
             controlledVehicle = nextControlled;
         }
 
@@ -89,12 +89,17 @@ public final class VehicleInputHandler {
             requestExitControlledVehicle(client);
         }
 
+        if (!gameplayInput) {
+            resetContinuousState();
+        }
+        // Steering hydros already apply their JBeam rates at the physics substep frequency.
+        // A second 20 Hz ramp here would turn their target into visible staircase motion.
         float steeringValue = gameplayInput
-                ? steeringValue(pressed(window, steerLeft), pressed(window, steerRight))
+                ? axisValue(window, steering)
                 : 0.0f;
-        float throttleValue = gameplayInput && pressed(window, throttle) ? 1.0f : 0.0f;
-        float brakeValue = gameplayInput && pressed(window, brake) ? 1.0f : 0.0f;
-        float clutchValue = gameplayInput && pressed(window, clutch) ? 1.0f : 0.0f;
+        float throttleValue = gameplayInput ? throttleRamp.update(axisValue(window, throttle), deltaTime) : 0.0f;
+        float brakeValue = gameplayInput ? brakeRamp.update(axisValue(window, brake), deltaTime) : 0.0f;
+        float clutchValue = gameplayInput ? clutchRamp.update(axisValue(window, clutch), deltaTime) : 0.0f;
         boolean starterPressed = gameplayInput && pressed(window, starter);
 
         if (resetPressed && !resetWasPressed) {
@@ -160,11 +165,33 @@ public final class VehicleInputHandler {
         vehicle.nodes.rotateNodes(client.player.getYaw(), 0, 0);
     }
 
+    private static boolean pressed(long window, List<InputUtil.Key> keys) {
+        for (InputUtil.Key key : keys) {
+            if (pressed(window, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean pressed(long window, InputUtil.Key key) {
         if (key.getCategory() == InputUtil.Type.MOUSE) {
             return GLFW.glfwGetMouseButton(window, key.getCode()) == GLFW.GLFW_PRESS;
         }
         return InputUtil.isKeyPressed(window, key.getCode());
+    }
+
+    private static float axisValue(long window, List<AxisKey> keys) {
+        float positive = 0.0f;
+        float negative = 0.0f;
+        for (AxisKey key : keys) {
+            if (!pressed(window, key.key())) {
+                continue;
+            }
+            positive = Math.max(positive, key.value());
+            negative = Math.min(negative, key.value());
+        }
+        return Math.max(-1.0f, Math.min(1.0f, positive + negative));
     }
 
     private static void releaseContinuousInputs(SoftBodyVehicle vehicle) {
@@ -177,6 +204,12 @@ public final class VehicleInputHandler {
         electrics.set(ElectricSignals.BRAKE_INPUT, 0.0);
         electrics.set(ElectricSignals.CLUTCH_INPUT, 0.0);
         electrics.set(ElectricSignals.STARTER_INPUT, 0.0);
+    }
+
+    private void resetContinuousState() {
+        throttleRamp.reset();
+        brakeRamp.reset();
+        clutchRamp.reset();
     }
 
     private void updateEdgeState(boolean exitPressed, boolean resetPressed,
@@ -233,14 +266,67 @@ public final class VehicleInputHandler {
         electrics.set(signal, electrics.get(signal) + 1.0);
     }
 
-    private static InputUtil.Key resolve(String configured, String fallback, String action) {
-        String translationKey = configured == null || configured.isBlank() ? fallback : configured.trim();
-        try {
-            return InputUtil.fromTranslationKey(translationKey);
-        } catch (IllegalArgumentException exception) {
-            BeamCraft.LOGGER.warn("Invalid BeamCraft input key '{}' for {}; using '{}'",
-                    translationKey, action, fallback);
-            return InputUtil.fromTranslationKey(fallback);
+    private static List<InputUtil.Key> resolve(BeamCraftConfig.KeyBinding configured,
+                                                BeamCraftConfig.KeyBinding fallback,
+                                                String action) {
+        List<String> configuredKeys = configured == null ? null : configured.keys;
+        List<String> translationKeys = configuredKeys == null || configuredKeys.isEmpty()
+                ? fallback.keys : configuredKeys;
+        List<InputUtil.Key> resolved = new ArrayList<>(translationKeys.size());
+        for (String translationKey : translationKeys) {
+            if (translationKey == null || translationKey.isBlank()) {
+                continue;
+            }
+            try {
+                resolved.add(InputUtil.fromTranslationKey(translationKey.trim()));
+            } catch (IllegalArgumentException exception) {
+                BeamCraft.LOGGER.warn("Invalid BeamCraft input key '{}' for {}; ignoring it",
+                        translationKey, action);
+            }
         }
+        if (!resolved.isEmpty() || translationKeys == fallback.keys) {
+            return List.copyOf(resolved);
+        }
+        BeamCraft.LOGGER.warn("No valid BeamCraft input keys configured for {}; using defaults", action);
+        return resolve(fallback, fallback, action);
+    }
+
+    private static List<AxisKey> resolve(BeamCraftConfig.DirectionalBinding configured,
+                                         BeamCraftConfig.DirectionalBinding fallback,
+                                         String action) {
+        List<BeamCraftConfig.AxisKey> configuredKeys = configured == null ? null : configured.keys;
+        List<BeamCraftConfig.AxisKey> source = configuredKeys == null || configuredKeys.isEmpty()
+                ? fallback.keys : configuredKeys;
+        List<AxisKey> resolved = new ArrayList<>(source.size());
+        for (BeamCraftConfig.AxisKey binding : source) {
+            if (binding == null || binding.key == null || binding.key.isBlank()
+                    || !Double.isFinite(binding.value) || binding.value == 0.0) {
+                continue;
+            }
+            try {
+                InputUtil.Key key = InputUtil.fromTranslationKey(binding.key.trim());
+                resolved.add(new AxisKey(key, (float) Math.max(-1.0, Math.min(1.0, binding.value))));
+            } catch (IllegalArgumentException exception) {
+                BeamCraft.LOGGER.warn("Invalid BeamCraft input key '{}' for {}; ignoring it",
+                        binding.key, action);
+            }
+        }
+        if (!resolved.isEmpty() || source == fallback.keys) {
+            return List.copyOf(resolved);
+        }
+        BeamCraft.LOGGER.warn("No valid BeamCraft input keys configured for {}; using defaults", action);
+        return resolve(fallback, fallback, action);
+    }
+
+    private static LinearRamp ramp(BeamCraftConfig.AxisBinding configured,
+                                   BeamCraftConfig.AxisBinding fallback) {
+        double riseTime = configured != null && configured.riseTime != null
+                ? configured.riseTime : fallback.riseTime;
+        double fallTime = configured != null && configured.fallTime != null
+                ? configured.fallTime : fallback.fallTime;
+        return new LinearRamp(riseTime, fallTime);
+    }
+
+    private record AxisKey(InputUtil.Key key, float value) {
     }
 }
