@@ -183,7 +183,8 @@ public final class JBeamCameraParser {
                 1.0f,
                 spring, damp, -1.0f, -1.0f, -1.0f,
                 -1.0f, -1.0f, -1.0f, spring, damp, 0.0f,
-                PhysicsWorld.KINDA_BIG_NUMBER
+                PhysicsWorld.KINDA_BIG_NUMBER,
+                null
         );
     }
 }

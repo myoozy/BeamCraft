@@ -170,7 +170,8 @@ class JBeamHydroTest {
                 1, 0, false, 0,
                 1, 1, -1, -1, 1,
                 1000, 10, -1, -1, -1, -1, -1, -1,
-                1000, 10, 0, Float.MAX_VALUE
+                1000, 10, 0, Float.MAX_VALUE,
+                null
         );
     }
 }

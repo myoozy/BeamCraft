@@ -45,6 +45,8 @@ public class SoftBodyVehicle {
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
     public final PowertrainSystem powertrain = new PowertrainSystem(this);
+    /** Standalone BeamNG adaptive damper actuator backend; no drive-mode/electrics dependency. */
+    public final AdaptiveDamperActuators adaptiveDampers = new AdaptiveDamperActuators(this);
     public final DriverInputFilter driverInputs = new DriverInputFilter(electrics);
     private final VehicleInternalForceSolver internalForceSolver = new VehicleInternalForceSolver(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
@@ -59,6 +61,9 @@ public class SoftBodyVehicle {
 
     public boolean[] nodeInPartMatrix;
     public int matrixPartStride;
+
+    /** Adaptive damper controllers parsed during assembly; registered by {@link #finalizePhysicsSetup()}. */
+    private List<AdaptiveDamperSpec> adaptiveDamperSpecs = List.of();
 
     public java.util.Map<String, List<BeamPointer>> breakGroupMap = new java.util.HashMap<>();
     private final java.util.Set<String> triggeredBreakGroups = new java.util.HashSet<>();
@@ -344,10 +349,23 @@ public class SoftBodyVehicle {
         }
     }
 
+    /**
+     * Hands the parsed adaptive damper controllers to the vehicle. They are
+     * registered in {@link #finalizePhysicsSetup()}, once every named beam exists.
+     */
+    public void setAdaptiveDamperSpecs(List<AdaptiveDamperSpec> specs) {
+        this.adaptiveDamperSpecs = specs == null ? List.of() : List.copyOf(specs);
+    }
+
     public void finalizePhysicsSetup() {
         powertrain.finalizeSetup();
         flexbodies.compileGroupsCSR(nodes);
         triangles.buildBreakIndices();
+
+        // Actuators address beams by their authored name, so the lookup must be
+        // built only once every beam of every selected part exists.
+        boundedBeams.rebuildNameIndex();
+        adaptiveDampers.registerAll(adaptiveDamperSpecs);
 
         matrixPartStride = maxTrackedPartId + 1;
         nodeInPartMatrix = new boolean[nodes.count * matrixPartStride];
@@ -367,6 +385,10 @@ public class SoftBodyVehicle {
         }
 
         limitConstraintStiffnessAndDamping(PhysicsWorld.invPhysicsDT, 0.90f);
+
+        // Every channel is now bounded by the cutoff-aware stability ceiling, so the
+        // neutral mode (when authored) can be applied without exceeding the budget.
+        adaptiveDampers.applyDefaultModes();
     }
 
     private void limitConstraintStiffnessAndDamping(float invDt, float safetyFraction) {
@@ -417,6 +439,11 @@ public class SoftBodyVehicle {
                     boundedBeams.damp[i], boundedBeams.limitDamp[i],
                     boundedBeams.limitDampRebound[i], boundedBeams.dampFast[i],
                     boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
+            // The ceiling is the budget this constraint may reach, not the value it was
+            // clamped to, so an actuator can raise a coefficient above the authored
+            // magnitude (a "hard" damper mode) up to, but never past, this bound.
+            boundedBeams.dampStabilityCeiling[i] =
+                    limiter.maxDampingCeiling(boundedIds[i], dampingCeiling);
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     boundedIds[i], stiffness, damping, dampingCeiling);
             Utility.FloatPair springs = Utility.capPairToSum(
@@ -601,6 +628,9 @@ public class SoftBodyVehicle {
         torsionHydros.reset(torsionbars);
         wheels.reset();
         powertrain.reset();
+        // Matches the BeamNG controller's empty reset(): the selected damper mode
+        // stays selected and is re-derived from the authored values.
+        adaptiveDampers.reset();
         System.out.println("Vehicle reset.");
     }
 
@@ -623,6 +653,8 @@ public class SoftBodyVehicle {
         slidenodes.clear();
         wheels.clear();
         powertrain.clear();
+        adaptiveDampers.clear();
+        adaptiveDamperSpecs = List.of();
         flexbodies.clear();
         cameras.clear();
         renderTimeline.clear();

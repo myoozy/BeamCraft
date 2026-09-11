@@ -157,7 +157,7 @@ class BoundedBeamBoundZoneTest {
                 shortBound, longBound, shortBoundRange, longBoundRange, boundZone,
                 limitSpring, limitDamp, limitDampRebound,
                 -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
-                0.0f, 0.0f, 0.0f, Float.MAX_VALUE));
+                0.0f, 0.0f, 0.0f, Float.MAX_VALUE, null));
 
         // The beam's rest length is the add-time separation of 1 m; move the nodes
         // afterwards so the solve sees the requested axial strain.

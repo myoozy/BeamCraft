@@ -65,7 +65,7 @@ class BeamBreakCommitTest {
                 0.5f, 0.0f, false, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f, 1.0f,
                 0.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
-                100.0f, 0.0f, 0.0f, Float.MAX_VALUE);
+                100.0f, 0.0f, 0.0f, Float.MAX_VALUE, null);
     }
 
     private static void assertAllGroupedBeamsBroken(SoftBodyVehicle vehicle) {

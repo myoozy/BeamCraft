@@ -135,7 +135,7 @@ class JBeamDeformGroupTest {
                 1.0f, 1.0f, -1.0f, -1.0f, 1.0f,
                 100.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                 -1.0f, -1.0f, 100.0f, 0.0f, 0.0f,
-                Float.MAX_VALUE);
+                Float.MAX_VALUE, null);
     }
 
     private static JBeamAssembler.PartEntry partEntry(Map<String, Double> variables) {

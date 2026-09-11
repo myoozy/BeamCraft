@@ -141,6 +141,20 @@ final class DirectionalStabilityLimiter {
         return (float) Math.clamp(constraints.get(constraintId).scale, 0.0, 1.0);
     }
 
+    /**
+     * Largest damping coefficient this constraint may carry, independent of the
+     * value that was registered: the cutoff-aware budget times this constraint's
+     * share of the node budget. A value that was authored below the budget may be
+     * raised up to here by an actuator (for example an adaptive damper mode)
+     * without re-running the limiter.
+     */
+    float maxDampingCeiling(int constraintId, double dampingCeiling) {
+        Constraint constraint = constraints.get(constraintId);
+        double coefficientScale = Math.clamp(constraint.scale, 0.0, 1.0);
+        return (float) Math.min(Float.MAX_VALUE,
+                Math.max(0.0, dampingCeiling) * coefficientScale);
+    }
+
     CoefficientCeilings ceilings(int constraintId, double stiffness, double damping,
                                  double dampingCeiling) {
         Constraint constraint = constraints.get(constraintId);

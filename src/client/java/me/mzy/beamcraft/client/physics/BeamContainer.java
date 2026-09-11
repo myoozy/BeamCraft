@@ -61,6 +61,11 @@ public class BeamContainer {
     private int deformTriggerCount;
     public boolean[] disableTriangleBreaking;
     public int[] wheelId;
+    /**
+     * Optional authored BeamNG beam {@code name}; {@code null} for unnamed beams.
+     * Actuators address beams through this name rather than through a raw index.
+     */
+    public String[] name;
     /** BeamNG {@code dampCutoffHz}; {@code <= 0} disables the filter (raw relative velocity). */
     public float[] dampCutoffHz;
     /** Persistent one-pole filter state: the low-passed axial relative velocity. */
@@ -107,6 +112,7 @@ public class BeamContainer {
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
         assignedDeformGroups = new java.util.List[INIT_BEAM_CAP];
         wheelId = new int[INIT_BEAM_CAP];
+        name = new String[INIT_BEAM_CAP];
         dampCutoffHz = new float[INIT_BEAM_CAP];
         dampFilterState = new float[INIT_BEAM_CAP];
         dampFilterAlpha = new float[INIT_BEAM_CAP];
@@ -147,6 +153,7 @@ public class BeamContainer {
         deformTriggerIndices = Utility.expand(deformTriggerIndices, newSize);
         disableTriangleBreaking = Utility.expand(disableTriangleBreaking, newSize);
         wheelId = Utility.expand(wheelId, newSize);
+        name = java.util.Arrays.copyOf(name, newSize);
         dampCutoffHz = Utility.expand(dampCutoffHz, newSize);
         dampFilterState = Utility.expand(dampFilterState, newSize);
         dampFilterAlpha = Utility.expand(dampFilterAlpha, newSize);
@@ -210,6 +217,7 @@ public class BeamContainer {
         }
         this.disableTriangleBreaking[idx] = spec.disableTriangleBreaking();
         this.wheelId[idx] = -1;
+        this.name[idx] = spec.name() == null || spec.name().isEmpty() ? null : spec.name();
 
         this.dampCutoffHz[idx] = spec.dampCutoffHz();
         this.dampFilterState[idx] = 0.0f;

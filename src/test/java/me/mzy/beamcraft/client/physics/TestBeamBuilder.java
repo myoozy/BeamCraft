@@ -48,6 +48,7 @@ final class TestBeamBuilder {
     float dampExpansion = 0.0f;
     float transitionZone = 0.0f;
     float deformLimitStress = Float.MAX_VALUE;
+    String name;
 
     static TestBeamBuilder normal() {
         return new TestBeamBuilder();
@@ -132,6 +133,19 @@ final class TestBeamBuilder {
         return this;
     }
 
+    /** Sets the authored BeamNG beam {@code name} actuators resolve. */
+    TestBeamBuilder name(String value) {
+        name = value;
+        return this;
+    }
+
+    /** Sets the two endpoint node names the beam connects. */
+    TestBeamBuilder between(String node1, String node2) {
+        name1 = node1;
+        name2 = node2;
+        return this;
+    }
+
     TestBeamBuilder expansion(float springExpansion, float dampExpansion, float transitionZone) {
         this.springExpansion = springExpansion;
         this.dampExpansion = dampExpansion;
@@ -149,7 +163,7 @@ final class TestBeamBuilder {
                 shortBound, longBound, shortBoundRange, longBoundRange, boundZone,
                 limitSpring, limitDamp, limitDampRebound,
                 dampVelSplit, dampVelSplitRebound, dampFast, dampRebound, dampReboundFast,
-                springExpansion, dampExpansion, transitionZone, deformLimitStress);
+                springExpansion, dampExpansion, transitionZone, deformLimitStress, name);
     }
 
     /** Massless node, so a solve never integrates it nor applies gravity. */

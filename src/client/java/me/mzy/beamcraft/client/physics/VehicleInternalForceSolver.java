@@ -36,6 +36,11 @@ public final class VehicleInternalForceSolver {
      * {@code SoftBodyVehicle.solveInternalForces} body did.
      */
     public void solve(float dt, float plasticRelaxation, ElectricSnapshot electricSnapshot) {
+        // Actuator commands arrive from the MC/controller thread. Drain them here,
+        // on the thread that owns this sub-step, so the SoA damping arrays are never
+        // mutated concurrently.
+        v.adaptiveDampers.applyPending();
+
         NodeContainer nodes = v.nodes;
         float invDt = 1.0f / dt;
         ElectricValues inputs = v.driverInputs.update(dt,

@@ -191,6 +191,10 @@ public class JBeamAssembler {
             JsonObject assembledData = JBeamPartMerger.mergeParts(
                     activeParts.stream().map(entry -> entry.json).toList());
             vehicle.powertrain.addSpecs(JBeamPowertrainParser.parsePart(assembledData, globalVariables));
+            // Controller instances are resolved against the named beams below, in
+            // SoftBodyVehicle.finalizePhysicsSetup, after every part has been built.
+            vehicle.setAdaptiveDamperSpecs(
+                    AdaptiveDamperParser.parsePart(assembledData, globalVariables));
 
             // Pass 4: Resolve Couplers
             System.out.println("====== 🔗 Resolving Couplers ======");

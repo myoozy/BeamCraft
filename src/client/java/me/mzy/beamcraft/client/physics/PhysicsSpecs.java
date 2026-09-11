@@ -71,7 +71,13 @@ public final class PhysicsSpecs {
             float springExpansion,
             float dampExpansion,
             float transitionZone,
-            float deformLimitStress
+            float deformLimitStress,
+            /**
+             * Optional BeamNG beam {@code name}. Actuators (for example the adaptive
+             * damper controller) address beams by this name; {@code null} when the
+             * beam is unnamed.
+             */
+            String name
     ) {}
 
     /** A two-node coupler constraint; unlike a beam it has no elastic/plastic stiffness. */

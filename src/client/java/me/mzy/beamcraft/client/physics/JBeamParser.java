@@ -635,6 +635,9 @@ public class JBeamParser {
         float currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
         float currentTransitionZone = 0.0f;
 
+        // Optional beam name; actuators (adaptive dampers) address beams by it.
+        String currentName = null;
+
         java.util.List<String> currentBreakGroups = new java.util.ArrayList<>();
         java.util.List<String> currentDeformGroups = new java.util.ArrayList<>();
         float currentDeformationTriggerRatio = Float.POSITIVE_INFINITY;
@@ -686,6 +689,7 @@ public class JBeamParser {
                 currentSpringExpansion = getFloatSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
                 currentDampExpansion = getFloatSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
                 currentTransitionZone = getFloatSafe(modifier, "transitionZone", currentTransitionZone, entry.variables);
+                currentName = getStringEvalSafe(modifier, "name", currentName, entry.variables);
 
                 if (modifier.has("breakGroup")) {
                     currentBreakGroups = parseGroups(modifier.get("breakGroup"), entry.variables);
@@ -723,6 +727,7 @@ public class JBeamParser {
                     float inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
                     float inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
                     float inlineTransitionZone = currentTransitionZone;
+                    String inlineName = currentName;
                     String inlineId3 = null; // for L-Beams
                     java.util.List<String> inlineBreakGroups = currentBreakGroups;
                     java.util.List<String> inlineDeformGroups = currentDeformGroups;
@@ -787,6 +792,7 @@ public class JBeamParser {
                             else if (bt.equals("|HYDRO")) inlineType = BeamContainer.BEAM_HYDRO;
                             else if (bt.equals("|ANISOTROPIC")) inlineType = BeamContainer.BEAM_ANISOTROPIC;
                         }
+                        inlineName = getStringEvalSafe(inline, "name", inlineName, entry.variables);
                         inlineId3 = getStringSafe(inline, "id3:", null);
                     }
 
@@ -802,7 +808,7 @@ public class JBeamParser {
                             inlineBoundZone,
                             inlineLimitS, inlineLimitD, inlineLimitDRebound, inlineDampVelSplit, inlineDampVelSplitRebound, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone,
-                            inlineDeformLimitStress
+                            inlineDeformLimitStress, inlineName
                     );
                     if (hydroSection) {
                         vehicle.addHydro(buildHydroSpec(beamSpec, rowProperties, entry.variables));

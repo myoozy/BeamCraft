@@ -2,8 +2,20 @@ package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.utility.Utility;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * 限界梁容器：在普通梁基础上增加长度限界、极限反弹力以及复杂阻尼模型。
+ *
+ * <p>Besides the runtime coefficients the container keeps the <em>authored</em>
+ * damping values and the stability ceiling the assembled configuration admits.
+ * An actuator (see {@code AdaptiveDamperActuators}) derives the runtime value as
+ * {@code authored * coefficient} and clamps it back to that ceiling, so a mode
+ * change can never compound and a hard-to-soft switch cannot lose the authored
+ * value.
  */
 public class BoundedBeamContainer extends BeamContainer {
     // 限界与阻尼特有属性
@@ -21,6 +33,25 @@ public class BoundedBeamContainer extends BeamContainer {
     public float[] dampRebound;     // 回弹阻尼
     public float[] dampReboundFast; // 高速回弹阻尼
 
+    // --- 致动器（自适应阻尼）支撑数据 ---
+    /** Immutable authored counterparts of the runtime damping channels above. */
+    public float[] authoredDamp;
+    public float[] authoredDampRebound;
+    public float[] authoredDampFast;
+    public float[] authoredDampReboundFast;
+    public float[] authoredDampVelocitySplit;
+    /**
+     * Largest value a damping channel may take after the cutoff-aware
+     * directional stability limiter has run; {@link Float#MAX_VALUE} until the
+     * assembled-part lifecycle computes it.
+     */
+    public float[] dampStabilityCeiling;
+
+    /** Name -> bounded-beam indices, rebuilt once per assembly. Never mutated afterwards. */
+    private Map<String, int[]> nameIndex = Map.of();
+
+    private static final int[] EMPTY_INDICES = new int[0];
+
     public BoundedBeamContainer() {
         super();
         shortBoundRange = new float[INIT_BEAM_CAP];
@@ -36,6 +67,12 @@ public class BoundedBeamContainer extends BeamContainer {
         dampFast = new float[INIT_BEAM_CAP];
         dampRebound = new float[INIT_BEAM_CAP];
         dampReboundFast = new float[INIT_BEAM_CAP];
+        authoredDamp = new float[INIT_BEAM_CAP];
+        authoredDampRebound = new float[INIT_BEAM_CAP];
+        authoredDampFast = new float[INIT_BEAM_CAP];
+        authoredDampReboundFast = new float[INIT_BEAM_CAP];
+        authoredDampVelocitySplit = new float[INIT_BEAM_CAP];
+        dampStabilityCeiling = new float[INIT_BEAM_CAP];
     }
 
     @Override
@@ -54,6 +91,45 @@ public class BoundedBeamContainer extends BeamContainer {
         dampFast = Utility.expand(dampFast, newSize);
         dampRebound = Utility.expand(dampRebound, newSize);
         dampReboundFast = Utility.expand(dampReboundFast, newSize);
+        authoredDamp = Utility.expand(authoredDamp, newSize);
+        authoredDampRebound = Utility.expand(authoredDampRebound, newSize);
+        authoredDampFast = Utility.expand(authoredDampFast, newSize);
+        authoredDampReboundFast = Utility.expand(authoredDampReboundFast, newSize);
+        authoredDampVelocitySplit = Utility.expand(authoredDampVelocitySplit, newSize);
+        dampStabilityCeiling = Utility.expand(dampStabilityCeiling, newSize);
+    }
+
+    /**
+     * Returns every bounded-beam index carrying {@code beamName}, in build order;
+     * empty when the name is unknown. A duplicate authored name therefore targets
+     * all of its beams. The returned array belongs to the index and must not be
+     * mutated by callers.
+     */
+    public int[] indicesForName(String beamName) {
+        int[] indices = beamName == null ? null : nameIndex.get(beamName);
+        return indices == null ? EMPTY_INDICES : indices;
+    }
+
+    /**
+     * Rebuilds the name lookup from the currently registered beams. Called once at
+     * the end of assembly, after which the map is immutable and safe to read from
+     * any thread.
+     */
+    public void rebuildNameIndex() {
+        Map<String, List<Integer>> grouped = new HashMap<>();
+        for (int i = 0; i < count; i++) {
+            String beamName = name[i];
+            if (beamName == null) continue;
+            grouped.computeIfAbsent(beamName, key -> new ArrayList<>(2)).add(i);
+        }
+        Map<String, int[]> rebuilt = new HashMap<>(Math.max(4, grouped.size() * 2));
+        for (Map.Entry<String, List<Integer>> entry : grouped.entrySet()) {
+            List<Integer> values = entry.getValue();
+            int[] indices = new int[values.size()];
+            for (int i = 0; i < indices.length; i++) indices[i] = values.get(i);
+            rebuilt.put(entry.getKey(), indices);
+        }
+        nameIndex = Map.copyOf(rebuilt);
     }
 
     /**
@@ -93,6 +169,22 @@ public class BoundedBeamContainer extends BeamContainer {
         dampRebound[idx] = finalRebound;
         dampReboundFast[idx] = finalReboundFast;
 
+        // The authored values are the immutable base every actuator re-derives from.
+        authoredDamp[idx] = spec.damp();
+        authoredDampRebound[idx] = finalRebound;
+        authoredDampFast[idx] = finalFast;
+        authoredDampReboundFast[idx] = finalReboundFast;
+        authoredDampVelocitySplit[idx] = finalVelSplit;
+        // Until the assembled-part lifecycle computes the cutoff-aware safety
+        // ceiling, a mode change must not clip the authored coefficients.
+        dampStabilityCeiling[idx] = Float.MAX_VALUE;
+
         return idx;
+    }
+
+    @Override
+    public void clear() {
+        super.clear();
+        nameIndex = Map.of();
     }
 }
