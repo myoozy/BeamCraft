@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
+import me.mzy.beamcraft.client.physics.electrics.ElectricValues;
 
 /**
  * Per-vehicle internal-force solver.
@@ -37,11 +38,11 @@ public final class VehicleInternalForceSolver {
     public void solve(float dt, float plasticRelaxation, ElectricSnapshot electricSnapshot) {
         NodeContainer nodes = v.nodes;
         float invDt = 1.0f / dt;
+        ElectricValues inputs = v.driverInputs.update(dt,
+                electricSnapshot == null ? ElectricSnapshot.EMPTY : electricSnapshot);
 
-        v.hydros.update(dt, v.normalBeams,
-                electricSnapshot == null ? ElectricSnapshot.EMPTY : electricSnapshot);
-        v.torsionHydros.update(dt, v.torsionbars,
-                electricSnapshot == null ? ElectricSnapshot.EMPTY : electricSnapshot);
+        v.hydros.update(dt, v.normalBeams, inputs);
+        v.torsionHydros.update(dt, v.torsionbars, inputs);
 
         for (int i = 0; i < nodes.count; i++) {
             nodes.forceX[i] = 0.0f;
@@ -90,10 +91,10 @@ public final class VehicleInternalForceSolver {
         // Powertrain only touches primitive physics state and is safe on the
         // dedicated worker. Run it before node integration so driven-wheel
         // torque participates in this substep.
-        v.powertrain.solve(dt, electricSnapshot);
+        v.powertrain.solve(dt, inputs);
         v.wheels.applyBrakes(
-                (float) electricSnapshot.get(v.brakeInputSignalId),
-                (float) electricSnapshot.get(v.parkingBrakeInputSignalId),
+                (float) inputs.get(v.brakeInputSignalId),
+                (float) inputs.get(v.parkingBrakeInputSignalId),
                 dt);
 
         // ==========================================

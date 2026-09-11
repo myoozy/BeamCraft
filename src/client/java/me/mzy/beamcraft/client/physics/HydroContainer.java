@@ -1,7 +1,7 @@
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
-import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
+import me.mzy.beamcraft.client.physics.electrics.ElectricValues;
 import me.mzy.beamcraft.utility.Utility;
 
 /** Controls the reference-length ratio of BeamNG-style linear hydros. */
@@ -27,7 +27,7 @@ public final class HydroContainer {
     }
 
     /** Advances all actuator states by one physics substep. */
-    public void update(float dt, BeamContainer beams, ElectricSnapshot electrics) {
+    public void update(float dt, BeamContainer beams, ElectricValues electrics) {
         for (int i = 0; i < count; i++) {
             int linkedBeam = beamIndex[i];
             if (linkedBeam < 0 || linkedBeam >= beams.count || beams.broken[linkedBeam]) {

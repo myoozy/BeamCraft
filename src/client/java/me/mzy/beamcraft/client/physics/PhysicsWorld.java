@@ -95,7 +95,9 @@ public class PhysicsWorld {
         List<PhysicsRenderTimeline.Writer> renderWriters = new ArrayList<>(activeVehicles.size());
         List<ElectricSnapshot> electricSnapshots = new ArrayList<>(activeVehicles.size());
         for (SoftBodyVehicle vehicle : activeVehicles) {
-            electricSnapshots.add(vehicle.electrics.snapshot());
+            ElectricSnapshot electricSnapshot = vehicle.electrics.snapshot();
+            vehicle.driverInputs.latchTargets(electricSnapshot);
+            electricSnapshots.add(electricSnapshot);
             NodeContainer nodes = vehicle.nodes;
             renderWriters.add(vehicle.renderTimeline.beginStep(
                     startedNanos,

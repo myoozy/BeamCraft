@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.Set;
 
 /** Immutable, thread-safe view of one vehicle's electric signals. */
-public final class ElectricSnapshot {
+public final class ElectricSnapshot implements ElectricValues {
     public static final ElectricSnapshot EMPTY = new ElectricSnapshot(0L, Map.of(), new double[0]);
 
     private final long revision;
@@ -34,6 +34,7 @@ public final class ElectricSnapshot {
         return get(signalId(signal));
     }
 
+    @Override
     public double get(int signalId) {
         return signalId >= 0 && signalId < values.length ? values[signalId] : 0.0;
     }

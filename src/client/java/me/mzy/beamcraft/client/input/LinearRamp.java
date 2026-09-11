@@ -1,21 +1,21 @@
 package me.mzy.beamcraft.client.input;
 
 /** Moves an input value toward its target using independent linear rise and fall times. */
-final class LinearRamp {
+public final class LinearRamp {
     private final float riseTime;
     private final float fallTime;
     private float value;
 
-    LinearRamp(double riseTime, double fallTime) {
+    public LinearRamp(double riseTime, double fallTime) {
         this.riseTime = sanitizeTime(riseTime);
         this.fallTime = sanitizeTime(fallTime);
     }
 
-    float update(boolean active, float deltaTime) {
+    public float update(boolean active, float deltaTime) {
         return update(active ? 1.0f : 0.0f, deltaTime);
     }
 
-    float update(float target, float deltaTime) {
+    public float update(float target, float deltaTime) {
         target = Math.max(-1.0f, Math.min(1.0f, target));
         float remainingTime = Math.max(0.0f, deltaTime);
 
@@ -49,11 +49,11 @@ final class LinearRamp {
         return value;
     }
 
-    void reset() {
+    public void reset() {
         value = 0.0f;
     }
 
-    float value() {
+    public float value() {
         return value;
     }
 

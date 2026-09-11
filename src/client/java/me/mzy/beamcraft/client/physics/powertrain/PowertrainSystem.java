@@ -5,6 +5,7 @@ import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.client.physics.TorqueReactionSolver;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
+import me.mzy.beamcraft.client.physics.electrics.ElectricValues;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 
 import java.util.ArrayList;
@@ -223,9 +224,9 @@ public final class PowertrainSystem {
     }
 
     /** Adds wheel and reaction forces using the electric snapshot for this substep block. */
-    public void solve(float dt, ElectricSnapshot electrics) {
+    public void solve(float dt, ElectricValues electrics) {
         if (dt <= 0.0f) return;
-        ElectricSnapshot input = electrics == null ? ElectricSnapshot.EMPTY : electrics;
+        ElectricValues input = electrics == null ? ElectricSnapshot.EMPTY : electrics;
         consumeShiftEvents(input);
         consumeRangeBoxEvents(input);
         if (engines.unitCount == 0 || dt <= 0.0f) return;
@@ -731,7 +732,7 @@ public final class PowertrainSystem {
         }
     }
 
-    private void consumeShiftEvents(ElectricSnapshot input) {
+    private void consumeShiftEvents(ElectricValues input) {
         long up = eventSequence(input.get(shiftUpSignalId));
         long down = eventSequence(input.get(shiftDownSignalId));
         int upCount = eventCount(lastShiftUpEvent, up);
@@ -755,7 +756,7 @@ public final class PowertrainSystem {
         }
     }
 
-    private void consumeRangeBoxEvents(ElectricSnapshot input) {
+    private void consumeRangeBoxEvents(ElectricValues input) {
         long toggle = eventSequence(input.get(rangeBoxToggleSignalId));
         int toggleCount = eventCount(lastRangeBoxToggleEvent, toggle);
         lastRangeBoxToggleEvent = toggle;

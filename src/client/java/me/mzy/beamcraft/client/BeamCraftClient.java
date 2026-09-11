@@ -105,7 +105,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			ClientVehicleManager.update(client);
 			if (client.player == null || client.world == null || PHYSICS_SCHEDULER.failure() != null) return;
 
-			inputHandler.tick(client, (float) DELTA_TIME);
+			inputHandler.tick(client);
 
 			// World access happens synchronously in prepareStep; the 100 substeps
 			// then run independently until the next game-tick barrier.

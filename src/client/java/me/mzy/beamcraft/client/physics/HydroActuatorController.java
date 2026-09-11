@@ -2,7 +2,7 @@ package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
-import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
+import me.mzy.beamcraft.client.physics.electrics.ElectricValues;
 import me.mzy.beamcraft.utility.Utility;
 
 /**
@@ -65,7 +65,7 @@ public final class HydroActuatorController {
         return index;
     }
 
-    public float update(int index, float dt, ElectricSnapshot electrics) {
+    public float update(int index, float dt, ElectricValues electrics) {
         float raw = clamp((float) electrics.get(inputSignalId[index]),
                 inputInLimit[index], inputOutLimit[index]);
         float scaledInput = clamp(raw * inputFactor[index],

@@ -36,11 +36,11 @@ public final class BeamCraftConfig {
     /**
      * Optional physical input overrides consumed by the client input handler. Missing or
      * empty values use runtime defaults and are deliberately not written into the config.
-     * Pedal actions may define linear keyboard ramp times in seconds.
+     * Continuous actions may define linear keyboard ramp times in seconds.
      */
     public static final class Input {
         public KeyBinding exitVehicle;
-        public DirectionalBinding steering;
+        public AxisBinding steering;
         public AxisBinding throttle;
         public AxisBinding brake;
         public AxisBinding clutch;
@@ -54,7 +54,7 @@ public final class BeamCraftConfig {
         public static Input defaults() {
             Input defaults = new Input();
             defaults.exitVehicle = new KeyBinding("key.keyboard.left.shift");
-            defaults.steering = new DirectionalBinding(
+            defaults.steering = new AxisBinding(1.0 / 1.6, 1.0 / 2.2,
                     new AxisKey("key.keyboard.left", -1.0),
                     new AxisKey("key.keyboard.right", 1.0));
             defaults.throttle = new AxisBinding(0.15, 0.25,

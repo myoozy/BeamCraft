@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.physics;
 
+import me.mzy.beamcraft.client.input.DriverInputFilter;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
@@ -43,6 +44,7 @@ public class SoftBodyVehicle {
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
     public final PowertrainSystem powertrain = new PowertrainSystem(this);
+    public final DriverInputFilter driverInputs = new DriverInputFilter(electrics);
     private final VehicleInternalForceSolver internalForceSolver = new VehicleInternalForceSolver(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
     public final VehicleCameraData cameras = new VehicleCameraData();

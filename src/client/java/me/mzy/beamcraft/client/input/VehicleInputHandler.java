@@ -34,9 +34,10 @@ public final class VehicleInputHandler {
     private final List<InputUtil.Key> rangeBoxToggle;
     private final List<InputUtil.Key> resetVehicle;
 
-    private final LinearRamp throttleRamp;
-    private final LinearRamp brakeRamp;
-    private final LinearRamp clutchRamp;
+    private final AxisTimes steeringTimes;
+    private final AxisTimes throttleTimes;
+    private final AxisTimes brakeTimes;
+    private final AxisTimes clutchTimes;
 
     private boolean shiftUpWasPressed;
     private boolean shiftDownWasPressed;
@@ -59,12 +60,13 @@ public final class VehicleInputHandler {
         rangeBoxToggle = resolve(configured.rangeBoxToggle, defaults.rangeBoxToggle, "rangeBoxToggle");
         resetVehicle = resolve(configured.resetVehicle, defaults.resetVehicle, "resetVehicle");
 
-        throttleRamp = ramp(configured.throttle, defaults.throttle);
-        brakeRamp = ramp(configured.brake, defaults.brake);
-        clutchRamp = ramp(configured.clutch, defaults.clutch);
+        steeringTimes = times(configured.steering, defaults.steering);
+        throttleTimes = times(configured.throttle, defaults.throttle);
+        brakeTimes = times(configured.brake, defaults.brake);
+        clutchTimes = times(configured.clutch, defaults.clutch);
     }
 
-    public void tick(MinecraftClient client, float deltaTime) {
+    public void tick(MinecraftClient client) {
         long window = client.getWindow().getHandle();
         boolean gameplayInput = client.currentScreen == null;
         boolean exitPressed = gameplayInput && pressed(window, exitVehicle);
@@ -76,8 +78,8 @@ public final class VehicleInputHandler {
         SoftBodyVehicle nextControlled = findControlledVehicle(client);
         if (controlledVehicle != nextControlled) {
             releaseContinuousInputs(controlledVehicle);
-            resetContinuousState();
             controlledVehicle = nextControlled;
+            configureInputFilter(controlledVehicle);
         }
 
         if (controlledVehicle == null) {
@@ -89,17 +91,13 @@ public final class VehicleInputHandler {
             requestExitControlledVehicle(client);
         }
 
-        if (!gameplayInput) {
-            resetContinuousState();
-        }
-        // Steering hydros already apply their JBeam rates at the physics substep frequency.
-        // A second 20 Hz ramp here would turn their target into visible staircase motion.
+        if (!gameplayInput) controlledVehicle.driverInputs.reset();
         float steeringValue = gameplayInput
                 ? axisValue(window, steering)
                 : 0.0f;
-        float throttleValue = gameplayInput ? throttleRamp.update(axisValue(window, throttle), deltaTime) : 0.0f;
-        float brakeValue = gameplayInput ? brakeRamp.update(axisValue(window, brake), deltaTime) : 0.0f;
-        float clutchValue = gameplayInput ? clutchRamp.update(axisValue(window, clutch), deltaTime) : 0.0f;
+        float throttleValue = gameplayInput ? axisValue(window, throttle) : 0.0f;
+        float brakeValue = gameplayInput ? axisValue(window, brake) : 0.0f;
+        float clutchValue = gameplayInput ? axisValue(window, clutch) : 0.0f;
         boolean starterPressed = gameplayInput && pressed(window, starter);
 
         if (resetPressed && !resetWasPressed) {
@@ -204,12 +202,16 @@ public final class VehicleInputHandler {
         electrics.set(ElectricSignals.BRAKE_INPUT, 0.0);
         electrics.set(ElectricSignals.CLUTCH_INPUT, 0.0);
         electrics.set(ElectricSignals.STARTER_INPUT, 0.0);
+        vehicle.driverInputs.reset();
     }
 
-    private void resetContinuousState() {
-        throttleRamp.reset();
-        brakeRamp.reset();
-        clutchRamp.reset();
+    private void configureInputFilter(SoftBodyVehicle vehicle) {
+        if (vehicle == null) return;
+        vehicle.driverInputs.configure(
+                steeringTimes.riseTime(), steeringTimes.fallTime(),
+                throttleTimes.riseTime(), throttleTimes.fallTime(),
+                brakeTimes.riseTime(), brakeTimes.fallTime(),
+                clutchTimes.riseTime(), clutchTimes.fallTime());
     }
 
     private void updateEdgeState(boolean exitPressed, boolean resetPressed,
@@ -318,15 +320,18 @@ public final class VehicleInputHandler {
         return resolve(fallback, fallback, action);
     }
 
-    private static LinearRamp ramp(BeamCraftConfig.AxisBinding configured,
-                                   BeamCraftConfig.AxisBinding fallback) {
+    private static AxisTimes times(BeamCraftConfig.AxisBinding configured,
+                                  BeamCraftConfig.AxisBinding fallback) {
         double riseTime = configured != null && configured.riseTime != null
                 ? configured.riseTime : fallback.riseTime;
         double fallTime = configured != null && configured.fallTime != null
                 ? configured.fallTime : fallback.fallTime;
-        return new LinearRamp(riseTime, fallTime);
+        return new AxisTimes(riseTime, fallTime);
     }
 
     private record AxisKey(InputUtil.Key key, float value) {
+    }
+
+    private record AxisTimes(double riseTime, double fallTime) {
     }
 }

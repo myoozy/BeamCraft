@@ -1,7 +1,7 @@
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
-import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
+import me.mzy.beamcraft.client.physics.electrics.ElectricValues;
 import me.mzy.beamcraft.utility.Utility;
 
 /** Controls the target-angle offset of torsion bars used as actuators. */
@@ -25,7 +25,7 @@ public final class TorsionHydroContainer {
         return index;
     }
 
-    public void update(float dt, TorsionBarContainer torsionBars, ElectricSnapshot electrics) {
+    public void update(float dt, TorsionBarContainer torsionBars, ElectricValues electrics) {
         for (int i = 0; i < count; i++) {
             int linkedTorsionBar = torsionBarIndex[i];
             if (linkedTorsionBar < 0 || linkedTorsionBar >= torsionBars.count
