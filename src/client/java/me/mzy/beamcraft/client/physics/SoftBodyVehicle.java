@@ -401,8 +401,10 @@ public class SoftBodyVehicle {
 
         int[] boundedIds = new int[boundedBeams.count];
         for (int i = 0; i < boundedBeams.count; i++) {
-            float stiffness = Utility.positive(boundedBeams.spring[i])
-                    + Utility.positive(boundedBeams.limitSpring[i]);
+            // A bounded beam transitions from its ordinary coefficient to its
+            // limit coefficient; the two springs are not active in parallel.
+            float stiffness = Math.max(Utility.positive(boundedBeams.spring[i]),
+                    Utility.positive(boundedBeams.limitSpring[i]));
             float damping = Utility.maxPositive(
                     boundedBeams.damp[i], boundedBeams.limitDamp[i],
                     boundedBeams.limitDampRebound[i], boundedBeams.dampFast[i],
@@ -433,8 +435,8 @@ public class SoftBodyVehicle {
         allocateAxialBeams(supportBeams, supportIds, limiter, invDt, dt);
         for (int i = 0; i < boundedBeams.count; i++) {
             float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt, dt);
-            float stiffness = Utility.positive(boundedBeams.spring[i])
-                    + Utility.positive(boundedBeams.limitSpring[i]);
+            float stiffness = Math.max(Utility.positive(boundedBeams.spring[i]),
+                    Utility.positive(boundedBeams.limitSpring[i]));
             float damping = Utility.maxPositive(
                     boundedBeams.damp[i], boundedBeams.limitDamp[i],
                     boundedBeams.limitDampRebound[i], boundedBeams.dampFast[i],
@@ -446,10 +448,9 @@ public class SoftBodyVehicle {
                     limiter.maxDampingCeiling(boundedIds[i], dampingCeiling);
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
                     boundedIds[i], stiffness, damping, dampingCeiling);
-            Utility.FloatPair springs = Utility.capPairToSum(
-                    boundedBeams.spring[i], boundedBeams.limitSpring[i], ceilings.maxStiffness());
-            boundedBeams.spring[i] = springs.first();
-            boundedBeams.limitSpring[i] = springs.second();
+            boundedBeams.spring[i] = Math.min(boundedBeams.spring[i], ceilings.maxStiffness());
+            boundedBeams.limitSpring[i] = Math.min(
+                    boundedBeams.limitSpring[i], ceilings.maxStiffness());
             boundedBeams.damp[i] = Math.min(boundedBeams.damp[i], ceilings.maxDamping());
             boundedBeams.limitDamp[i] = Math.min(boundedBeams.limitDamp[i], ceilings.maxDamping());
             boundedBeams.limitDampRebound[i] = Math.min(
