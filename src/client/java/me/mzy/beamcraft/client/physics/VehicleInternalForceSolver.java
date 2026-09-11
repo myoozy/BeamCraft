@@ -414,16 +414,39 @@ public final class VehicleInternalForceSolver {
 
             float limitSpring = boundedBeams.limitSpring[i];
 
+            // BeamNG ramps from the ordinary beam properties to the limit ones over
+            // `boundZone` meters of penetration past a bound: the limit spring and
+            // damping contributions are scaled by a clamped penetration factor, so
+            // the force is continuous at the boundary and fully authored once the
+            // penetration reaches boundZone. A non-positive boundZone transitions
+            // immediately.
+            float penetration = 0.0f;
+            float limitStiffnessScale = 1.0f;
             if (dist < shortBoundary) {
-                springForce += limitSpring * (dist - shortBoundary);
-                plasticStiffness += limitSpring * (boundedBeams.shortBoundRange[i] >= 0
-                        ? 1.0f : 1.0f - boundedBeams.shortBound[i]);
-                activeDamp = boundedBeams.limitDamp[i];
+                penetration = shortBoundary - dist;
+                limitStiffnessScale = boundedBeams.shortBoundRange[i] >= 0
+                        ? 1.0f : 1.0f - boundedBeams.shortBound[i];
             } else if (dist > longBoundary) {
-                springForce += limitSpring * (dist - longBoundary);
-                plasticStiffness += limitSpring * (boundedBeams.longBoundRange[i] >= 0
-                        ? 1.0f : 1.0f + boundedBeams.longBound[i]);
-                activeDamp = boundedBeams.limitDamp[i];
+                penetration = dist - longBoundary;
+                limitStiffnessScale = boundedBeams.longBoundRange[i] >= 0
+                        ? 1.0f : 1.0f + boundedBeams.longBound[i];
+            }
+
+            float boundZone = boundedBeams.boundZone[i];
+            float limitBlend = 0.0f;
+            if (penetration > 0.0f) {
+                limitBlend = boundZone > 0.0f ? Math.min(1.0f, penetration / boundZone) : 1.0f;
+
+                float boundary = dist < shortBoundary ? shortBoundary : longBoundary;
+                springForce += limitBlend * limitSpring * (dist - boundary);
+                plasticStiffness += limitBlend * limitSpring * limitStiffnessScale;
+
+                // beamLimitDampRebound defaults to beamLimitDamp; when authored it
+                // selects the limit damping by axial velocity sign and blends from
+                // the ordinary channel already chosen above.
+                float limitDamp = isRebound
+                        ? boundedBeams.limitDampRebound[i] : boundedBeams.limitDamp[i];
+                activeDamp += limitBlend * (limitDamp - activeDamp);
             }
 
             float totalForce = springForce + (relVel * activeDamp);

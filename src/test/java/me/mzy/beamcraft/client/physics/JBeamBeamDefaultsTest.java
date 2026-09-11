@@ -61,6 +61,9 @@ class JBeamBeamDefaultsTest {
         assertEquals(1.0f, beams.longBound[0], EPS);
         assertEquals(1.0f, beams.limitSpring[0], EPS, "beamLimitSpring defaults to 1");
         assertEquals(1.0f, beams.limitDamp[0], EPS, "beamLimitDamp defaults to 1");
+        assertEquals(1.0f, beams.boundZone[0], EPS, "boundZone defaults to 1 meter");
+        assertEquals(1.0f, beams.limitDampRebound[0], EPS,
+                "beamLimitDampRebound falls back to beamLimitDamp");
         assertEquals(Float.MAX_VALUE, beams.dampVelocitySplit[0], EPS,
                 "beamDampVelocitySplit is unbounded by default");
         assertEquals(580.0f, beams.dampFast[0], EPS, "beamDampFast falls back to beamDamp");
@@ -104,8 +107,9 @@ class JBeamBeamDefaultsTest {
                     "beamSpring": 5000.0, "beamDamp": 50.0,
                     "beamDeform": 3000.0, "beamStrength": 4000.0,
                     "beamPrecompression": 1.05,
-                    "beamShortBound": 0.6, "beamLongBound": 1.4,
+                    "beamShortBound": 0.6, "beamLongBound": 1.4, "boundZone": 0.25,
                     "beamLimitSpring": 7000.0, "beamLimitDamp": 80.0,
+                    "beamLimitDampRebound": 85.0,
                     "beamDampVelocitySplit": 12.0, "beamDampFast": 90.0,
                     "beamDampRebound": 100.0, "beamDampReboundFast": 110.0
                   }]
@@ -121,8 +125,10 @@ class JBeamBeamDefaultsTest {
         assertEquals(1.05f, beams.targetRestLength[0], EPS);
         assertEquals(0.6f, beams.shortBound[0], EPS);
         assertEquals(1.4f, beams.longBound[0], EPS);
+        assertEquals(0.25f, beams.boundZone[0], EPS);
         assertEquals(7000.0f, beams.limitSpring[0], EPS);
         assertEquals(80.0f, beams.limitDamp[0], EPS);
+        assertEquals(85.0f, beams.limitDampRebound[0], EPS);
         assertEquals(12.0f, beams.dampVelocitySplit[0], EPS);
         assertEquals(90.0f, beams.dampFast[0], EPS);
         assertEquals(100.0f, beams.dampRebound[0], EPS);
@@ -137,12 +143,14 @@ class JBeamBeamDefaultsTest {
                   ["id1:", "id2:"],
                   {"beamType":"|BOUNDED", "beamSpring":1234, "beamDamp":45,
                    "beamDeform":67, "beamStrength":89,
-                   "beamLimitSpring":321, "beamLimitDamp":54,
+                   "beamLimitSpring":321, "beamLimitDamp":54, "boundZone":0.5,
+                   "beamLimitDampRebound":66,
                    "beamDampVelocitySplit":2, "beamDampFast":3,
                    "beamDampRebound":4, "beamDampReboundFast":5},
                   ["a", "b"],
                   {"beamSpring":"", "beamDamp":"", "beamDeform":"", "beamStrength":"",
-                   "beamLimitSpring":"", "beamLimitDamp":"",
+                   "beamLimitSpring":"", "beamLimitDamp":"", "boundZone":"",
+                   "beamLimitDampRebound":"",
                    "beamDampVelocitySplit":"", "beamDampFast":"",
                    "beamDampRebound":"", "beamDampReboundFast":""},
                   ["a", "b"]
@@ -157,6 +165,9 @@ class JBeamBeamDefaultsTest {
         assertEquals(Float.MAX_VALUE, beams.strength[1], EPS);
         assertEquals(1.0f, beams.limitSpring[1], EPS);
         assertEquals(1.0f, beams.limitDamp[1], EPS);
+        assertEquals(1.0f, beams.boundZone[1], EPS);
+        assertEquals(1.0f, beams.limitDampRebound[1], EPS,
+                "an empty beamLimitDampRebound restores the beamLimitDamp fallback");
         assertEquals(Float.MAX_VALUE, beams.dampVelocitySplit[1], EPS);
         assertEquals(DEFAULT_NORMAL_DAMP, beams.dampFast[1], EPS);
         assertEquals(DEFAULT_NORMAL_DAMP, beams.dampRebound[1], EPS);

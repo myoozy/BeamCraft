@@ -23,6 +23,10 @@ public class JBeamParser {
     private static final float DEFAULT_BEAM_STRENGTH = Float.MAX_VALUE;
     private static final float DEFAULT_BEAM_LIMIT_SPRING = 1.0f;
     private static final float DEFAULT_BEAM_LIMIT_DAMP = 1.0f;
+    /** Unspecified beamLimitDampRebound; the container falls back to beamLimitDamp. */
+    private static final float DEFAULT_BEAM_LIMIT_DAMP_REBOUND = -1.0f;
+    /** Official bounded-beam transition distance in meters. */
+    private static final float DEFAULT_BEAM_BOUND_ZONE = 1.0f;
 
     /**
      * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"。
@@ -596,9 +600,11 @@ public class JBeamParser {
 
         float currentShortBound = 1.0f, currentLongBound = 1.0f;
         float currentShortBoundRange = -1.0f, currentLongBoundRange = -1.0f;
+        float currentBoundZone = DEFAULT_BEAM_BOUND_ZONE;
         // beamLimitSpring/beamLimitDamp are independent defaults of 1, never aliases of
         // the scoped spring/damp values.
         float currentLimitSpring = DEFAULT_BEAM_LIMIT_SPRING, currentLimitDamp = DEFAULT_BEAM_LIMIT_DAMP;
+        float currentLimitDampRebound = DEFAULT_BEAM_LIMIT_DAMP_REBOUND;
 
         // Negative sentinels mean "unspecified"; the container substitutes the fallback.
         float currentDampVelSplit = -1.0f, currentDampFast = -1.0f;
@@ -642,8 +648,10 @@ public class JBeamParser {
                 currentLongBound = getScopedBeamFloat(modifier, "beamLongBound", currentLongBound, 1.0f, entry.variables);
                 currentShortBoundRange = getScopedBeamFloat(modifier, "shortBoundRange", currentShortBoundRange, -1.0f, entry.variables);
                 currentLongBoundRange = getScopedBeamFloat(modifier, "longBoundRange", currentLongBoundRange, -1.0f, entry.variables);
+                currentBoundZone = getScopedBeamFloat(modifier, "boundZone", currentBoundZone, DEFAULT_BEAM_BOUND_ZONE, entry.variables);
                 currentLimitSpring = getScopedBeamFloat(modifier, "beamLimitSpring", currentLimitSpring, DEFAULT_BEAM_LIMIT_SPRING, entry.variables);
                 currentLimitDamp = getScopedBeamFloat(modifier, "beamLimitDamp", currentLimitDamp, DEFAULT_BEAM_LIMIT_DAMP, entry.variables);
+                currentLimitDampRebound = getScopedBeamFloat(modifier, "beamLimitDampRebound", currentLimitDampRebound, DEFAULT_BEAM_LIMIT_DAMP_REBOUND, entry.variables);
 
                 currentDampVelSplit = getScopedBeamFloat(modifier, "beamDampVelocitySplit", currentDampVelSplit, -1.0f, entry.variables);
                 currentDampFast = getScopedBeamFloat(modifier, "beamDampFast", currentDampFast, -1.0f, entry.variables);
@@ -680,7 +688,9 @@ public class JBeamParser {
                     float inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
                     float inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
                     float inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
+                    float inlineBoundZone = currentBoundZone;
                     float inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
+                    float inlineLimitDRebound = currentLimitDampRebound;
                     float inlineDampVelSplit = currentDampVelSplit, inlineDampFast = currentDampFast;
                     float inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
                     float inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
@@ -711,8 +721,10 @@ public class JBeamParser {
                         inlineLongBound = getScopedBeamFloat(inline, "beamLongBound", inlineLongBound, 1.0f, entry.variables);
                         inlineShortBoundRange = getScopedBeamFloat(inline, "shortBoundRange", inlineShortBoundRange, -1.0f, entry.variables);
                         inlineLongBoundRange = getScopedBeamFloat(inline, "longBoundRange", inlineLongBoundRange, -1.0f, entry.variables);
+                        inlineBoundZone = getScopedBeamFloat(inline, "boundZone", inlineBoundZone, DEFAULT_BEAM_BOUND_ZONE, entry.variables);
                         inlineLimitS = getScopedBeamFloat(inline, "beamLimitSpring", inlineLimitS, DEFAULT_BEAM_LIMIT_SPRING, entry.variables);
                         inlineLimitD = getScopedBeamFloat(inline, "beamLimitDamp", inlineLimitD, DEFAULT_BEAM_LIMIT_DAMP, entry.variables);
+                        inlineLimitDRebound = getScopedBeamFloat(inline, "beamLimitDampRebound", inlineLimitDRebound, DEFAULT_BEAM_LIMIT_DAMP_REBOUND, entry.variables);
 
                         inlineDampVelSplit = getScopedBeamFloat(inline, "beamDampVelocitySplit", inlineDampVelSplit, -1.0f, entry.variables);
                         inlineDampFast = getScopedBeamFloat(inline, "beamDampFast", inlineDampFast, -1.0f, entry.variables);
@@ -756,7 +768,8 @@ public class JBeamParser {
                             inlineSpring, inlineDamp, inlineDeform, inlineStrength,
                             inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
-                            inlineLimitS, inlineLimitD, inlineDampVelSplit, inlineDampFast,
+                            inlineBoundZone,
+                            inlineLimitS, inlineLimitD, inlineLimitDRebound, inlineDampVelSplit, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone,
                             inlineDeformLimitStress
                     );

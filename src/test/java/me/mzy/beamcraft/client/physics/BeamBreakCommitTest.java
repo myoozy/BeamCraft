@@ -63,8 +63,8 @@ class BeamBreakCommitTest {
                 List.of("shared"), 0, false,
                 100.0f, 0.0f, Float.MAX_VALUE, strength,
                 0.5f, 0.0f, 0.0f,
-                1.0f, 1.0f, -1.0f, -1.0f,
-                0.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                1.0f, 1.0f, -1.0f, -1.0f, 1.0f,
+                0.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                 100.0f, 0.0f, 0.0f, Float.MAX_VALUE);
     }
 

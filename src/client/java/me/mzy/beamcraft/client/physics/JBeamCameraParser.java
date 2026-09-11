@@ -180,7 +180,8 @@ public final class JBeamCameraParser {
                 spring, damp, deform, strength,
                 1.0f, 0.0f, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f,
-                spring, damp, -1.0f, -1.0f,
+                1.0f,
+                spring, damp, -1.0f, -1.0f, -1.0f,
                 -1.0f, -1.0f, spring, damp, 0.0f,
                 PhysicsWorld.KINDA_BIG_NUMBER
         );

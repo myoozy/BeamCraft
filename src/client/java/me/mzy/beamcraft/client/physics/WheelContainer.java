@@ -565,7 +565,8 @@ public class WheelContainer {
                 (float) spring, (float) damp, (float) deform, (float) strength,
                 1.0f, 0.0f, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f,
-                (float) spring, (float) damp,
+                1.0f,
+                (float) spring, (float) damp, -1.0f,
                 -1.0f, -1.0f, -1.0f, -1.0f,
                 (float) springExpansion, (float) dampExpansion, (float) transitionZone,
                 PhysicsWorld.KINDA_BIG_NUMBER
