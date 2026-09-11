@@ -18,8 +18,6 @@ public class BoundedBeamContainer extends BeamContainer {
     public float[] dampRebound;     // 回弹阻尼
     public float[] dampReboundFast; // 高速回弹阻尼
 
-    private static final float KINDA_BIG_NUMBER = 1e9f;
-
     public BoundedBeamContainer() {
         super();
         shortBoundRange = new float[INIT_BEAM_CAP];
@@ -51,13 +49,13 @@ public class BoundedBeamContainer extends BeamContainer {
 
     /**
      * 添加限界梁（包含所有特有参数）。
-     * @param inDampVelSplit   速度分界点，<0 时使用极大值（表示禁用高速阻尼）
+     * @param inDampVelSplit   速度分界点，<0 时使用 Float.MAX_VALUE（表示不启用高速阻尼）
      * @param inDampFast       高速阻尼，<0 时回退至普通阻尼
      * @param inDampRebound     回弹阻尼，<0 时回退至普通阻尼
      * @param inDampReboundFast 高速回弹阻尼，<0 时回退至 inDampRebound
      */
     public int addBeam(PhysicsSpecs.BeamSpec spec, int node1Idx, int node2Idx, float nodeDist) {
-        float finalVelSplit = spec.dampVelSplit() < 0.0f ? KINDA_BIG_NUMBER : spec.dampVelSplit();
+        float finalVelSplit = spec.dampVelSplit() < 0.0f ? Float.MAX_VALUE : spec.dampVelSplit();
         float finalFast = spec.dampFast() < 0.0f ? spec.damp() : spec.dampFast();
         float finalRebound = spec.dampRebound() < 0.0f ? spec.damp() : spec.dampRebound();
         float finalReboundFast = spec.dampReboundFast() < 0.0f ? finalRebound : spec.dampReboundFast();

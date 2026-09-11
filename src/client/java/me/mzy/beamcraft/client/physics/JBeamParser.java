@@ -17,6 +17,13 @@ import java.util.Map;
  */
 public class JBeamParser {
 
+    private static final float DEFAULT_BEAM_SPRING = 4_300_000.0f;
+    private static final float DEFAULT_BEAM_DAMP = 580.0f;
+    private static final float DEFAULT_BEAM_DEFORM = 220_000.0f;
+    private static final float DEFAULT_BEAM_STRENGTH = Float.MAX_VALUE;
+    private static final float DEFAULT_BEAM_LIMIT_SPRING = 1.0f;
+    private static final float DEFAULT_BEAM_LIMIT_DAMP = 1.0f;
+
     /**
      * 解析 BeamNG 风格的表达式，如 "$= $tirepressure_F * 550 + 10"。
      * 内部委托给 {@link JBeamExpressionEvaluator}（真正的 tokenizer + 优先级 parser）。
@@ -163,6 +170,22 @@ public class JBeamParser {
         } catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Reads a scoped table property. In JBeam an empty value cancels the active
+     * scope modifier, so it must restore the property's schema default rather
+     * than retain the value from the previous rows.
+     */
+    private static float getScopedBeamFloat(JsonObject obj, String key, float currentValue,
+                                            float schemaDefault, Map<String, Double> vars) {
+        if (obj == null || !obj.has(key)) return currentValue;
+        JsonElement element = obj.get(key);
+        if (element == null || element.isJsonNull()
+                || (element.isJsonPrimitive() && element.getAsString().trim().isEmpty())) {
+            return schemaDefault;
+        }
+        return getFloatSafe(obj, key, schemaDefault, vars);
     }
 
     public static String getStringSafe(JsonObject obj, String key, String defaultValue) {
@@ -566,14 +589,18 @@ public class JBeamParser {
         JsonObject currentProperties = new JsonObject();
 
         float currentPrecomp = 1.0f, currentPrecompRange = 0.0f, currentPrecompTime = 0.0f;
-        float currentSpring = 9000000.0f, currentDamp = 12000.0f;
-        float currentDeform = 400000.0f, currentStrength = 1000000.0f;
-        float currentDeformLimitStress = PhysicsWorld.KINDA_BIG_NUMBER;
+        // Official BeamNG normal/bounded beam defaults.
+        float currentSpring = DEFAULT_BEAM_SPRING, currentDamp = DEFAULT_BEAM_DAMP;
+        float currentDeform = DEFAULT_BEAM_DEFORM, currentStrength = DEFAULT_BEAM_STRENGTH;
+        float currentDeformLimitStress = Float.MAX_VALUE;
 
         float currentShortBound = 1.0f, currentLongBound = 1.0f;
         float currentShortBoundRange = -1.0f, currentLongBoundRange = -1.0f;
-        float currentLimitSpring = currentSpring, currentLimitDamp = currentDamp;
+        // beamLimitSpring/beamLimitDamp are independent defaults of 1, never aliases of
+        // the scoped spring/damp values.
+        float currentLimitSpring = DEFAULT_BEAM_LIMIT_SPRING, currentLimitDamp = DEFAULT_BEAM_LIMIT_DAMP;
 
+        // Negative sentinels mean "unspecified"; the container substitutes the fallback.
         float currentDampVelSplit = -1.0f, currentDampFast = -1.0f;
         float currentDampRebound = -1.0f, currentDampReboundFast = -1.0f;
 
@@ -593,8 +620,8 @@ public class JBeamParser {
                     mergeJsonObjectsRecursive(currentProperties, modifier);
                 }
                 String bt = getStringSafe(modifier, "beamType", "");
-                if (!hydroSection && !bt.isEmpty()) {
-                    if (bt.equals("|NORMAL")) currentType = BeamContainer.BEAM_NORMAL;
+                if (!hydroSection && modifier.has("beamType")) {
+                    if (bt.isEmpty() || bt.equals("|NORMAL")) currentType = BeamContainer.BEAM_NORMAL;
                     else if (bt.equals("|SUPPORT")) currentType = BeamContainer.BEAM_SUPPORT;
                     else if (bt.equals("|BOUNDED")) currentType = BeamContainer.BEAM_BOUNDED;
                     else if (bt.equals("|LBEAM")) currentType = BeamContainer.BEAM_LBEAM;
@@ -602,26 +629,26 @@ public class JBeamParser {
                     else if (bt.equals("|ANISOTROPIC")) currentType = BeamContainer.BEAM_ANISOTROPIC;
                 }
 
-                currentPrecomp = getFloatSafe(modifier, "beamPrecompression", currentPrecomp, entry.variables);
-                currentPrecompRange = getFloatSafe(modifier, "precompressionRange", currentPrecompRange, entry.variables);
-                currentPrecompTime = getFloatSafe(modifier, "beamPrecompressionTime", currentPrecompTime, entry.variables);
-                currentSpring = getFloatSafe(modifier, "beamSpring", currentSpring, entry.variables);
-                currentDamp = getFloatSafe(modifier, "beamDamp", currentDamp, entry.variables);
-                currentDeform = getFloatSafe(modifier, "beamDeform", currentDeform, entry.variables);
-                currentStrength = getFloatSafe(modifier, "beamStrength", currentStrength, entry.variables);
-                currentDeformLimitStress = getFloatSafe(modifier, "deformLimitStress", currentDeformLimitStress, entry.variables);
+                currentPrecomp = getScopedBeamFloat(modifier, "beamPrecompression", currentPrecomp, 1.0f, entry.variables);
+                currentPrecompRange = getScopedBeamFloat(modifier, "precompressionRange", currentPrecompRange, 0.0f, entry.variables);
+                currentPrecompTime = getScopedBeamFloat(modifier, "beamPrecompressionTime", currentPrecompTime, 0.0f, entry.variables);
+                currentSpring = getScopedBeamFloat(modifier, "beamSpring", currentSpring, DEFAULT_BEAM_SPRING, entry.variables);
+                currentDamp = getScopedBeamFloat(modifier, "beamDamp", currentDamp, DEFAULT_BEAM_DAMP, entry.variables);
+                currentDeform = getScopedBeamFloat(modifier, "beamDeform", currentDeform, DEFAULT_BEAM_DEFORM, entry.variables);
+                currentStrength = getScopedBeamFloat(modifier, "beamStrength", currentStrength, DEFAULT_BEAM_STRENGTH, entry.variables);
+                currentDeformLimitStress = getScopedBeamFloat(modifier, "deformLimitStress", currentDeformLimitStress, Float.MAX_VALUE, entry.variables);
 
-                currentShortBound = getFloatSafe(modifier, "beamShortBound", currentShortBound, entry.variables);
-                currentLongBound = getFloatSafe(modifier, "beamLongBound", currentLongBound, entry.variables);
-                currentShortBoundRange = getFloatSafe(modifier, "shortBoundRange", currentShortBoundRange, entry.variables);
-                currentLongBoundRange = getFloatSafe(modifier, "longBoundRange", currentLongBoundRange, entry.variables);
-                currentLimitSpring = getFloatSafe(modifier, "beamLimitSpring", currentLimitSpring, entry.variables);
-                currentLimitDamp = getFloatSafe(modifier, "beamLimitDamp", currentLimitDamp, entry.variables);
+                currentShortBound = getScopedBeamFloat(modifier, "beamShortBound", currentShortBound, 1.0f, entry.variables);
+                currentLongBound = getScopedBeamFloat(modifier, "beamLongBound", currentLongBound, 1.0f, entry.variables);
+                currentShortBoundRange = getScopedBeamFloat(modifier, "shortBoundRange", currentShortBoundRange, -1.0f, entry.variables);
+                currentLongBoundRange = getScopedBeamFloat(modifier, "longBoundRange", currentLongBoundRange, -1.0f, entry.variables);
+                currentLimitSpring = getScopedBeamFloat(modifier, "beamLimitSpring", currentLimitSpring, DEFAULT_BEAM_LIMIT_SPRING, entry.variables);
+                currentLimitDamp = getScopedBeamFloat(modifier, "beamLimitDamp", currentLimitDamp, DEFAULT_BEAM_LIMIT_DAMP, entry.variables);
 
-                currentDampVelSplit = getFloatSafe(modifier, "beamDampVelocitySplit", currentDampVelSplit, entry.variables);
-                currentDampFast = getFloatSafe(modifier, "beamDampFast", currentDampFast, entry.variables);
-                currentDampRebound = getFloatSafe(modifier, "beamDampRebound", currentDampRebound, entry.variables);
-                currentDampReboundFast = getFloatSafe(modifier, "beamDampReboundFast", currentDampReboundFast, entry.variables);
+                currentDampVelSplit = getScopedBeamFloat(modifier, "beamDampVelocitySplit", currentDampVelSplit, -1.0f, entry.variables);
+                currentDampFast = getScopedBeamFloat(modifier, "beamDampFast", currentDampFast, -1.0f, entry.variables);
+                currentDampRebound = getScopedBeamFloat(modifier, "beamDampRebound", currentDampRebound, -1.0f, entry.variables);
+                currentDampReboundFast = getScopedBeamFloat(modifier, "beamDampReboundFast", currentDampReboundFast, -1.0f, entry.variables);
 
                 currentSpringExpansion = getFloatSafe(modifier, "springExpansion", currentSpringExpansion, entry.variables);
                 currentDampExpansion = getFloatSafe(modifier, "dampExpansion", currentDampExpansion, entry.variables);
@@ -671,26 +698,26 @@ public class JBeamParser {
                             mergeJsonObjectsRecursive(rowProperties, inline);
                         }
 
-                        inlineSpring = getFloatSafe(inline, "beamSpring", inlineSpring, entry.variables);
-                        inlineDamp = getFloatSafe(inline, "beamDamp", inlineDamp, entry.variables);
-                        inlineDeform = getFloatSafe(inline, "beamDeform", inlineDeform, entry.variables);
-                        inlineStrength = getFloatSafe(inline, "beamStrength", inlineStrength, entry.variables);
-                        inlineDeformLimitStress = getFloatSafe(inline, "deformLimitStress", inlineDeformLimitStress, entry.variables);
-                        inlinePrecomp = getFloatSafe(inline, "beamPrecompression", inlinePrecomp, entry.variables);
-                        inlinePrecompRange = getFloatSafe(inline, "precompressionRange", inlinePrecompRange, entry.variables);
-                        inlinePrecompTime = getFloatSafe(inline, "beamPrecompressionTime", inlinePrecompTime, entry.variables);
+                        inlineSpring = getScopedBeamFloat(inline, "beamSpring", inlineSpring, DEFAULT_BEAM_SPRING, entry.variables);
+                        inlineDamp = getScopedBeamFloat(inline, "beamDamp", inlineDamp, DEFAULT_BEAM_DAMP, entry.variables);
+                        inlineDeform = getScopedBeamFloat(inline, "beamDeform", inlineDeform, DEFAULT_BEAM_DEFORM, entry.variables);
+                        inlineStrength = getScopedBeamFloat(inline, "beamStrength", inlineStrength, DEFAULT_BEAM_STRENGTH, entry.variables);
+                        inlineDeformLimitStress = getScopedBeamFloat(inline, "deformLimitStress", inlineDeformLimitStress, Float.MAX_VALUE, entry.variables);
+                        inlinePrecomp = getScopedBeamFloat(inline, "beamPrecompression", inlinePrecomp, 1.0f, entry.variables);
+                        inlinePrecompRange = getScopedBeamFloat(inline, "precompressionRange", inlinePrecompRange, 0.0f, entry.variables);
+                        inlinePrecompTime = getScopedBeamFloat(inline, "beamPrecompressionTime", inlinePrecompTime, 0.0f, entry.variables);
 
-                        inlineShortBound = getFloatSafe(inline, "beamShortBound", inlineShortBound, entry.variables);
-                        inlineLongBound = getFloatSafe(inline, "beamLongBound", inlineLongBound, entry.variables);
-                        inlineShortBoundRange = getFloatSafe(inline, "shortBoundRange", inlineShortBoundRange, entry.variables);
-                        inlineLongBoundRange = getFloatSafe(inline, "longBoundRange", inlineLongBoundRange, entry.variables);
-                        inlineLimitS = getFloatSafe(inline, "beamLimitSpring", inlineLimitS, entry.variables);
-                        inlineLimitD = getFloatSafe(inline, "beamLimitDamp", inlineLimitD, entry.variables);
+                        inlineShortBound = getScopedBeamFloat(inline, "beamShortBound", inlineShortBound, 1.0f, entry.variables);
+                        inlineLongBound = getScopedBeamFloat(inline, "beamLongBound", inlineLongBound, 1.0f, entry.variables);
+                        inlineShortBoundRange = getScopedBeamFloat(inline, "shortBoundRange", inlineShortBoundRange, -1.0f, entry.variables);
+                        inlineLongBoundRange = getScopedBeamFloat(inline, "longBoundRange", inlineLongBoundRange, -1.0f, entry.variables);
+                        inlineLimitS = getScopedBeamFloat(inline, "beamLimitSpring", inlineLimitS, DEFAULT_BEAM_LIMIT_SPRING, entry.variables);
+                        inlineLimitD = getScopedBeamFloat(inline, "beamLimitDamp", inlineLimitD, DEFAULT_BEAM_LIMIT_DAMP, entry.variables);
 
-                        inlineDampVelSplit = getFloatSafe(inline, "beamDampVelocitySplit", inlineDampVelSplit, entry.variables);
-                        inlineDampFast = getFloatSafe(inline, "beamDampFast", inlineDampFast, entry.variables);
-                        inlineDampRebound = getFloatSafe(inline, "beamDampRebound", inlineDampRebound, entry.variables);
-                        inlineDampReboundFast = getFloatSafe(inline, "beamDampReboundFast", inlineDampReboundFast, entry.variables);
+                        inlineDampVelSplit = getScopedBeamFloat(inline, "beamDampVelocitySplit", inlineDampVelSplit, -1.0f, entry.variables);
+                        inlineDampFast = getScopedBeamFloat(inline, "beamDampFast", inlineDampFast, -1.0f, entry.variables);
+                        inlineDampRebound = getScopedBeamFloat(inline, "beamDampRebound", inlineDampRebound, -1.0f, entry.variables);
+                        inlineDampReboundFast = getScopedBeamFloat(inline, "beamDampReboundFast", inlineDampReboundFast, -1.0f, entry.variables);
 
                         inlineSpringExpansion = getFloatSafe(inline, "springExpansion", inlineSpringExpansion, entry.variables);
                         inlineDampExpansion = getFloatSafe(inline, "dampExpansion", inlineDampExpansion, entry.variables);
@@ -709,8 +736,8 @@ public class JBeamParser {
                                 inline, "disableTriangleBreaking", inlineDisableTriangleBreaking);
 
                         String bt = getStringSafe(inline, "beamType", "");
-                        if (!hydroSection && !bt.isEmpty()) {
-                            if (bt.equals("|NORMAL")) inlineType = BeamContainer.BEAM_NORMAL;
+                        if (!hydroSection && inline.has("beamType")) {
+                            if (bt.isEmpty() || bt.equals("|NORMAL")) inlineType = BeamContainer.BEAM_NORMAL;
                             else if (bt.equals("|SUPPORT")) inlineType = BeamContainer.BEAM_SUPPORT;
                             else if (bt.equals("|BOUNDED")) inlineType = BeamContainer.BEAM_BOUNDED;
                             else if (bt.equals("|LBEAM")) inlineType = BeamContainer.BEAM_LBEAM;
