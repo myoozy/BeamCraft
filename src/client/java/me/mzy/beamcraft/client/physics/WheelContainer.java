@@ -562,12 +562,12 @@ public class WheelContainer {
                 type, null, null, null,
                 List.of(), Float.POSITIVE_INFINITY,
                 null, 0, false,
-                (float) spring, (float) damp, (float) deform, (float) strength,
-                1.0f, 0.0f, 0.0f,
+                (float) spring, (float) damp, -1.0f, (float) deform, (float) strength,
+                1.0f, 0.0f, false, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f,
                 1.0f,
                 (float) spring, (float) damp, -1.0f,
-                -1.0f, -1.0f, -1.0f, -1.0f,
+                -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                 (float) springExpansion, (float) dampExpansion, (float) transitionZone,
                 PhysicsWorld.KINDA_BIG_NUMBER
         );

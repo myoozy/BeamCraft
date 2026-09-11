@@ -46,10 +46,13 @@ public final class PhysicsSpecs {
             boolean disableTriangleBreaking,
             float spring,
             float damp,
+            float dampCutoffHz,
             float deform,
             float strength,
             float precomp,
             float precompRange,
+            /** True when {@code precompressionRange} was authored; zero/negative are valid values. */
+            boolean precompRangeDefined,
             float precompTime,
             float shortBound,
             float longBound,
@@ -60,6 +63,8 @@ public final class PhysicsSpecs {
             float limitDamp,
             float limitDampRebound,
             float dampVelSplit,
+            /** Rebound (lengthening) split override; negative means "use dampVelSplit". */
+            float dampVelSplitRebound,
             float dampFast,
             float dampRebound,
             float dampReboundFast,

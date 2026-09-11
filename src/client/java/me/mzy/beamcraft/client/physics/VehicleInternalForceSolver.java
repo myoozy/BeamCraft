@@ -54,6 +54,10 @@ public final class VehicleInternalForceSolver {
             nodes.prevPosZ[i] = nodes.posZ[i];
         }
 
+        // Refresh dampCutoffHz coefficients for this sub-step before any beam
+        // family consumes its filtered damping velocity.
+        prepareDampingFilters(dt);
+
         // ==========================================
         // ==========================================
         solveTirePressure();
@@ -121,6 +125,14 @@ public final class VehicleInternalForceSolver {
             nodes.posY[i] += nodes.velY[i] * dt;
             nodes.posZ[i] += nodes.velZ[i] * dt;
         }
+    }
+
+    private void prepareDampingFilters(float dt) {
+        v.normalBeams.prepareDampingFilters(dt);
+        v.supportBeams.prepareDampingFilters(dt);
+        v.boundedBeams.prepareDampingFilters(dt);
+        v.lBeams.prepareDampingFilters(dt);
+        v.anisotropicBeams.prepareDampingFilters(dt);
     }
 
     private void solveTirePressure() {
@@ -258,7 +270,9 @@ public final class VehicleInternalForceSolver {
             float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
             float activeDamp = normalBeams.damp[i];
-            float dampForce = activeDamp * relVel;
+            float dampVelocity = normalBeams.dampingCutoffEnabled(i)
+                    ? normalBeams.filteredDampingVelocity(i, relVel) : relVel;
+            float dampForce = activeDamp * dampVelocity;
 
             float totalForce = springForce + dampForce;
             float absTotalForce = Math.abs(totalForce);
@@ -325,7 +339,9 @@ public final class VehicleInternalForceSolver {
             float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
             float activeDamp = supportBeams.damp[i];
-            float dampForce = activeDamp * relVel;
+            float dampVelocity = supportBeams.dampingCutoffEnabled(i)
+                    ? supportBeams.filteredDampingVelocity(i, relVel) : relVel;
+            float dampForce = activeDamp * dampVelocity;
 
             float totalForce = springForce + dampForce;
             float absTotalForce = Math.abs(totalForce);
@@ -388,9 +404,17 @@ public final class VehicleInternalForceSolver {
             float vz = nodes.velZ[n2] - nodes.velZ[n1];
             float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
+            // Split selection follows the raw axial velocity (a sign/magnitude switch),
+            // while the damping magnitude itself uses the dampCutoffHz-filtered one.
+            float dampVelocity = boundedBeams.dampingCutoffEnabled(i)
+                    ? boundedBeams.filteredDampingVelocity(i, relVel) : relVel;
+
             float activeDamp = boundedBeams.damp[i];
-            float split = boundedBeams.dampVelocitySplit[i];
             boolean isRebound = relVel > 0;
+            // A lengthening (rebound) beam uses beamDampVelocitySplitRebound when it was
+            // authored; compression always keeps the common beamDampVelocitySplit.
+            float split = isRebound
+                    ? boundedBeams.dampVelocitySplitRebound[i] : boundedBeams.dampVelocitySplit[i];
             boolean isFast = Math.abs(relVel) > split;
             if (isRebound) {
                 activeDamp = isFast ? boundedBeams.dampReboundFast[i] : boundedBeams.dampRebound[i];
@@ -449,7 +473,7 @@ public final class VehicleInternalForceSolver {
                 activeDamp += limitBlend * (limitDamp - activeDamp);
             }
 
-            float totalForce = springForce + (relVel * activeDamp);
+            float totalForce = springForce + (dampVelocity * activeDamp);
             float absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > boundedBeams.strength[i]) {
@@ -541,6 +565,9 @@ public final class VehicleInternalForceSolver {
             double distDot = (v12x*dx12 + v12y*dy12 + v12z*dz12) * invDist;
 
             double dampVel = distDot - targetDistDot;
+            if (lBeams.dampingCutoffEnabled(i)) {
+                dampVel = lBeams.filteredDampingVelocity(i, (float) dampVel);
+            }
 
             double activeSpring = lBeams.spring[i];
             double springForce = activeSpring * (dist - targetDist);
@@ -644,7 +671,9 @@ public final class VehicleInternalForceSolver {
             float vy = nodes.velY[n2] - nodes.velY[n1];
             float vz = nodes.velZ[n2] - nodes.velZ[n1];
             float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-            float dampForce = activeDamp * relVel;
+            float dampVelocity = anisotropicBeams.dampingCutoffEnabled(i)
+                    ? anisotropicBeams.filteredDampingVelocity(i, relVel) : relVel;
+            float dampForce = activeDamp * dampVelocity;
 
             float totalForce = springForce + dampForce;
             float absTotalForce = Math.abs(totalForce);

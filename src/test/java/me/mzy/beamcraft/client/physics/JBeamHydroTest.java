@@ -166,10 +166,10 @@ class JBeamHydroTest {
                 BeamContainer.BEAM_HYDRO, "a", "b", null,
                 List.of(), Float.POSITIVE_INFINITY,
                 List.of(), 0, false,
-                1000, 10, Float.MAX_VALUE, Float.MAX_VALUE,
-                1, 0, 0,
+                1000, 10, -1, Float.MAX_VALUE, Float.MAX_VALUE,
+                1, 0, false, 0,
                 1, 1, -1, -1, 1,
-                1000, 10, -1, -1, -1, -1, -1,
+                1000, 10, -1, -1, -1, -1, -1, -1,
                 1000, 10, 0, Float.MAX_VALUE
         );
     }

@@ -34,7 +34,8 @@ public class SoftBodyVehicle {
     public final BeamContainer normalBeams = new BeamContainer();
     public final CouplerContainer couplers = new CouplerContainer();
     public final HydroContainer hydros = new HydroContainer();
-    public final BeamContainer supportBeams = new BeamContainer();
+    /** Support beams do not honour dampCutoffHz, matching the documented BeamNG beam types. */
+    public final BeamContainer supportBeams = new BeamContainer(false);
     public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
     public final LBeamContainer lBeams = new LBeamContainer();
     public final AnisotropicBeamContainer anisotropicBeams = new AnisotropicBeamContainer();
@@ -371,6 +372,7 @@ public class SoftBodyVehicle {
     private void limitConstraintStiffnessAndDamping(float invDt, float safetyFraction) {
         DirectionalStabilityLimiter limiter =
                 new DirectionalStabilityLimiter(nodes.count, nodes.mass, invDt, safetyFraction);
+        float dt = 1.0f / invDt;
 
         int[] normalIds = addAxialConstraints(limiter, normalBeams, normalBeams.spring, normalBeams.damp, invDt);
         int[] supportIds = addAxialConstraints(limiter, supportBeams, supportBeams.spring, supportBeams.damp, invDt);
@@ -384,13 +386,13 @@ public class SoftBodyVehicle {
                     boundedBeams.limitDampRebound[i], boundedBeams.dampFast[i],
                     boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
             boundedIds[i] = addAxialConstraint(limiter, boundedBeams, i, stiffness,
-                    Math.min(damping, axialDampingCeiling(boundedBeams, i, invDt)));
+                    stabilityDamping(boundedBeams, i, damping, invDt, dt));
         }
 
         int[] lBeamIds = new int[lBeams.count];
         float[] lBeamDampingCeilings = new float[lBeams.count];
         for (int i = 0; i < lBeams.count; i++) {
-            lBeamIds[i] = addLBeamConstraint(limiter, i, invDt, lBeamDampingCeilings);
+            lBeamIds[i] = addLBeamConstraint(limiter, i, invDt, dt, lBeamDampingCeilings);
         }
 
         int[] anisotropicIds = new int[anisotropicBeams.count];
@@ -400,15 +402,15 @@ public class SoftBodyVehicle {
             float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
                     Utility.positive(anisotropicBeams.dampExpansion[i]));
             anisotropicIds[i] = addAxialConstraint(limiter, anisotropicBeams, i, stiffness,
-                    Math.min(damping, axialDampingCeiling(anisotropicBeams, i, invDt)));
+                    stabilityDamping(anisotropicBeams, i, damping, invDt, dt));
         }
 
         limiter.solve();
 
-        allocateAxialBeams(normalBeams, normalIds, limiter, invDt);
-        allocateAxialBeams(supportBeams, supportIds, limiter, invDt);
+        allocateAxialBeams(normalBeams, normalIds, limiter, invDt, dt);
+        allocateAxialBeams(supportBeams, supportIds, limiter, invDt, dt);
         for (int i = 0; i < boundedBeams.count; i++) {
-            float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt);
+            float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt, dt);
             float stiffness = Utility.positive(boundedBeams.spring[i])
                     + Utility.positive(boundedBeams.limitSpring[i]);
             float damping = Utility.maxPositive(
@@ -437,7 +439,7 @@ public class SoftBodyVehicle {
             lBeams.damp[i] = Math.min(lBeams.damp[i], ceilings.maxDamping());
         }
         for (int i = 0; i < anisotropicBeams.count; i++) {
-            float dampingCeiling = axialDampingCeiling(anisotropicBeams, i, invDt);
+            float dampingCeiling = axialDampingCeiling(anisotropicBeams, i, invDt, dt);
             float stiffness = Math.max(Utility.positive(anisotropicBeams.spring[i]),
                     Utility.positive(anisotropicBeams.springExpansion[i]));
             float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
@@ -453,12 +455,24 @@ public class SoftBodyVehicle {
         }
     }
 
+    /**
+     * Registers the damping the linear stability budget must see. A beam with an
+     * authored {@code dampCutoffHz} only lets the attenuated high-frequency share
+     * of its damping reach the fastest mode, so {@code damp * hfGain} is what can
+     * actually destabilise the step; the safety budget itself is unchanged.
+     */
+    private float stabilityDamping(BeamContainer beams, int i, float damping, float invDt, float dt) {
+        return Math.min(damping * beams.cutoffHighFrequencyGain(i, dt),
+                dampingBudget(beams, i, invDt));
+    }
+
     private int[] addAxialConstraints(DirectionalStabilityLimiter limiter, BeamContainer beams,
                                       float[] stiffness, float[] damping, float invDt) {
+        float dt = 1.0f / invDt;
         int[] ids = new int[beams.count];
         for (int i = 0; i < beams.count; i++) {
             ids[i] = addAxialConstraint(limiter, beams, i, stiffness[i],
-                    Math.min(damping[i], axialDampingCeiling(beams, i, invDt)));
+                    stabilityDamping(beams, i, damping[i], invDt, dt));
         }
         return ids;
     }
@@ -477,7 +491,7 @@ public class SoftBodyVehicle {
         return limiter.addTwoNode(n1, n2, dx / length, dy / length, dz / length, stiffness, damping);
     }
 
-    private int addLBeamConstraint(DirectionalStabilityLimiter limiter, int i, float invDt,
+    private int addLBeamConstraint(DirectionalStabilityLimiter limiter, int i, float invDt, float dt,
                                    float[] dampingCeilings) {
         int n1 = lBeams.node1[i];
         int n2 = lBeams.node2[i];
@@ -521,32 +535,50 @@ public class SoftBodyVehicle {
         double inverseGeneralizedMass = (g1x * g1x + g1y * g1y + g1z * g1z) / nodes.mass[n1]
                 + (g2x * g2x + g2y * g2y + g2z * g2z) / nodes.mass[n2]
                 + (g3x * g3x + g3y * g3y + g3z * g3z) / nodes.mass[n3];
-        dampingCeilings[i] = inverseGeneralizedMass > KINDA_SMALL_NUMBER
+        float budget = inverseGeneralizedMass > KINDA_SMALL_NUMBER
                 ? (float) ((1.0 / inverseGeneralizedMass) * invDt * 0.95)
                 : 0.0f;
+        float hfGain = lBeams.cutoffHighFrequencyGain(i, dt);
+        // The stored coefficient is the authored one; the ceiling it is allowed to
+        // reach scales with 1 / hfGain because the filter attenuates it in practice.
+        dampingCeilings[i] = budget / hfGain;
 
         return limiter.addThreeNode(
                 n1, g1x, g1y, g1z,
                 n2, g2x, g2y, g2z,
                 n3, g3x, g3y, g3z,
-                lBeams.spring[i], Math.min(lBeams.damp[i], dampingCeilings[i]));
+                lBeams.spring[i], Math.min(lBeams.damp[i] * hfGain, budget));
     }
 
     private void allocateAxialBeams(BeamContainer beams, int[] ids,
-                                    DirectionalStabilityLimiter limiter, float invDt) {
+                                    DirectionalStabilityLimiter limiter, float invDt, float dt) {
         for (int i = 0; i < beams.count; i++) {
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
-                    ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt));
+                    ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt, dt));
             beams.spring[i] = Math.min(beams.spring[i], ceilings.maxStiffness());
             beams.damp[i] = Math.min(beams.damp[i], ceilings.maxDamping());
         }
     }
 
-    private float axialDampingCeiling(BeamContainer beams, int i, float invDt) {
+    /**
+     * Unfiltered damping budget the semi-implicit Euler step tolerates for this
+     * beam's reduced mass; independent of {@code dampCutoffHz}.
+     */
+    private float dampingBudget(BeamContainer beams, int i, float invDt) {
         float m1 = nodes.mass[beams.node1[i]];
         float m2 = nodes.mass[beams.node2[i]];
         if (m1 <= KINDA_SMALL_NUMBER || m2 <= KINDA_SMALL_NUMBER) return 0.0f;
         return Utility.reducedMass(m1, m2) * invDt * 0.95f;
+    }
+
+    /**
+     * Ceiling for the <em>authored</em> damping coefficient. With a cutoff the
+     * high-frequency share reaching the fastest mode is only {@code hfGain} of it,
+     * so authored suspension damping may be that much larger before the same
+     * stability budget is exhausted.
+     */
+    private float axialDampingCeiling(BeamContainer beams, int i, float invDt, float dt) {
+        return dampingBudget(beams, i, invDt) / beams.cutoffHighFrequencyGain(i, dt);
     }
 
     /**

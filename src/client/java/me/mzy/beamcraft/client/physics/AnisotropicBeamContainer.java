@@ -8,6 +8,8 @@ public class AnisotropicBeamContainer extends BeamContainer {
     public float[] transitionZone;
 
     public AnisotropicBeamContainer() {
+        // BeamNG documents dampCutoffHz for normal, bounded and L-beams only.
+        super(false);
         springExpansion = new float[INIT_BEAM_CAP];
         dampExpansion = new float[INIT_BEAM_CAP];
         transitionZone = new float[INIT_BEAM_CAP];

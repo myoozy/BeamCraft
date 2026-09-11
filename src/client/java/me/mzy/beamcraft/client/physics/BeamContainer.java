@@ -7,6 +7,16 @@ import java.util.HashMap;
 public class BeamContainer {
     public static final int INIT_BEAM_CAP = 256;
 
+    /**
+     * Floor on the filter's high-frequency gain when it scales the stability
+     * ceiling, i.e. an authored {@code dampCutoffHz} may raise the damping ceiling
+     * by at most {@code 1 / 0.02} (50x). A very low cutoff legitimately removes
+     * nearly all high-frequency damping so the mathematical ceiling is unbounded
+     * there; this is a numerical guard against pathological authoring, not a
+     * physical limit.
+     */
+    static final float MIN_CUTOFF_HIGH_FREQUENCY_GAIN = 0.02f;
+
     // --- 梁类型枚举 ---
     public static final int BEAM_NORMAL = 0;
     public static final int BEAM_SUPPORT = 1;
@@ -51,8 +61,26 @@ public class BeamContainer {
     private int deformTriggerCount;
     public boolean[] disableTriangleBreaking;
     public int[] wheelId;
+    /** BeamNG {@code dampCutoffHz}; {@code <= 0} disables the filter (raw relative velocity). */
+    public float[] dampCutoffHz;
+    /** Persistent one-pole filter state: the low-passed axial relative velocity. */
+    public float[] dampFilterState;
+    /** Smoothing coefficient cached for the current sub-step dt. */
+    public float[] dampFilterAlpha;
+    private float dampFilterAlphaDt = -1.0f;
+    /**
+     * Whether this family honours {@code dampCutoffHz}. BeamNG documents the
+     * property for normal, bounded and L-beams only, so support and anisotropic
+     * beams keep their raw relative-velocity damping exactly as before.
+     */
+    private final boolean dampingCutoffSupported;
 
     public BeamContainer() {
+        this(true);
+    }
+
+    BeamContainer(boolean dampingCutoffSupported) {
+        this.dampingCutoffSupported = dampingCutoffSupported;
         node1 = new int[INIT_BEAM_CAP];
         node2 = new int[INIT_BEAM_CAP];
         restLength = new float[INIT_BEAM_CAP];
@@ -79,6 +107,9 @@ public class BeamContainer {
         assignedBreakGroups = new java.util.List[INIT_BEAM_CAP];
         assignedDeformGroups = new java.util.List[INIT_BEAM_CAP];
         wheelId = new int[INIT_BEAM_CAP];
+        dampCutoffHz = new float[INIT_BEAM_CAP];
+        dampFilterState = new float[INIT_BEAM_CAP];
+        dampFilterAlpha = new float[INIT_BEAM_CAP];
     }
 
     private void ensureCapacity() {
@@ -116,6 +147,9 @@ public class BeamContainer {
         deformTriggerIndices = Utility.expand(deformTriggerIndices, newSize);
         disableTriangleBreaking = Utility.expand(disableTriangleBreaking, newSize);
         wheelId = Utility.expand(wheelId, newSize);
+        dampCutoffHz = Utility.expand(dampCutoffHz, newSize);
+        dampFilterState = Utility.expand(dampFilterState, newSize);
+        dampFilterAlpha = Utility.expand(dampFilterAlpha, newSize);
     }
 
     protected int addBeamInternal(PhysicsSpecs.BeamSpec spec, int node1Idx, int node2Idx, float nodeDist) {
@@ -136,7 +170,12 @@ public class BeamContainer {
         this.node1[idx] = node1Idx;
         this.node2[idx] = node2Idx;
 
-        float targetLen = (nodeDist * spec.precomp()) + spec.precompRange();
+        // An authored precompressionRange (metric delta, including an explicit 0 or a
+        // negative value) replaces the beamPrecompression multiplier entirely; an
+        // unauthored one leaves the multiplier in effect.
+        float targetLen = spec.precompRangeDefined()
+                ? nodeDist + spec.precompRange()
+                : nodeDist * spec.precomp();
         this.targetRestLength[idx] = targetLen;
 
         if (spec.precompTime() > 0.0f) {
@@ -172,6 +211,12 @@ public class BeamContainer {
         this.disableTriangleBreaking[idx] = spec.disableTriangleBreaking();
         this.wheelId[idx] = -1;
 
+        this.dampCutoffHz[idx] = spec.dampCutoffHz();
+        this.dampFilterState[idx] = 0.0f;
+        this.dampFilterAlpha[idx] = dampingCutoffSupported && dampFilterAlphaDt > 0.0f
+                ? dampingCutoffAlpha(spec.dampCutoffHz(), dampFilterAlphaDt)
+                : 0.0f;
+
         count++;
         return idx;
     }
@@ -192,8 +237,67 @@ public class BeamContainer {
         deformTriggerCount = 0;
     }
 
+    /**
+     * Causal one-pole smoothing coefficient for {@code dampCutoffHz}.
+     *
+     * <p>The filter solves {@code dy/dt = (x - y) / tau} with
+     * {@code tau = 1 / (2 pi fc)}; its exact per-step solution is
+     * {@code y += alpha * (x - y)} with {@code alpha = 1 - exp(-2 pi fc dt)}.
+     * That makes it unconditionally stable for any dt and cutoff, unit DC gain
+     * (steady state is never attenuated), free of step overshoot, and timestep
+     * consistent: two steps of {@code dt} equal one step of {@code 2 dt}.</p>
+     */
+    static float dampingCutoffAlpha(float cutoffHz, float dt) {
+        if (!(cutoffHz > 0.0f) || !(dt > 0.0f)) return 0.0f;
+        return (float) Math.clamp(-Math.expm1(-2.0 * Math.PI * cutoffHz * dt), 0.0, 1.0);
+    }
+
+    /** True when beam {@code i} authored a positive {@code dampCutoffHz} this family honours. */
+    public boolean dampingCutoffEnabled(int i) {
+        return dampingCutoffSupported && dampCutoffHz[i] > 0.0f;
+    }
+
+    /** Recomputes the cached filter coefficients when the sub-step dt changes. */
+    void prepareDampingFilters(float dt) {
+        if (dt == dampFilterAlphaDt) return;
+        dampFilterAlphaDt = dt;
+        for (int i = 0; i < count; i++) {
+            dampFilterAlpha[i] = dampingCutoffAlpha(dampCutoffHz[i], dt);
+        }
+    }
+
+    /**
+     * Advances beam {@code i}'s damping filter by one sub-step and returns the
+     * velocity the damping force must use. Only call when
+     * {@link #dampingCutoffEnabled(int)}; disabled beams keep the raw velocity.
+     */
+    float filteredDampingVelocity(int i, float relVel) {
+        float alpha = dampFilterAlpha[i];
+        float filtered = dampFilterState[i] + alpha * (relVel - dampFilterState[i]);
+        dampFilterState[i] = filtered;
+        return filtered;
+    }
+
+    /**
+     * Steady-state gain the filter applies to the alternating (Nyquist) velocity
+     * the linear stability budget is built around, {@code alpha / (2 - alpha)}.
+     * Returns 1 when the filter is disabled, so cutoff-free beams keep today's
+     * stability accounting exactly.
+     */
+    public float cutoffHighFrequencyGain(int i, float dt) {
+        if (!dampingCutoffEnabled(i)) return 1.0f;
+        float alpha = dampingCutoffAlpha(dampCutoffHz[i], dt);
+        return Math.max(MIN_CUTOFF_HIGH_FREQUENCY_GAIN, alpha / (2.0f - alpha));
+    }
+
+    /** Clears the filter state so a reset cannot inject a startup transient. */
+    void resetDampingFilters() {
+        java.util.Arrays.fill(dampFilterState, 0, count, 0.0f);
+    }
+
     public void reset() {
         clearPendingBreaks();
+        resetDampingFilters();
         for (int i = 0; i < count; i++) {
             broken[i] = false;
             deformGroupTriggered[i] = false;

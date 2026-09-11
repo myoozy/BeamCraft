@@ -192,6 +192,21 @@ public class JBeamParser {
         return getFloatSafe(obj, key, schemaDefault, vars);
     }
 
+    /**
+     * Presence companion to {@link #getScopedBeamFloat} for properties where the
+     * value alone cannot express "unspecified". {@code precompressionRange} is the
+     * motivating case: it <em>overrides</em> {@code beamPrecompression} whenever it
+     * is authored, including an explicit {@code 0} or a negative delta, so an
+     * absent key keeps the active scope while an empty/null value cancels it and
+     * restores the schema default (undefined).
+     */
+    private static boolean getScopedBeamDefined(JsonObject obj, String key, boolean currentDefined) {
+        if (obj == null || !obj.has(key)) return currentDefined;
+        JsonElement element = obj.get(key);
+        if (element == null || element.isJsonNull()) return false;
+        return !(element.isJsonPrimitive() && element.getAsString().trim().isEmpty());
+    }
+
     public static String getStringSafe(JsonObject obj, String key, String defaultValue) {
         if (obj == null || !obj.has(key)) return defaultValue;
         JsonElement el = obj.get(key);
@@ -593,10 +608,15 @@ public class JBeamParser {
         JsonObject currentProperties = new JsonObject();
 
         float currentPrecomp = 1.0f, currentPrecompRange = 0.0f, currentPrecompTime = 0.0f;
+        // precompressionRange is only meaningful when authored: absent => use the
+        // beamPrecompression multiplier, authored (even 0 or negative) => override it.
+        boolean currentPrecompRangeDefined = false;
         // Official BeamNG normal/bounded beam defaults.
         float currentSpring = DEFAULT_BEAM_SPRING, currentDamp = DEFAULT_BEAM_DAMP;
         float currentDeform = DEFAULT_BEAM_DEFORM, currentStrength = DEFAULT_BEAM_STRENGTH;
         float currentDeformLimitStress = Float.MAX_VALUE;
+        // dampCutoffHz <= 0 disables the filter and keeps raw relative-velocity damping.
+        float currentDampCutoffHz = -1.0f;
 
         float currentShortBound = 1.0f, currentLongBound = 1.0f;
         float currentShortBoundRange = -1.0f, currentLongBoundRange = -1.0f;
@@ -609,6 +629,8 @@ public class JBeamParser {
         // Negative sentinels mean "unspecified"; the container substitutes the fallback.
         float currentDampVelSplit = -1.0f, currentDampFast = -1.0f;
         float currentDampRebound = -1.0f, currentDampReboundFast = -1.0f;
+        // beamDampVelocitySplitRebound falls back to beamDampVelocitySplit when unauthored.
+        float currentDampVelSplitRebound = -1.0f;
 
         float currentSpringExpansion = currentSpring, currentDampExpansion = currentDamp;
         float currentTransitionZone = 0.0f;
@@ -637,9 +659,11 @@ public class JBeamParser {
 
                 currentPrecomp = getScopedBeamFloat(modifier, "beamPrecompression", currentPrecomp, 1.0f, entry.variables);
                 currentPrecompRange = getScopedBeamFloat(modifier, "precompressionRange", currentPrecompRange, 0.0f, entry.variables);
+                currentPrecompRangeDefined = getScopedBeamDefined(modifier, "precompressionRange", currentPrecompRangeDefined);
                 currentPrecompTime = getScopedBeamFloat(modifier, "beamPrecompressionTime", currentPrecompTime, 0.0f, entry.variables);
                 currentSpring = getScopedBeamFloat(modifier, "beamSpring", currentSpring, DEFAULT_BEAM_SPRING, entry.variables);
                 currentDamp = getScopedBeamFloat(modifier, "beamDamp", currentDamp, DEFAULT_BEAM_DAMP, entry.variables);
+                currentDampCutoffHz = getScopedBeamFloat(modifier, "dampCutoffHz", currentDampCutoffHz, -1.0f, entry.variables);
                 currentDeform = getScopedBeamFloat(modifier, "beamDeform", currentDeform, DEFAULT_BEAM_DEFORM, entry.variables);
                 currentStrength = getScopedBeamFloat(modifier, "beamStrength", currentStrength, DEFAULT_BEAM_STRENGTH, entry.variables);
                 currentDeformLimitStress = getScopedBeamFloat(modifier, "deformLimitStress", currentDeformLimitStress, Float.MAX_VALUE, entry.variables);
@@ -654,6 +678,7 @@ public class JBeamParser {
                 currentLimitDampRebound = getScopedBeamFloat(modifier, "beamLimitDampRebound", currentLimitDampRebound, DEFAULT_BEAM_LIMIT_DAMP_REBOUND, entry.variables);
 
                 currentDampVelSplit = getScopedBeamFloat(modifier, "beamDampVelocitySplit", currentDampVelSplit, -1.0f, entry.variables);
+                currentDampVelSplitRebound = getScopedBeamFloat(modifier, "beamDampVelocitySplitRebound", currentDampVelSplitRebound, -1.0f, entry.variables);
                 currentDampFast = getScopedBeamFloat(modifier, "beamDampFast", currentDampFast, -1.0f, entry.variables);
                 currentDampRebound = getScopedBeamFloat(modifier, "beamDampRebound", currentDampRebound, -1.0f, entry.variables);
                 currentDampReboundFast = getScopedBeamFloat(modifier, "beamDampReboundFast", currentDampReboundFast, -1.0f, entry.variables);
@@ -686,12 +711,15 @@ public class JBeamParser {
                     float inlineDeform = currentDeform, inlineStrength = currentStrength;
                     float inlineDeformLimitStress = currentDeformLimitStress;
                     float inlinePrecomp = currentPrecomp, inlinePrecompRange = currentPrecompRange, inlinePrecompTime = currentPrecompTime;
+                    boolean inlinePrecompRangeDefined = currentPrecompRangeDefined;
+                    float inlineDampCutoffHz = currentDampCutoffHz;
                     float inlineShortBound = currentShortBound, inlineLongBound = currentLongBound;
                     float inlineShortBoundRange = currentShortBoundRange, inlineLongBoundRange = currentLongBoundRange;
                     float inlineBoundZone = currentBoundZone;
                     float inlineLimitS = currentLimitSpring, inlineLimitD = currentLimitDamp;
                     float inlineLimitDRebound = currentLimitDampRebound;
                     float inlineDampVelSplit = currentDampVelSplit, inlineDampFast = currentDampFast;
+                    float inlineDampVelSplitRebound = currentDampVelSplitRebound;
                     float inlineDampRebound = currentDampRebound, inlineDampReboundFast = currentDampReboundFast;
                     float inlineSpringExpansion = currentSpringExpansion, inlineDampExpansion = currentDampExpansion;
                     float inlineTransitionZone = currentTransitionZone;
@@ -710,11 +738,13 @@ public class JBeamParser {
 
                         inlineSpring = getScopedBeamFloat(inline, "beamSpring", inlineSpring, DEFAULT_BEAM_SPRING, entry.variables);
                         inlineDamp = getScopedBeamFloat(inline, "beamDamp", inlineDamp, DEFAULT_BEAM_DAMP, entry.variables);
+                        inlineDampCutoffHz = getScopedBeamFloat(inline, "dampCutoffHz", inlineDampCutoffHz, -1.0f, entry.variables);
                         inlineDeform = getScopedBeamFloat(inline, "beamDeform", inlineDeform, DEFAULT_BEAM_DEFORM, entry.variables);
                         inlineStrength = getScopedBeamFloat(inline, "beamStrength", inlineStrength, DEFAULT_BEAM_STRENGTH, entry.variables);
                         inlineDeformLimitStress = getScopedBeamFloat(inline, "deformLimitStress", inlineDeformLimitStress, Float.MAX_VALUE, entry.variables);
                         inlinePrecomp = getScopedBeamFloat(inline, "beamPrecompression", inlinePrecomp, 1.0f, entry.variables);
                         inlinePrecompRange = getScopedBeamFloat(inline, "precompressionRange", inlinePrecompRange, 0.0f, entry.variables);
+                        inlinePrecompRangeDefined = getScopedBeamDefined(inline, "precompressionRange", inlinePrecompRangeDefined);
                         inlinePrecompTime = getScopedBeamFloat(inline, "beamPrecompressionTime", inlinePrecompTime, 0.0f, entry.variables);
 
                         inlineShortBound = getScopedBeamFloat(inline, "beamShortBound", inlineShortBound, 1.0f, entry.variables);
@@ -727,6 +757,7 @@ public class JBeamParser {
                         inlineLimitDRebound = getScopedBeamFloat(inline, "beamLimitDampRebound", inlineLimitDRebound, DEFAULT_BEAM_LIMIT_DAMP_REBOUND, entry.variables);
 
                         inlineDampVelSplit = getScopedBeamFloat(inline, "beamDampVelocitySplit", inlineDampVelSplit, -1.0f, entry.variables);
+                        inlineDampVelSplitRebound = getScopedBeamFloat(inline, "beamDampVelocitySplitRebound", inlineDampVelSplitRebound, -1.0f, entry.variables);
                         inlineDampFast = getScopedBeamFloat(inline, "beamDampFast", inlineDampFast, -1.0f, entry.variables);
                         inlineDampRebound = getScopedBeamFloat(inline, "beamDampRebound", inlineDampRebound, -1.0f, entry.variables);
                         inlineDampReboundFast = getScopedBeamFloat(inline, "beamDampReboundFast", inlineDampReboundFast, -1.0f, entry.variables);
@@ -765,11 +796,11 @@ public class JBeamParser {
                             inlineType, id1, id2, inlineId3,
                             inlineDeformGroups, inlineDeformationTriggerRatio,
                             inlineBreakGroups, inlineBreakGroupType, inlineDisableTriangleBreaking,
-                            inlineSpring, inlineDamp, inlineDeform, inlineStrength,
-                            inlinePrecomp, inlinePrecompRange, inlinePrecompTime,
+                            inlineSpring, inlineDamp, inlineDampCutoffHz, inlineDeform, inlineStrength,
+                            inlinePrecomp, inlinePrecompRange, inlinePrecompRangeDefined, inlinePrecompTime,
                             inlineShortBound, inlineLongBound, inlineShortBoundRange, inlineLongBoundRange,
                             inlineBoundZone,
-                            inlineLimitS, inlineLimitD, inlineLimitDRebound, inlineDampVelSplit, inlineDampFast,
+                            inlineLimitS, inlineLimitD, inlineLimitDRebound, inlineDampVelSplit, inlineDampVelSplitRebound, inlineDampFast,
                             inlineDampRebound, inlineDampReboundFast, inlineSpringExpansion, inlineDampExpansion, inlineTransitionZone,
                             inlineDeformLimitStress
                     );

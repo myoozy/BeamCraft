@@ -130,10 +130,10 @@ class JBeamDeformGroupTest {
                 BeamContainer.BEAM_NORMAL, "a", "b", null,
                 deformGroups, triggerRatio,
                 List.of(), 0, false,
-                100.0f, 0.0f, Float.MAX_VALUE, strength,
-                1.0f, 0.0f, 0.0f,
+                100.0f, 0.0f, -1.0f, Float.MAX_VALUE, strength,
+                1.0f, 0.0f, false, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f, 1.0f,
-                100.0f, 0.0f, -1.0f, -1.0f, -1.0f,
+                100.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                 -1.0f, -1.0f, 100.0f, 0.0f, 0.0f,
                 Float.MAX_VALUE);
     }

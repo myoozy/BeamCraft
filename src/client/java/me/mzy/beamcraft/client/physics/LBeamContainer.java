@@ -35,7 +35,9 @@ public class LBeamContainer extends BeamContainer {
         double baseCos = numerator / denominator;
         baseCos = Math.clamp(baseCos, -1.0, 1.0);
 
-        double targetNode12Dist = (node12Dist * spec.precomp()) + spec.precompRange();
+        double targetNode12Dist = spec.precompRangeDefined()
+                ? node12Dist + spec.precompRange()
+                : node12Dist * spec.precomp();
         numerator = node13Dist * node13Dist + node23Dist * node23Dist - targetNode12Dist * targetNode12Dist;
         denominator = 2.0 * node13Dist * node23Dist;
         double targetCos = numerator / denominator;

@@ -61,10 +61,10 @@ class BeamBreakCommitTest {
                 BeamContainer.BEAM_NORMAL, node1, node2, null,
                 List.of(), Float.POSITIVE_INFINITY,
                 List.of("shared"), 0, false,
-                100.0f, 0.0f, Float.MAX_VALUE, strength,
-                0.5f, 0.0f, 0.0f,
+                100.0f, 0.0f, -1.0f, Float.MAX_VALUE, strength,
+                0.5f, 0.0f, false, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f, 1.0f,
-                0.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                0.0f, 0.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                 100.0f, 0.0f, 0.0f, Float.MAX_VALUE);
     }
 

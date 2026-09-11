@@ -152,11 +152,11 @@ class BoundedBeamBoundZoneTest {
                 BeamContainer.BEAM_BOUNDED, "a", "b", null,
                 List.of(), Float.POSITIVE_INFINITY,
                 List.of(), 0, false,
-                SPRING, damp, Float.MAX_VALUE, Float.MAX_VALUE,
-                1.0f, 0.0f, 0.0f,
+                SPRING, damp, -1.0f, Float.MAX_VALUE, Float.MAX_VALUE,
+                1.0f, 0.0f, false, 0.0f,
                 shortBound, longBound, shortBoundRange, longBoundRange, boundZone,
                 limitSpring, limitDamp, limitDampRebound,
-                -1.0f, -1.0f, -1.0f, -1.0f,
+                -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
                 0.0f, 0.0f, 0.0f, Float.MAX_VALUE));
 
         // The beam's rest length is the add-time separation of 1 m; move the nodes

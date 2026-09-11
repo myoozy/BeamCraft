@@ -177,12 +177,12 @@ public final class JBeamCameraParser {
                 BeamContainer.BEAM_NORMAL, cameraNode, anchor, null,
                 List.of(), Float.POSITIVE_INFINITY,
                 List.of(), 0, false,
-                spring, damp, deform, strength,
-                1.0f, 0.0f, 0.0f,
+                spring, damp, -1.0f, deform, strength,
+                1.0f, 0.0f, false, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f,
                 1.0f,
                 spring, damp, -1.0f, -1.0f, -1.0f,
-                -1.0f, -1.0f, spring, damp, 0.0f,
+                -1.0f, -1.0f, -1.0f, spring, damp, 0.0f,
                 PhysicsWorld.KINDA_BIG_NUMBER
         );
     }

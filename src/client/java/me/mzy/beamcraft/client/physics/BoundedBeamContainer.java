@@ -15,7 +15,8 @@ public class BoundedBeamContainer extends BeamContainer {
     public float[] limitSpring;     // 极限反弹力
     public float[] limitDamp;       // 极限阻尼（长度收缩方向）
     public float[] limitDampRebound; // 极限回弹阻尼（长度增长方向）
-    public float[] dampVelocitySplit; // 速度分界点
+    public float[] dampVelocitySplit; // 速度分界点（压缩方向，也是回弹方向的回退值）
+    public float[] dampVelocitySplitRebound; // 回弹（伸长）方向的速度分界点覆盖值
     public float[] dampFast;        // 高速阻尼
     public float[] dampRebound;     // 回弹阻尼
     public float[] dampReboundFast; // 高速回弹阻尼
@@ -31,6 +32,7 @@ public class BoundedBeamContainer extends BeamContainer {
         limitDamp = new float[INIT_BEAM_CAP];
         limitDampRebound = new float[INIT_BEAM_CAP];
         dampVelocitySplit = new float[INIT_BEAM_CAP];
+        dampVelocitySplitRebound = new float[INIT_BEAM_CAP];
         dampFast = new float[INIT_BEAM_CAP];
         dampRebound = new float[INIT_BEAM_CAP];
         dampReboundFast = new float[INIT_BEAM_CAP];
@@ -48,6 +50,7 @@ public class BoundedBeamContainer extends BeamContainer {
         limitDamp = Utility.expand(limitDamp, newSize);
         limitDampRebound = Utility.expand(limitDampRebound, newSize);
         dampVelocitySplit = Utility.expand(dampVelocitySplit, newSize);
+        dampVelocitySplitRebound = Utility.expand(dampVelocitySplitRebound, newSize);
         dampFast = Utility.expand(dampFast, newSize);
         dampRebound = Utility.expand(dampRebound, newSize);
         dampReboundFast = Utility.expand(dampReboundFast, newSize);
@@ -56,12 +59,17 @@ public class BoundedBeamContainer extends BeamContainer {
     /**
      * 添加限界梁（包含所有特有参数）。
      * @param inDampVelSplit   速度分界点，<0 时使用 Float.MAX_VALUE（表示不启用高速阻尼）
+     * @param inDampVelSplitRebound 回弹方向的速度分界点，<0 时回退至 inDampVelSplit
      * @param inDampFast       高速阻尼，<0 时回退至普通阻尼
      * @param inDampRebound     回弹阻尼，<0 时回退至普通阻尼
      * @param inDampReboundFast 高速回弹阻尼，<0 时回退至 inDampRebound
      */
     public int addBeam(PhysicsSpecs.BeamSpec spec, int node1Idx, int node2Idx, float nodeDist) {
         float finalVelSplit = spec.dampVelSplit() < 0.0f ? Float.MAX_VALUE : spec.dampVelSplit();
+        // beamDampVelocitySplitRebound only replaces the split while the beam lengthens;
+        // compression always uses the common beamDampVelocitySplit.
+        float finalVelSplitRebound = spec.dampVelSplitRebound() < 0.0f
+                ? finalVelSplit : spec.dampVelSplitRebound();
         // beamLimitDampRebound is unspecified by default and falls back to beamLimitDamp.
         float finalLimitRebound = spec.limitDampRebound() < 0.0f
                 ? spec.limitDamp() : spec.limitDampRebound();
@@ -80,6 +88,7 @@ public class BoundedBeamContainer extends BeamContainer {
         limitDamp[idx] = spec.limitDamp();
         limitDampRebound[idx] = finalLimitRebound;
         dampVelocitySplit[idx] = finalVelSplit;
+        dampVelocitySplitRebound[idx] = finalVelSplitRebound;
         dampFast[idx] = finalFast;
         dampRebound[idx] = finalRebound;
         dampReboundFast[idx] = finalReboundFast;
