@@ -340,8 +340,8 @@ public class JBeamAssembler {
                             Map<String, Double> vars = globalVariables;
 
                             // 1. 提取 nodeRotate (按照标准顺序首先生效旋转)
-                            if (mod.has("nodeRotate")) {
-                                JsonObject nr = mod.getAsJsonObject("nodeRotate");
+                            JsonObject nr = objectMember(mod, "nodeRotate");
+                            if (nr != null) {
                                 Float rx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "x", "0"), vars);
                                 Float ry = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "y", "0"), vars);
                                 Float rz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "z", "0"), vars);
@@ -351,8 +351,8 @@ public class JBeamAssembler {
                             }
 
                             // 2. 提取 nodeOffset (累加至对称镜像平移层)
-                            if (mod.has("nodeOffset")) {
-                                JsonObject no = mod.getAsJsonObject("nodeOffset");
+                            JsonObject no = objectMember(mod, "nodeOffset");
+                            if (no != null) {
                                 Float ox = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), vars);
                                 Float oy = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), vars);
                                 Float oz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), vars);
@@ -362,8 +362,8 @@ public class JBeamAssembler {
                             }
 
                             // 3. 提取 nodeMove (累加至绝对方向平移层)
-                            if (mod.has("nodeMove")) {
-                                JsonObject nm = mod.getAsJsonObject("nodeMove");
+                            JsonObject nm = objectMember(mod, "nodeMove");
+                            if (nm != null) {
                                 Float mx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "x", "0"), vars);
                                 Float my = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "y", "0"), vars);
                                 Float mz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "z", "0"), vars);
@@ -379,5 +379,15 @@ public class JBeamAssembler {
                 }
             }
         }
+    }
+
+    /**
+     * BeamNG JBeam files sometimes use an empty string to mean that an optional
+     * slot transform is absent. Only object-valued transforms have x/y/z
+     * components; scalar sentinel values must therefore be ignored.
+     */
+    private static JsonObject objectMember(JsonObject parent, String memberName) {
+        JsonElement value = parent.get(memberName);
+        return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
     }
 }

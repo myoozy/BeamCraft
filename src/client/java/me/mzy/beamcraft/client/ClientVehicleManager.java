@@ -31,6 +31,7 @@ public final class ClientVehicleManager {
     private static float[] boundsScratch = new float[NodeContainer.INIT_NODE_CAP];
 
     private static final Map<Integer, SoftBodyVehicle> VEHICLE_MAP = new HashMap<>();
+    private static final VehicleLoadFailureCache LOAD_FAILURES = new VehicleLoadFailureCache();
 
     // Reused for every vehicle because each upload is completed before the next
     // vehicle overwrites these interpolation arrays.
@@ -54,10 +55,15 @@ public final class ClientVehicleManager {
 
             int entityId = vehicleEntity.getId();
             SoftBodyVehicle existing = VEHICLE_MAP.get(entityId);
-            if (existing == null) {
-                createVehicle(client, vehicleEntity);
-            } else {
+            LOAD_FAILURES.removeStale(entityId, vehicleEntity.getUuid());
+            if (existing != null) {
                 updateEntityBounds(existing);
+            } else if (LOAD_FAILURES.shouldAttempt(
+                    entityId,
+                    vehicleEntity.getUuid(),
+                    vehicleEntity.getRootPartName(),
+                    vehicleEntity.getPcFileName())) {
+                createVehicle(client, vehicleEntity);
             }
         }
 
@@ -101,6 +107,11 @@ public final class ClientVehicleManager {
         if (!assembled) {
             DaeMeshLoader.releaseVehicleModels(rootPart);
             MaterialLibrary.releaseMaterials(rootPart);
+            LOAD_FAILURES.recordFailure(
+                    vehicleEntity.getId(),
+                    vehicleEntity.getUuid(),
+                    rootPart,
+                    vehicleEntity.getPcFileName());
             System.err.println("Vehicle assembly failed for entity " + vehicleEntity.getId());
             return;
         }
@@ -109,6 +120,7 @@ public final class ClientVehicleManager {
         softBody.nodes.rotateNodes(playerYaw, 0, 0);
         BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
         VEHICLE_MAP.put(vehicleEntity.getId(), softBody);
+        LOAD_FAILURES.recordSuccess(vehicleEntity.getId());
     }
 
     private static void updateEntityBounds(SoftBodyVehicle vehicle) {
@@ -222,6 +234,7 @@ public final class ClientVehicleManager {
     }
 
     private static void clearVehicles() {
+        LOAD_FAILURES.clear();
         if (VEHICLE_MAP.isEmpty()) {
             return;
         }
