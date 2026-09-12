@@ -391,7 +391,18 @@ public class SoftBodyVehicle {
         adaptiveDampers.applyDefaultModes();
     }
 
-    private void limitConstraintStiffnessAndDamping(float invDt, float safetyFraction) {
+    /**
+     * A limiter with every constraint family registered, plus the constraint id each
+     * beam index maps to. {@link #limitConstraintStiffnessAndDamping} solves it and
+     * writes the result back; the budget diagnostic solves it and throws it away.
+     */
+    private record StabilityRegistration(
+            DirectionalStabilityLimiter limiter,
+            int[] normalIds, int[] supportIds, int[] boundedIds,
+            int[] lBeamIds, float[] lBeamDampingCeilings, int[] anisotropicIds) {
+    }
+
+    private StabilityRegistration registerStabilityConstraints(float invDt, float safetyFraction) {
         DirectionalStabilityLimiter limiter =
                 new DirectionalStabilityLimiter(nodes.count, nodes.mass, invDt, safetyFraction);
         float dt = 1.0f / invDt;
@@ -429,10 +440,45 @@ public class SoftBodyVehicle {
                     stabilityDamping(anisotropicBeams, i, damping, invDt, dt));
         }
 
+        return new StabilityRegistration(limiter, normalIds, supportIds, boundedIds,
+                lBeamIds, lBeamDampingCeilings, anisotropicIds);
+    }
+
+    /**
+     * Diagnostic only: re-registers and re-solves the stability limiter, then
+     * reports how the budget at {@code node} is distributed across its constraints.
+     * Writes nothing back to any container, so it is safe to call after assembly.
+     *
+     * @param familyOffset constraint id of the first bounded beam, which the caller
+     *                     derives from the container counts; see
+     *                     {@link #boundedConstraintOffset()}.
+     */
+    List<DirectionalStabilityLimiter.NodePressure> debugBudgetPressureAt(
+            int node, float invDt, float safetyFraction) {
+        StabilityRegistration registration = registerStabilityConstraints(invDt, safetyFraction);
+        registration.limiter().solve();
+        return registration.limiter().pressure(node);
+    }
+
+    /**
+     * Constraint id of the first bounded beam under the registration order used by
+     * {@link #registerStabilityConstraints}; lets a diagnostic label the ids it gets
+     * back from {@link #debugBudgetPressureAt}.
+     */
+    int boundedConstraintOffset() {
+        return normalBeams.count + supportBeams.count;
+    }
+
+    private void limitConstraintStiffnessAndDamping(float invDt, float safetyFraction) {
+        StabilityRegistration registration = registerStabilityConstraints(invDt, safetyFraction);
+        DirectionalStabilityLimiter limiter = registration.limiter();
+        float dt = 1.0f / invDt;
+        int[] boundedIds = registration.boundedIds();
+
         limiter.solve();
 
-        allocateAxialBeams(normalBeams, normalIds, limiter, invDt, dt);
-        allocateAxialBeams(supportBeams, supportIds, limiter, invDt, dt);
+        allocateAxialBeams(normalBeams, registration.normalIds(), limiter, invDt, dt);
+        allocateAxialBeams(supportBeams, registration.supportIds(), limiter, invDt, dt);
         for (int i = 0; i < boundedBeams.count; i++) {
             float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt, dt);
             float stiffness = Math.max(Utility.positive(boundedBeams.spring[i]),
@@ -462,7 +508,8 @@ public class SoftBodyVehicle {
         }
         for (int i = 0; i < lBeams.count; i++) {
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
-                    lBeamIds[i], lBeams.spring[i], lBeams.damp[i], lBeamDampingCeilings[i]);
+                    registration.lBeamIds()[i], lBeams.spring[i], lBeams.damp[i],
+                    registration.lBeamDampingCeilings()[i]);
             lBeams.spring[i] = Math.min(lBeams.spring[i], ceilings.maxStiffness());
             lBeams.damp[i] = Math.min(lBeams.damp[i], ceilings.maxDamping());
         }
@@ -473,7 +520,7 @@ public class SoftBodyVehicle {
             float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
                     Utility.positive(anisotropicBeams.dampExpansion[i]));
             DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
-                    anisotropicIds[i], stiffness, damping, dampingCeiling);
+                    registration.anisotropicIds()[i], stiffness, damping, dampingCeiling);
             anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], ceilings.maxStiffness());
             anisotropicBeams.springExpansion[i] = Math.min(
                     anisotropicBeams.springExpansion[i], ceilings.maxStiffness());
@@ -591,6 +638,15 @@ public class SoftBodyVehicle {
     /**
      * Unfiltered damping budget the semi-implicit Euler step tolerates for this
      * beam's reduced mass; independent of {@code dampCutoffHz}.
+     *
+     * <p>The factor stays below one on purpose. For a stiffness-free beam the
+     * semi-implicit update is {@code v *= 1 - c dt / mu}, which cancels the
+     * relative velocity within the sub-step exactly at {@code c dt / mu == 1} and
+     * starts <em>reversing</em> it past that point. A continuous linear damper
+     * decays as {@code v0 e^(-ct/mu)} and never crosses zero, so staying under one
+     * is what keeps the discrete damper from manufacturing a sign flip the
+     * physics cannot produce. It also leaves the hard stability edge
+     * ({@code c dt / mu == 2}) a 2.1x margin.
      */
     private float dampingBudget(BeamContainer beams, int i, float invDt) {
         float m1 = nodes.mass[beams.node1[i]];
