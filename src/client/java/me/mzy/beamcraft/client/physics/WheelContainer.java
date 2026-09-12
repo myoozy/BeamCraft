@@ -407,8 +407,11 @@ public class WheelContainer {
             int tOutCur = tireOuterNodes[baseOffset + i], tOutNext = tireOuterNodes[baseOffset + next];
 
             // 侧壁面：内侧环带 (Hub Inner -> Tire Inner)
-            addTriangle(hInCur, hInNext, tInNext, partId, COLLISION);
-            addTriangle(hInCur, tInNext, tInCur, partId, COLLISION);
+            // Keep BeamNG's tIn_i -> hIn_{i+1} diagonal. After the two rings were
+            // staggered by half a ray, the old opposite diagonal no longer had a
+            // matching sidewall beam and let pressure shear the tread cyclically.
+            addTriangle(tInCur, hInCur, hInNext, partId, COLLISION);
+            addTriangle(tInCur, hInNext, tInNext, partId, COLLISION);
 
             // 侧壁面：外侧环带 (Hub Outer -> Tire Outer)
             addTriangle(hOutCur, tOutCur, tOutNext, partId, COLLISION);
@@ -419,8 +422,10 @@ public class WheelContainer {
             addTriangle(tInCur, tOutNext, tOutCur, partId, COLLISION);
 
             // 轮胎与轮辋接触面（纯粹用于闭合散度体积，绝对关闭碰撞）
-            addTriangle(hInCur, hOutNext, hInNext, partId, false);
-            addTriangle(hInCur, hOutCur, hOutNext, partId, false);
+            // Use the same hOut_i -> hIn_{i+1} diagonal as hubTread. The former
+            // triangulation was left over from the aligned-ring topology.
+            addTriangle(hOutCur, hInNext, hInCur, partId, false);
+            addTriangle(hOutCur, hOutNext, hInNext, partId, false);
 
             // 胎面 加强筋 (i 连 i+2)
             int next2 = (i + 2) % rays;
