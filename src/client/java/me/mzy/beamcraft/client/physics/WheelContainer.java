@@ -79,41 +79,6 @@ public class WheelContainer {
     //     undefined nodeCoupling falls back to the inner axle node; an undefined nodeArm
     //     means no explicit braking reaction (the load is carried structurally).
     // ================================================================
-    /**
-     * Whether a drive torque also gets an explicit per-wheel chassis reaction. On,
-     * because BeamNG applies it: {@code torqueCoupling}/{@code torqueArm}/{@code torqueArm2}
-     * are defined by its docs and reach its wheel object, alongside the torsion
-     * reactor's own reaction.
-     *
-     * <p>It is a probe rather than a tuning knob. The HUD pitch readout puts the stack
-     * about 3.7x over BeamNG's (acceleration +2.5 deg against +1.7, falling to +1.4 with
-     * this path alone disabled, +1.3 with the reactor alone disabled), but that is a
-     * symptom rather than the fault: with <em>every</em> reaction path off the
-     * acceleration pitch collapses to about zero, so the chassis is seeing almost none
-     * of the pitch moment a traction force at the contact patch should produce. The
-     * reaction paths have been standing in for that missing moment, which is why they
-     * had to be over-strong to land anywhere near BeamNG's numbers — and why removing
-     * the stiffness limiter and raising the rate never changed anything, pitch being a
-     * question of where the forces act rather than of stiffness.
-     *
-     * <p>The real fault is therefore in how a contact force reaches the body, not here.
-     * Keep this on and fix that; these switches exist to separate the two.
-     */
-    public static boolean DRIVE_REACTION_ENABLED = true;
-
-    /**
-     * A/B switch for the braking counter-torque, the third of the reaction probes.
-     *
-     * <p>With both drive paths off the acceleration pitch collapses to about zero,
-     * which says the chassis sees almost none of the pitch moment a traction force at
-     * the contact patch should produce. The braking side could not be read the same way
-     * because this path was still active, so turning it off completes the picture: a
-     * braking pitch that also collapses to about zero confirms that no contact force is
-     * producing a body pitch moment, and that every reading so far has come from the
-     * reaction paths compensating for it.
-     */
-    public static boolean BRAKE_REACTION_ENABLED = true;
-
     public int[] torqueCouplingNode = newReactionNodeArray();
     public int[] torqueArmNode = newReactionNodeArray();
     public int[] torqueArm2Node = newReactionNodeArray();
@@ -927,7 +892,6 @@ public class WheelContainer {
      * torque was applied (e.g. neutral), so nothing is generated here either.
      */
     public void applyDriveReaction(int wheelIdx, float torque) {
-        if (!DRIVE_REACTION_ENABLED) return;
         if (wheelIdx < 0 || wheelIdx >= count) return;
         int torqueCoupling = torqueCouplingNode[wheelIdx];
         int torqueArm = torqueArmNode[wheelIdx];
@@ -945,7 +909,6 @@ public class WheelContainer {
      * through the hub/suspension beams, exactly as before this feature existed.
      */
     public void applyBrakeReaction(int wheelIdx, float appliedWheelTorque) {
-        if (!BRAKE_REACTION_ENABLED) return;
         if (wheelIdx < 0 || wheelIdx >= count) return;
         int nodeArm = nodeArmNode[wheelIdx];
         if (nodeArm < 0) return;

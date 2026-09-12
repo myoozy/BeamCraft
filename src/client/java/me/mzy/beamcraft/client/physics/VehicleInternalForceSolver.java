@@ -468,24 +468,17 @@ public final class VehicleInternalForceSolver {
 
             float limitSpring = boundedBeams.limitSpring[i];
 
-            // Treat spring as the local tangent stiffness. Across boundZone it
-            // changes linearly from beamSpring to beamLimitSpring; integrating that
-            // tangent produces a continuous force curve without the old quadratic
-            // add-on reaching 2 * beamLimitSpring just before the end of the zone.
-            // Beyond the zone only the limit stiffness remains active. A non-positive
-            // boundZone switches tangent stiffness immediately while retaining force
-            // continuity at the boundary.
+            // BeamNG documents boundZone as the distance over which the ordinary
+            // beam properties progressively change to the limit properties. Blend
+            // the spring coefficient itself, then evaluate the beam force with that
+            // effective coefficient. Do not integrate the blend as a tangent
+            // stiffness: doing so leaves a zero-base bump stop at only half its
+            // authored force when the full limit properties should already apply.
             float penetration = 0.0f;
-            float boundary = restL;
-            float boundDirection = 0.0f;
             if (dist < shortBoundary) {
                 penetration = shortBoundary - dist;
-                boundary = shortBoundary;
-                boundDirection = -1.0f;
             } else if (dist > longBoundary) {
                 penetration = dist - longBoundary;
-                boundary = longBoundary;
-                boundDirection = 1.0f;
             }
 
             float boundZone = boundedBeams.boundZone[i];
@@ -493,23 +486,10 @@ public final class VehicleInternalForceSolver {
             if (penetration > 0.0f) {
                 limitBlend = boundZone > 0.0f ? Math.min(1.0f, penetration / boundZone) : 1.0f;
 
-                float boundaryForce = activeSpring * (boundary - restL);
-                if (boundZone <= 0.0f) {
-                    springForce = boundaryForce
-                            + boundDirection * limitSpring * penetration;
-                    plasticStiffness = limitSpring;
-                } else if (penetration < boundZone) {
-                    float stiffnessDelta = limitSpring - activeSpring;
-                    float forcePastBoundary = activeSpring * penetration
-                            + 0.5f * stiffnessDelta * penetration * limitBlend;
-                    springForce = boundaryForce + boundDirection * forcePastBoundary;
-                    plasticStiffness = activeSpring + stiffnessDelta * limitBlend;
-                } else {
-                    float transitionForce = 0.5f * (activeSpring + limitSpring) * boundZone;
-                    springForce = boundaryForce + boundDirection *
-                            (transitionForce + limitSpring * (penetration - boundZone));
-                    plasticStiffness = limitSpring;
-                }
+                float effectiveSpring = activeSpring
+                        + (limitSpring - activeSpring) * limitBlend;
+                springForce = effectiveSpring * (dist - restL);
+                plasticStiffness = effectiveSpring;
 
                 // beamLimitDampRebound defaults to beamLimitDamp; when authored it
                 // selects the limit damping by axial velocity sign and blends from

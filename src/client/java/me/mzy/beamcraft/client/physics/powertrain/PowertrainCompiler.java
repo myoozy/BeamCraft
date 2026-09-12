@@ -263,10 +263,12 @@ final class PowertrainCompiler {
         collectSplitBuilds(vehicle, specs, topology, clutchlike, gearboxDevice,
                 rangeBoxDevice, splitShafts, visiting);
         Arrays.fill(visiting, false);
+        List<ReactionTermBuild> initialReaction = List.of(
+                new ReactionTermBuild(-1, initialGain, initialFlags));
         for (int i = 0; i < topology.childCount[clutchlike]; i++) {
             collectReactors(vehicle, specs, topology,
                     topology.children[topology.childStart[clutchlike] + i],
-                    1.0f, reactors, visiting);
+                    initialReaction, gearboxDevice, rangeBoxDevice, reactors, visiting);
         }
 
         float maxTorque = 0.0f;
@@ -393,30 +395,65 @@ final class PowertrainCompiler {
         visiting[device] = false;
     }
 
-    /** Retains the existing body torque-reaction metadata independently of domain paths. */
+    /**
+     * Compiles each reactor's real branch torque.  A split shaft's primary output is
+     * {@code input * gearRatio - splitTorque}; its secondary output is exactly
+     * {@code splitTorque}.  Keeping that as a short linear expression avoids copying the
+     * complete upstream torque into every AWD branch and also composes through nested splits.
+     */
     private static void collectReactors(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
                                         PowertrainTopologyContainer topology, int device,
-                                        float incomingGain, List<ReactorBuild> reactors,
+                                        List<ReactionTermBuild> incomingTerms,
+                                        int gearboxDevice, int rangeBoxDevice,
+                                        List<ReactorBuild> reactors,
                                         boolean[] visiting) {
         if (visiting[device] || topology.deviceType[device] == TYPE_UNSUPPORTED) return;
         visiting[device] = true;
-        float gain = incomingGain * topology.deviceRatio[device];
+        byte addedFlags = 0;
+        if (device == gearboxDevice) addedFlags |= DrivenWheelPathContainer.FLAG_GEARBOX;
+        if (device == rangeBoxDevice) addedFlags |= DrivenWheelPathContainer.FLAG_RANGE_BOX;
+        List<ReactionTermBuild> terms = transformReactionTerms(
+                incomingTerms, topology.deviceRatio[device], addedFlags);
         DeviceSpec spec = specs.get(device);
         if (spec instanceof TorsionReactorSpec reactorSpec) {
             List<Integer> nodes = resolveNodes(vehicle, reactorSpec.torqueReactionNodes());
-            if (nodes.size() >= 3) reactors.add(new ReactorBuild(gain, nodes));
+            if (nodes.size() >= 3) reactors.add(new ReactorBuild(terms, nodes));
         }
         int count = topology.childCount[device];
         for (int i = 0; i < count; i++) {
             int child = topology.children[topology.childStart[device] + i];
             float split = 1.0f;
-            if (topology.deviceType[device] == TYPE_DIFFERENTIAL) {
+            List<ReactionTermBuild> childTerms = terms;
+            if (topology.deviceType[device] == TYPE_SPLIT_SHAFT) {
+                boolean primary = topology.parentPort[child]
+                        == ((SplitShaftSpec) spec).primaryOutputID();
+                if (primary) {
+                    childTerms = new ArrayList<>(terms);
+                    childTerms.add(new ReactionTermBuild(device, -1.0f, (byte) 0));
+                } else {
+                    childTerms = List.of(new ReactionTermBuild(device, 1.0f, (byte) 0));
+                }
+            } else if (topology.deviceType[device] == TYPE_DIFFERENTIAL) {
                 float configured = Math.clamp((float) ((DifferentialSpec) spec).diffTorqueSplit(), 0.0f, 1.0f);
                 split = topology.parentPort[child] <= 1 ? configured : 1.0f - configured;
+            } else if (count > 1) {
+                split = 1.0f / count;
             }
-            collectReactors(vehicle, specs, topology, child, gain * split, reactors, visiting);
+            if (split != 1.0f) childTerms = transformReactionTerms(childTerms, split, (byte) 0);
+            collectReactors(vehicle, specs, topology, child, childTerms,
+                    gearboxDevice, rangeBoxDevice, reactors, visiting);
         }
         visiting[device] = false;
+    }
+
+    private static List<ReactionTermBuild> transformReactionTerms(
+            List<ReactionTermBuild> source, float gain, byte addedFlags) {
+        List<ReactionTermBuild> result = new ArrayList<>(source.size());
+        for (ReactionTermBuild term : source) {
+            result.add(new ReactionTermBuild(term.splitDevice, term.gain * gain,
+                    (byte) (term.flags | addedFlags)));
+        }
+        return result;
     }
 
     private static void compileUnits(SoftBodyVehicle vehicle, PowertrainData data, List<UnitBuild> units) {
@@ -435,7 +472,7 @@ final class PowertrainCompiler {
         PowertrainTopologyContainer topology = data.topology;
 
         int n = units.size();
-        int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, gearSlots = 0;
+        int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, reactorTerms = 0, gearSlots = 0;
         int splitCount = 0, splitPathCount = 0, turboPressurePoints = 0, turboEnginePoints = 0;
         int superchargerControllerPoints = 0;
         for (UnitBuild unit : units) {
@@ -443,7 +480,10 @@ final class PowertrainCompiler {
             paths += unit.paths.size();
             reactionTotal += unit.reactions.size();
             reactors += unit.reactors.size();
-            for (ReactorBuild reactor : unit.reactors) reactionTotal += reactor.nodes.size();
+            for (ReactorBuild reactor : unit.reactors) {
+                reactionTotal += reactor.nodes.size();
+                reactorTerms += reactor.terms.size();
+            }
             gearSlots += gearRatiosOf(unit).size();
             splitCount += unit.splitShafts.size();
             for (SplitBuild split : unit.splitShafts) {
@@ -465,12 +505,12 @@ final class PowertrainCompiler {
         torqueConverters.allocate(n);
         dctGearboxes.allocate(n);
         wheelPaths.allocate(n, paths);
-        reactions.allocate(n, reactionTotal, reactors);
+        reactions.allocate(n, reactionTotal, reactors, reactorTerms);
         gearboxes.allocate(n, Math.max(1, gearSlots));
         rangeBoxes.allocate(n);
         splitShafts.allocate(n, splitCount, splitPathCount);
 
-        int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, gearCursor = 0;
+        int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, reactorTermCursor = 0, gearCursor = 0;
         int splitCursor = 0, splitPathCursor = 0, turboPressureCursor = 0, turboEngineCursor = 0;
         int superchargerControllerCursor = 0;
         for (int i = 0; i < n; i++) {
@@ -674,8 +714,10 @@ final class PowertrainCompiler {
 
             splitShafts.unitStart[i] = splitCursor;
             splitShafts.unitCount[i] = (short) unit.splitShafts.size();
+            Map<Integer, Integer> splitIndexByDevice = new HashMap<>();
             for (SplitBuild splitBuild : unit.splitShafts) {
                 int splitIndex = splitCursor++;
+                splitIndexByDevice.put(splitBuild.device, splitIndex);
                 SplitShaftSpec splitShaft = splitBuild.spec;
                 splitShafts.unit[splitIndex] = i;
                 splitShafts.device[splitIndex] = splitBuild.device;
@@ -733,10 +775,23 @@ final class PowertrainCompiler {
             for (int node : unit.reactions) reactions.reactionNodes[reactionCursor++] = node;
             reactions.reactorStart[i] = reactorCursor; reactions.reactorCount[i] = (short) unit.reactors.size();
             for (ReactorBuild reactor : unit.reactors) {
-                reactions.reactorGain[reactorCursor] = reactor.gain;
                 reactions.reactorNodeStart[reactorCursor] = reactionCursor;
                 reactions.reactorNodeCount[reactorCursor] = (byte) reactor.nodes.size();
                 for (int node : reactor.nodes) reactions.reactionNodes[reactionCursor++] = node;
+                reactions.reactorTermStart[reactorCursor] = reactorTermCursor;
+                reactions.reactorTermCount[reactorCursor] = (short) reactor.terms.size();
+                for (ReactionTermBuild term : reactor.terms) {
+                    Integer sourceSplit = term.splitDevice < 0
+                            ? null : splitIndexByDevice.get(term.splitDevice);
+                    if (term.splitDevice >= 0 && sourceSplit == null) {
+                        throw new IllegalStateException("Missing compiled split shaft for device "
+                                + topology.deviceName[term.splitDevice]);
+                    }
+                    reactions.termSplit[reactorTermCursor] = sourceSplit == null ? -1 : sourceSplit;
+                    reactions.termGain[reactorTermCursor] = term.gain;
+                    reactions.termFlags[reactorTermCursor] = term.flags;
+                    reactorTermCursor++;
+                }
                 reactorCursor++;
             }
         }
@@ -934,7 +989,10 @@ final class PowertrainCompiler {
     private record PathBuild(int wheel, float gain, byte flags) {
     }
 
-    private record ReactorBuild(float gain, List<Integer> nodes) {
+    private record ReactionTermBuild(int splitDevice, float gain, byte flags) {
+    }
+
+    private record ReactorBuild(List<ReactionTermBuild> terms, List<Integer> nodes) {
     }
 
     private record SplitBuild(int device, SplitShaftSpec spec,

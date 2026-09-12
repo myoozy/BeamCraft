@@ -5,13 +5,13 @@ import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import me.mzy.beamcraft.client.physics.WheelContainer;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngineSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.SplitShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorsionReactorSpec;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -22,17 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PowertrainTorqueReactionTest {
     private static final float DT = 0.0005f;
-    @BeforeEach
-    void enableReactorReaction() {
-        PowertrainSystem.REACTOR_REACTION_ENABLED = true;
-    }
-
-    @AfterEach
-    void restoreReactorReactionDefault() {
-        PowertrainSystem.REACTOR_REACTION_ENABLED = false;
-    }
-
-
     @Test
     void torsionReactionUsesCurrentForwardGearRatio() {
         SoftBodyVehicle vehicle = reactionRig(false, true);
@@ -89,6 +78,55 @@ class PowertrainTorqueReactionTest {
         assertEquals(0.0f, vehicle.powertrain.debugClutchTorque(), 1.0e-6f);
         assertTrue(reactionTorqueX(vehicle.nodes) > 0.0f,
                 "neutral disconnects the driveline, but not the engine's own crank inertia reaction");
+    }
+
+    @Test
+    void dctReactorsUseTheActualPrimaryAndSecondarySplitShaftTorques() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        addNode(vehicle.nodes, 0, "r1", 0.0f, 0.0f, 0.0f, 1.0f);
+        addNode(vehicle.nodes, 1, "r2", 1.0f, 0.0f, 0.0f, 1.0f);
+        addNode(vehicle.nodes, 2, "r3", 0.0f, 1.0f, 1.0f, 1.0f);
+        vehicle.wheels.count = 2;
+        vehicle.wheels.nameToIndex.put("P", 0);
+        vehicle.wheels.nameToIndex.put("S", 1);
+        List<String> reactionNodes = List.of("r1", "r2", "r3");
+        vehicle.powertrain.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        1.0, 0, 6000, 0, 0, 0,
+                        List.of(new TorquePoint(0, 100)), List.of(), List.of()),
+                new DctGearboxSpec("dctGearbox", "dct", "engine", 1,
+                        List.of(0.0, 3.0, 2.0), false,
+                        0, 0, 0, 1000, 1000, 1, 0.15, 0.15, 0,
+                        List.of(), 0),
+                new SplitShaftSpec("splitShaft", "split", "dct", 1,
+                        1, 1, "locked", true, false, 1,
+                        3000, -1, 1, 0.15, 1,
+                        10, 100, 1, 25, 0, 0, 0, List.of()),
+                new TorsionReactorSpec("torsionReactor", "primaryReactor", "split", 1,
+                        1, "", 0, 0, 0, reactionNodes, List.of(), List.of()),
+                new ShaftSpec("shaft", "primaryWheel", "primaryReactor", 1,
+                        1, "P", 0, 0, 0, List.of(), List.of(), List.of()),
+                new TorsionReactorSpec("torsionReactor", "secondaryReactor", "split", 2,
+                        3, "", 0, 0, 0, reactionNodes, List.of(), List.of()),
+                new ShaftSpec("shaft", "secondaryWheel", "secondaryReactor", 1,
+                        1, "S", 0, 0, 0, List.of(), List.of(), List.of())
+        ));
+
+        vehicle.powertrain.finalizeSetup();
+        TorqueReactionContainer reactions = vehicle.powertrain.reactions;
+
+        assertEquals(2, reactions.reactorNodeStart.length);
+        assertEquals(2, reactions.reactorTermCount[0]);
+        assertEquals(-1, reactions.termSplit[0]);
+        assertEquals(3.0f, reactions.termGain[0], 1.0e-6f,
+                "primary output retains the geared coupler torque");
+        assertEquals(0, reactions.termSplit[1]);
+        assertEquals(-1.0f, reactions.termGain[1], 1.0e-6f,
+                "primary output subtracts the torque sent to the secondary branch");
+        assertEquals(1, reactions.reactorTermCount[1]);
+        assertEquals(0, reactions.termSplit[2]);
+        assertEquals(3.0f, reactions.termGain[2], 1.0e-6f,
+                "secondary output contains only split torque and its downstream ratio");
     }
 
     private static SoftBodyVehicle reactionRig(boolean engineReaction, boolean torsionReaction) {

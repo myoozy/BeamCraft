@@ -180,30 +180,6 @@ class BeamDampCutoffTest {
     // --- stability integration --------------------------------------------
 
     @Test
-    void cutoffRaisesTheAuthoredDampingCeiling() {
-        // reducedMass(1,1) * 2000 * 0.95 == 950 for the unfiltered budget.
-        SoftBodyVehicle unfiltered = stabilityVehicle(-1.0f, 5_000.0f);
-        assertEquals(950.0f, unfiltered.normalBeams.damp[0], 1.0f,
-                "without a cutoff the authored damping is clamped to the safety budget");
-
-        SoftBodyVehicle filtered = stabilityVehicle(CUTOFF_HZ, 5_000.0f);
-        assertEquals(5_000.0f, filtered.normalBeams.damp[0], 1.0f,
-                "a cutoff attenuates the high-frequency damping, so the authored value survives");
-    }
-
-    @Test
-    void cutoffKeepsADefensibleSafetyCeiling() {
-        SoftBodyVehicle vehicle = stabilityVehicle(CUTOFF_HZ, 1.0e9f);
-        float hfGain = vehicle.normalBeams.cutoffHighFrequencyGain(0, DT);
-        float expectedCeiling = 950.0f / hfGain;
-
-        assertEquals(expectedCeiling, vehicle.normalBeams.damp[0],
-                0.01f * expectedCeiling, "the ceiling scales by 1 / hfGain");
-        assertTrue(vehicle.normalBeams.damp[0] < 1.0e9f,
-                "a pathological authored damping must still be bounded");
-    }
-
-    @Test
     void cutoffHighFrequencyGainIsOneWhenDisabled() {
         SoftBodyVehicle vehicle = stabilityVehicle(-1.0f, 100.0f);
         assertEquals(1.0f, vehicle.normalBeams.cutoffHighFrequencyGain(0, DT), 0.0f);

@@ -1,7 +1,5 @@
 package me.mzy.beamcraft.client.physics;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,17 +20,6 @@ class PressureWheelReactionTest {
     private static final int COUPLING = 6;
     private static final int ARM = 7;
     private static final int ARM2 = 8;
-    @BeforeEach
-    void enableDriveReaction() {
-        WheelContainer.DRIVE_REACTION_ENABLED = true;
-    }
-
-    @AfterEach
-    void restoreDriveReactionDefault() {
-        WheelContainer.DRIVE_REACTION_ENABLED = false;
-    }
-
-
     @Test
     void driveReactionIsEqualAndOppositeWithoutNetForce() {
         SoftBodyVehicle vehicle = reactionRig(false);

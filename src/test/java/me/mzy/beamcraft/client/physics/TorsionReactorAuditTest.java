@@ -58,7 +58,7 @@ class TorsionReactorAuditTest {
         System.out.println();
         System.out.println("================================================================");
         System.out.println("TORSION REACTOR: " + model + "   reactors="
-                + vehicle.powertrain.reactions.reactorGain.length
+                + vehicle.powertrain.reactions.reactorNodeStart.length
                 + "  wheels=" + vehicle.wheels.count);
         System.out.println("================================================================");
 
@@ -81,7 +81,7 @@ class TorsionReactorAuditTest {
 
         double reactorTotal = 0.0;
         var reactions = vehicle.powertrain.reactions;
-        for (int r = 0; r < reactions.reactorGain.length; r++) {
+        for (int r = 0; r < reactions.reactorNodeStart.length; r++) {
             int start = reactions.reactorNodeStart[r];
             int count = reactions.reactorNodeCount[r];
             int n1 = reactions.reactionNodes[start];
@@ -112,9 +112,18 @@ class TorsionReactorAuditTest {
             for (int i = 0; i < count; i++) {
                 names.append(vehicle.nodes.names[reactions.reactionNodes[start + i]]).append(' ');
             }
+            StringBuilder expression = new StringBuilder();
+            int termEnd = reactions.reactorTermStart[r] + reactions.reactorTermCount[r];
+            for (int term = reactions.reactorTermStart[r]; term < termEnd; term++) {
+                if (!expression.isEmpty()) expression.append(" + ");
+                int split = reactions.termSplit[term];
+                expression.append(String.format(Locale.ROOT, "%.4f*%s",
+                        reactions.termGain[term], split < 0
+                                ? "coupler" : vehicle.powertrain.splitShafts.deviceName[split]));
+            }
             System.out.printf(Locale.ROOT,
-                    "  reactor %d gain=%.4f nodes=[%s] torque about axis = %10.1f Nm%n",
-                    r, reactions.reactorGain[r], names.toString().trim(), aboutAxis);
+                    "  reactor %d expr=[%s] nodes=[%s] torque about axis = %10.1f Nm%n",
+                    r, expression, names.toString().trim(), aboutAxis);
         }
 
         System.out.printf(Locale.ROOT, "  TOTAL wheel = %.1f Nm   TOTAL reactor = %.1f Nm   reactor/wheel = %.4f%n",

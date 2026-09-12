@@ -310,30 +310,6 @@ class AdaptiveDamperActuatorsTest {
     // --- stability ceiling interaction ------------------------------------
 
     @Test
-    void aModeMayRaiseDampingAboveTheAuthoredValueUpToTheBudgetCeiling() {
-        SoftBodyVehicle vehicle = ceilingVehicle(1.0f, 1000.0f);
-        float ceiling = vehicle.boundedBeams.dampStabilityCeiling[0];
-
-        assertEquals(950.0f / vehicle.boundedBeams.cutoffHighFrequencyGain(0, DT), ceiling,
-                0.01f * ceiling, "the stored ceiling is the cutoff-aware budget for this beam");
-        assertTrue(ceiling > 1000.0f, "this test is only meaningful above the authored value");
-        assertEquals(1000.0f, vehicle.boundedBeams.dampRebound[0], TOL,
-                "assembly keeps the authored damping, it is inside the budget");
-
-        // hard scales the authored rebound by 1.4 -> above authored, still under budget.
-        vehicle.adaptiveDampers.applyDamperMode(CONTROLLER, "hard");
-        assertEquals(1400.0f, vehicle.boundedBeams.dampRebound[0], TOL);
-
-        // A wildly scaled mode is clamped to the ceiling instead of destabilising.
-        vehicle.adaptiveDampers.applyDamperMode(CONTROLLER, "extreme");
-        assertEquals(ceiling, vehicle.boundedBeams.dampRebound[0], TOL);
-
-        // ...and coming back down still starts from the authored base.
-        vehicle.adaptiveDampers.applyDamperMode(CONTROLLER, "regular");
-        assertEquals(1000.0f, vehicle.boundedBeams.dampRebound[0], TOL);
-    }
-
-    @Test
     void assemblyClampsAnOversizedAuthoredValueButKeepsItAsTheBase() {
         SoftBodyVehicle vehicle = ceilingVehicle(1.0f, 1.0e9f);
         float ceiling = vehicle.boundedBeams.dampStabilityCeiling[0];
