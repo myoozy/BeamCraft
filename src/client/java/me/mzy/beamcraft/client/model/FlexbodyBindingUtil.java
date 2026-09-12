@@ -4,6 +4,7 @@ import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import me.mzy.beamcraft.client.physics.JBeamAssembler;
 import me.mzy.beamcraft.client.physics.NodeContainer;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.WheelContainer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -61,6 +62,8 @@ public class FlexbodyBindingUtil {
         }
 
         int ptr = 0;
+        boolean[] wheelAxisNodes = collectWheelAxisNodes(vehicle.wheels, nodes.count);
+        boolean[] generatedWheelNodes = collectGeneratedWheelNodes(vehicle.wheels, nodes.count);
 
         for (int m = 0; m < flex.meshCount; m++) {
             // 直接判断名字是否为空，跳过被我们“处决”的幽灵网格
@@ -70,18 +73,38 @@ public class FlexbodyBindingUtil {
             if (geom == null) continue;
 
             List<Integer> primaryPool = new ArrayList<>();
+            List<Integer> structuralPool = new ArrayList<>();
             boolean[] addedToPool = new boolean[nodes.count];
+            boolean[] addedToStructuralPool = new boolean[nodes.count];
+            boolean hasAxisOnlyGroup = false;
+            boolean hasStructuralGroup = false;
+            boolean hasGeneratedWheelGroup = false;
             if (flex.targetGroups[m] != null && !flex.targetGroups[m].isEmpty()) {
                 for (String gName : flex.targetGroups[m]) {
                     Integer gId = flex.groupNameToId.get(gName);
                     if (gId != null) {
                         int start = flex.groupNodeOffsets[gId];
                         int count = flex.groupNodeCounts[gId];
+                        boolean axisOnly = count > 0;
+                        boolean containsGeneratedWheelNode = false;
+                        for (int i = 0; i < count; i++) {
+                            int node = flex.flatGroupNodes[start + i];
+                            axisOnly &= wheelAxisNodes[node];
+                            containsGeneratedWheelNode |= generatedWheelNodes[node];
+                        }
+                        hasAxisOnlyGroup |= axisOnly;
+                        hasGeneratedWheelGroup |= containsGeneratedWheelNode;
+                        boolean structural = !axisOnly && !containsGeneratedWheelNode;
+                        hasStructuralGroup |= structural;
                         for (int i = 0; i < count; i++) {
                             int node = flex.flatGroupNodes[start + i];
                             if (!addedToPool[node]) {
                                 addedToPool[node] = true;
                                 primaryPool.add(node);
+                            }
+                            if (structural && !addedToStructuralPool[node]) {
+                                addedToStructuralPool[node] = true;
+                                structuralPool.add(node);
                             }
                         }
                     }
@@ -89,6 +112,14 @@ public class FlexbodyBindingUtil {
             } else {
                 for (int i = 0; i < nodes.count; i++) primaryPool.add(i);
             }
+
+            // A non-rotating hub-side flexbody (for example a brake caliper) may
+            // intentionally list both its suspension structure and the two wheel-axis
+            // nodes. Those axis nodes are useful while attached, but become a destructive
+            // locator when the wheel breaks away. Generated wheel/tire groups identify
+            // genuinely rotating meshes, which must retain the full authored pool.
+            List<Integer> bindingPool = hasAxisOnlyGroup && hasStructuralGroup && !hasGeneratedWheelGroup
+                    ? structuralPool : primaryPool;
 
             float[] pos = geom.positions;
             float[] norms = geom.normals;
@@ -148,9 +179,9 @@ public class FlexbodyBindingUtil {
 
                 // 彻底砍掉 globalPool 备用池逻辑！
                 // 如果在自己的专属 Group 里找不到合适的投射面，乖乖原位退化成货斗门上的刚体，绝不越界去抓车身！
-                boolean success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, primaryPool);
+                boolean success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
                 if (!success) {
-                    applyFallbackRigidBinding(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, primaryPool);
+                    applyFallbackRigidBinding(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
                 }
 
                 if (uvs != null && v * 2 + 1 < uvs.length) {
@@ -163,6 +194,34 @@ public class FlexbodyBindingUtil {
         }
         flex.isSkinningBound = true;
         System.out.println("🎨 工业级平滑蒙皮出厂绑定完美闭环！总渲染点数: " + flex.totalVertexCount);
+    }
+
+    private static boolean[] collectWheelAxisNodes(WheelContainer wheels, int nodeCount) {
+        boolean[] result = new boolean[nodeCount];
+        for (int wheel = 0; wheel < wheels.count; wheel++) {
+            markNode(result, wheels.node1[wheel]);
+            markNode(result, wheels.node2[wheel]);
+        }
+        return result;
+    }
+
+    private static boolean[] collectGeneratedWheelNodes(WheelContainer wheels, int nodeCount) {
+        boolean[] result = new boolean[nodeCount];
+        for (int wheel = 0; wheel < wheels.count; wheel++) {
+            int start = wheel * WheelContainer.MAX_RAYS;
+            for (int ray = 0; ray < wheels.numRays[wheel]; ray++) {
+                int index = start + ray;
+                markNode(result, wheels.hubInnerNodes[index]);
+                markNode(result, wheels.hubOuterNodes[index]);
+                markNode(result, wheels.tireInnerNodes[index]);
+                markNode(result, wheels.tireOuterNodes[index]);
+            }
+        }
+        return result;
+    }
+
+    private static void markNode(boolean[] nodes, int node) {
+        if (node >= 0 && node < nodes.length) nodes[node] = true;
     }
 
     private static double inverseScaleNormal(double component, double scale) {
@@ -219,6 +278,35 @@ public class FlexbodyBindingUtil {
         }
         if (!foundBasis) return false;
 
+        ExplicitZSolution explicitZ = findExplicitZ(nodes, centerNode, best, candidates, distances,
+                candidateCount, vx, vy, vz);
+
+        if (explicitZ.found) {
+            double normalLength = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
+            double normalScale = normalLength > MIN_INPUT_NORMAL_LENGTH ? 1.0 / normalLength : 0.0;
+            double[] normalWeights = solveBasisCoordinates(
+                    normX * normalScale, normY * normalScale, normZ * normalScale,
+                    best.uX, best.uY, best.uZ,
+                    best.vX, best.vY, best.vZ,
+                    explicitZ.zX, explicitZ.zY, explicitZ.zZ,
+                    explicitZ.determinant);
+
+            flex.vCenterNode[ptr] = centerNode;
+            flex.vVxNode[ptr] = best.vxNode;
+            flex.vVyNode[ptr] = best.vyNode;
+            flex.vVzNode[ptr] = explicitZ.vzNode;
+            flex.vWeightX[ptr] = explicitZ.weightX;
+            flex.vWeightY[ptr] = explicitZ.weightY;
+            flex.vWeightZ[ptr] = explicitZ.weightZ;
+            flex.vUseCrossZ[ptr] = false;
+            if (flex.vNormWeightX != null) {
+                flex.vNormWeightX[ptr] = (float) normalWeights[0];
+                flex.vNormWeightY[ptr] = (float) normalWeights[1];
+                flex.vNormWeightZ[ptr] = (float) normalWeights[2];
+            }
+            return true;
+        }
+
         float normalWeightX = 0, normalWeightY = 0, normalWeightZ = 1;
         if (flex.vNormWeightX != null) {
             double normalLength = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
@@ -242,10 +330,85 @@ public class FlexbodyBindingUtil {
         flex.vCenterNode[ptr] = centerNode;
         flex.vVxNode[ptr] = best.vxNode;
         flex.vVyNode[ptr] = best.vyNode;
+        flex.vVzNode[ptr] = -1;
         flex.vWeightX[ptr] = best.weightX;
         flex.vWeightY[ptr] = best.weightY;
         flex.vWeightZ[ptr] = (float) best.weightZ;
         flex.vUseCrossZ[ptr] = true;
+        return true;
+    }
+
+    private static ExplicitZSolution findExplicitZ(NodeContainer nodes, int centerNode,
+                                                    BasisSolution planarBasis,
+                                                    int[] candidates, double[] distances,
+                                                    int candidateCount,
+                                                    double px, double py, double pz) {
+        ExplicitZSolution best = new ExplicitZSolution();
+        double cx = nodes.baseX[centerNode], cy = nodes.baseY[centerNode], cz = nodes.baseZ[centerNode];
+        double dX = px - cx, dY = py - cy, dZ = pz - cz;
+        double crossX = planarBasis.uY * planarBasis.vZ - planarBasis.uZ * planarBasis.vY;
+        double crossY = planarBasis.uZ * planarBasis.vX - planarBasis.uX * planarBasis.vZ;
+        double crossZ = planarBasis.uX * planarBasis.vY - planarBasis.uY * planarBasis.vX;
+        double crossLengthSquared = crossX * crossX + crossY * crossY + crossZ * crossZ;
+
+        for (int i = 0; i < candidateCount; i++) {
+            int vzNode = candidates[i];
+            if (vzNode == planarBasis.vxNode || vzNode == planarBasis.vyNode) continue;
+            double zX = nodes.baseX[vzNode] - cx;
+            double zY = nodes.baseY[vzNode] - cy;
+            double zZ = nodes.baseZ[vzNode] - cz;
+            double zLengthSquared = zX * zX + zY * zY + zZ * zZ;
+            if (zLengthSquared < MIN_AXIS_LENGTH_SQUARED) continue;
+
+            double determinant = crossX * zX + crossY * zY + crossZ * zZ;
+            double outOfPlaneSineSquared = determinant * determinant / (crossLengthSquared * zLengthSquared);
+            if (outOfPlaneSineSquared < squaredSine(MIN_USABLE_BASIS_ANGLE_DEGREES)) continue;
+
+            double[] weights = solveBasisCoordinates(dX, dY, dZ,
+                    planarBasis.uX, planarBasis.uY, planarBasis.uZ,
+                    planarBasis.vX, planarBasis.vY, planarBasis.vZ,
+                    zX, zY, zZ, determinant);
+            if (!finiteAndSafe(weights)) continue;
+
+            boolean preferredAngle = outOfPlaneSineSquared >= squaredSine(PREFERRED_BASIS_ANGLE_DEGREES);
+            boolean preferredCoordinates = withinPreferredLocatorBounds(weights[0])
+                    && withinPreferredLocatorBounds(weights[1])
+                    && withinPreferredLocatorBounds(weights[2]);
+            int tier = BasisSolution.preferenceTier(preferredAngle, preferredCoordinates);
+            if (best.accepts(tier, distances[i], outOfPlaneSineSquared)) {
+                best.set(vzNode, zX, zY, zZ, determinant,
+                        (float) weights[0], (float) weights[1], (float) weights[2],
+                        tier, distances[i], outOfPlaneSineSquared);
+            }
+        }
+        return best;
+    }
+
+    private static double[] solveBasisCoordinates(double dX, double dY, double dZ,
+                                                  double uX, double uY, double uZ,
+                                                  double vX, double vY, double vZ,
+                                                  double zX, double zY, double zZ,
+                                                  double determinant) {
+        double vCrossZX = vY * zZ - vZ * zY;
+        double vCrossZY = vZ * zX - vX * zZ;
+        double vCrossZZ = vX * zY - vY * zX;
+        double dCrossZX = dY * zZ - dZ * zY;
+        double dCrossZY = dZ * zX - dX * zZ;
+        double dCrossZZ = dX * zY - dY * zX;
+        double uCrossVX = uY * vZ - uZ * vY;
+        double uCrossVY = uZ * vX - uX * vZ;
+        double uCrossVZ = uX * vY - uY * vX;
+        return new double[]{
+                (dX * vCrossZX + dY * vCrossZY + dZ * vCrossZZ) / determinant,
+                (uX * dCrossZX + uY * dCrossZY + uZ * dCrossZZ) / determinant,
+                (uCrossVX * dX + uCrossVY * dY + uCrossVZ * dZ) / determinant
+        };
+    }
+
+    private static boolean finiteAndSafe(double[] coordinates) {
+        for (double coordinate : coordinates) {
+            if (!Double.isFinite(coordinate) || Math.abs(coordinate) > MAX_SAFE_LOCATOR_MAGNITUDE) return false;
+        }
         return true;
     }
 
@@ -353,6 +516,40 @@ public class FlexbodyBindingUtil {
         }
     }
 
+    private static final class ExplicitZSolution {
+        boolean found;
+        int vzNode;
+        double zX, zY, zZ;
+        double determinant;
+        float weightX, weightY, weightZ;
+        int preferenceTier = Integer.MAX_VALUE;
+        double distanceSquared = Double.POSITIVE_INFINITY;
+        double sineSquared;
+
+        boolean accepts(int tier, double candidateDistanceSquared, double candidateSineSquared) {
+            if (tier != preferenceTier) return tier < preferenceTier;
+            int distanceOrder = Double.compare(candidateDistanceSquared, distanceSquared);
+            return distanceOrder < 0 || (distanceOrder == 0 && candidateSineSquared > sineSquared);
+        }
+
+        void set(int vzNode, double zX, double zY, double zZ, double determinant,
+                 float weightX, float weightY, float weightZ,
+                 int preferenceTier, double distanceSquared, double sineSquared) {
+            found = true;
+            this.vzNode = vzNode;
+            this.zX = zX;
+            this.zY = zY;
+            this.zZ = zZ;
+            this.determinant = determinant;
+            this.weightX = weightX;
+            this.weightY = weightY;
+            this.weightZ = weightZ;
+            this.preferenceTier = preferenceTier;
+            this.distanceSquared = distanceSquared;
+            this.sineSquared = sineSquared;
+        }
+    }
+
     private static void applyFallbackRigidBinding(FlexbodyContainer flex, NodeContainer nodes, int ptr,
                                                   double vx, double vy, double vz,
                                                   double normX, double normY, double normZ, List<Integer> pool) {
@@ -367,6 +564,7 @@ public class FlexbodyBindingUtil {
         flex.vCenterNode[ptr] = bestC;
         flex.vVxNode[ptr]     = bestC;
         flex.vVyNode[ptr]     = bestC;
+        flex.vVzNode[ptr]     = -1;
         flex.vWeightX[ptr]    = 0.0f; flex.vWeightY[ptr]    = 0.0f; flex.vWeightZ[ptr]    = 0.0f;
         flex.vUseCrossZ[ptr]  = false;
 

@@ -1,11 +1,11 @@
 #version 150 core
 
-// Each rig stream contains one RGBA32F texel per render vertex. Keeping the
-// streams separate preserves the OpenGL 3.2 minimum texture-buffer capacity:
-// at least 65,536 vertices instead of only a third of that amount.
+// Rig data is split into texture buffers so each stream preserves the OpenGL
+// 3.2 minimum capacity of at least 65,536 render vertices.
 uniform samplerBuffer uRigWeights;
 uniform samplerBuffer uRigNormals;
 uniform samplerBuffer uRigOffsets;
+uniform samplerBuffer uRigVz;
 uniform samplerBuffer uPhysicsNodes;
 
 out vec3 tfPosition;
@@ -16,6 +16,8 @@ void main() {
     vec4 weightsAndCenter = texelFetch(uRigWeights, id);
     vec4 normalWeightsAndVx = texelFetch(uRigNormals, id);
     vec4 staticOffsetAndVy = texelFetch(uRigOffsets, id);
+    float vzNodeValue = texelFetch(uRigVz, id).x;
+    int vzNode = int(vzNodeValue + 0.5);
 
     vec3 weights = weightsAndCenter.xyz;
     int centerNode = int(weightsAndCenter.w + 0.5);
@@ -41,14 +43,18 @@ void main() {
             basisNormal = vec3(0.0, 1.0, 0.0);
         }
 
+        vec3 vz = vzNodeValue >= 0.0
+                ? texelFetch(uPhysicsNodes, vzNode).xyz - centerPosition
+                : basisNormal;
+
         tfPosition = centerPosition
                 + vx * weights.x
                 + vy * weights.y
-                + basisNormal * weights.z;
+                + vz * weights.z;
 
         vec3 reconstructedNormal = vx * normalWeights.x
                 + vy * normalWeights.y
-                + basisNormal * normalWeights.z;
+                + vz * normalWeights.z;
         float normalLengthSquared = dot(reconstructedNormal, reconstructedNormal);
         tfNormal = normalLengthSquared > 1e-10
                 ? reconstructedNormal * inversesqrt(normalLengthSquared)

@@ -61,6 +61,23 @@ class FlexbodyBindingUtilTest {
                 flex, nodes, 0, 0.25, 0, 0, 0, 1, 0, List.of(0, 1, 2, 3)));
     }
 
+    @Test
+    void usesARealFourthNodeForAThreeDimensionalLocator() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(0, 0, 1));
+        FlexbodyContainer flex = flexForOneVertex();
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.4, 0, 0, 1, List.of(0, 1, 2, 3)));
+
+        assertFalse(flex.vUseCrossZ[0]);
+        assertTrue(flex.vVzNode[0] >= 0);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
+    }
+
     private static FlexbodyContainer flexForOneVertex() {
         FlexbodyContainer flex = new FlexbodyContainer();
         flex.allocateSkinningBuffers(1);
@@ -104,13 +121,21 @@ class FlexbodyBindingUtilTest {
         double vxv = nodes.baseX[vy] - nodes.baseX[center];
         double vyv = nodes.baseY[vy] - nodes.baseY[center];
         double vzv = nodes.baseZ[vy] - nodes.baseZ[center];
-        double nx = uy * vzv - uz * vyv;
-        double ny = uz * vxv - ux * vzv;
-        double nz = ux * vyv - uy * vxv;
-        double inverseNormalLength = 1.0 / Math.sqrt(nx * nx + ny * ny + nz * nz);
-        nx *= inverseNormalLength;
-        ny *= inverseNormalLength;
-        nz *= inverseNormalLength;
+        double nx, ny, nz;
+        if (flex.vUseCrossZ[0]) {
+            nx = uy * vzv - uz * vyv;
+            ny = uz * vxv - ux * vzv;
+            nz = ux * vyv - uy * vxv;
+            double inverseNormalLength = 1.0 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+            nx *= inverseNormalLength;
+            ny *= inverseNormalLength;
+            nz *= inverseNormalLength;
+        } else {
+            int vzNode = flex.vVzNode[0];
+            nx = nodes.baseX[vzNode] - nodes.baseX[center];
+            ny = nodes.baseY[vzNode] - nodes.baseY[center];
+            nz = nodes.baseZ[vzNode] - nodes.baseZ[center];
+        }
 
         assertEquals(expectedX, nodes.baseX[center] + ux * flex.vWeightX[0]
                 + vxv * flex.vWeightY[0] + nx * flex.vWeightZ[0], 1.0e-6);

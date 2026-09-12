@@ -166,17 +166,18 @@ public class ComputeSkinningPipeline {
         return viewPos.z;
     }
 
-    private static final int RIG_STREAM_COUNT = 3;
+    private static final int RIG_STREAM_COUNT = 4;
     private static final int TEXTURE_UNIT_WEIGHTS = 0;
     private static final int TEXTURE_UNIT_NORMALS = 1;
     private static final int TEXTURE_UNIT_OFFSETS = 2;
-    private static final int TEXTURE_UNIT_NODES = 3;
+    private static final int TEXTURE_UNIT_VZ = 3;
+    private static final int TEXTURE_UNIT_NODES = 4;
 
     private VertexBuffer mcVbo;
     private int customPosNormVbo = -1;
 
-    private final int[] rigBuffers = {-1, -1, -1};
-    private final int[] rigTextures = {-1, -1, -1};
+    private final int[] rigBuffers = {-1, -1, -1, -1};
+    private final int[] rigTextures = {-1, -1, -1, -1};
 
     private int nodeBuffer = -1;
     private int nodeTexture = -1;
@@ -265,8 +266,8 @@ public class ComputeSkinningPipeline {
         }
 
         int vertexTextureUnits = GL11.glGetInteger(GL20.GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS);
-        if (vertexTextureUnits < 4) {
-            throw new IllegalStateException("GPU skinning requires four vertex texture units, but this GPU supports "
+        if (vertexTextureUnits < 5) {
+            throw new IllegalStateException("GPU skinning requires five vertex texture units, but this GPU supports "
                     + vertexTextureUnits);
         }
     }
@@ -288,6 +289,7 @@ public class ComputeSkinningPipeline {
             setSampler("uRigWeights", TEXTURE_UNIT_WEIGHTS);
             setSampler("uRigNormals", TEXTURE_UNIT_NORMALS);
             setSampler("uRigOffsets", TEXTURE_UNIT_OFFSETS);
+            setSampler("uRigVz", TEXTURE_UNIT_VZ);
             setSampler("uPhysicsNodes", TEXTURE_UNIT_NODES);
         } finally {
             GL20.glUseProgram(previousProgram);
@@ -306,9 +308,11 @@ public class ComputeSkinningPipeline {
         ByteBuffer weights = MemoryUtil.memAlloc(totalVertices * 16);
         ByteBuffer normals = MemoryUtil.memAlloc(totalVertices * 16);
         ByteBuffer offsets = MemoryUtil.memAlloc(totalVertices * 16);
+        ByteBuffer vzNodes = MemoryUtil.memAlloc(totalVertices * 4);
 
         try {
             for (int i = 0; i < totalVertices; i++) {
+                boolean usesDeformBasis = flex.vUseCrossZ[i] || flex.vVzNode[i] >= 0;
                 weights.putFloat(flex.vWeightX[i]);
                 weights.putFloat(flex.vWeightY[i]);
                 weights.putFloat(flex.vWeightZ[i]);
@@ -317,35 +321,44 @@ public class ComputeSkinningPipeline {
                 normals.putFloat(flex.vNormWeightX[i]);
                 normals.putFloat(flex.vNormWeightY[i]);
                 normals.putFloat(flex.vNormWeightZ[i]);
-                normals.putFloat(flex.vUseCrossZ[i] ? flex.vVxNode[i] : -1.0f);
+                normals.putFloat(usesDeformBasis ? flex.vVxNode[i] : -1.0f);
 
                 offsets.putFloat(flex.skinnedPosX[i]);
                 offsets.putFloat(flex.skinnedPosY[i]);
                 offsets.putFloat(flex.skinnedPosZ[i]);
-                offsets.putFloat(flex.vUseCrossZ[i] ? flex.vVyNode[i] : -1.0f);
+                offsets.putFloat(usesDeformBasis ? flex.vVyNode[i] : -1.0f);
+
+                vzNodes.putFloat(flex.vVzNode[i]);
             }
 
             weights.flip();
             normals.flip();
             offsets.flip();
+            vzNodes.flip();
             createTextureBufferStream(0, weights, GL15.GL_STATIC_DRAW);
             createTextureBufferStream(1, normals, GL15.GL_STATIC_DRAW);
             createTextureBufferStream(2, offsets, GL15.GL_STATIC_DRAW);
+            createTextureBufferStream(3, vzNodes, GL15.GL_STATIC_DRAW, GL30.GL_R32F);
         } finally {
             MemoryUtil.memFree(weights);
             MemoryUtil.memFree(normals);
             MemoryUtil.memFree(offsets);
+            MemoryUtil.memFree(vzNodes);
         }
     }
 
     private void createTextureBufferStream(int index, ByteBuffer data, int usage) {
+        createTextureBufferStream(index, data, usage, GL30.GL_RGBA32F);
+    }
+
+    private void createTextureBufferStream(int index, ByteBuffer data, int usage, int internalFormat) {
         rigBuffers[index] = GL15.glGenBuffers();
         GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, rigBuffers[index]);
         GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, data, usage);
 
         rigTextures[index] = GL11.glGenTextures();
         GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, rigTextures[index]);
-        GL31.glTexBuffer(GL31.GL_TEXTURE_BUFFER, GL30.GL_RGBA32F, rigBuffers[index]);
+        GL31.glTexBuffer(GL31.GL_TEXTURE_BUFFER, internalFormat, rigBuffers[index]);
 
         GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0);
         GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, 0);
@@ -619,12 +632,13 @@ public class ComputeSkinningPipeline {
         );
         boolean rasterizerDiscardWasEnabled = GL11.glIsEnabled(GL30.GL_RASTERIZER_DISCARD);
         boolean transformFeedbackActive = false;
-        int[] previousTextureBindings = new int[4];
+        int[] previousTextureBindings = new int[5];
 
         try {
             bindTextureBuffer(TEXTURE_UNIT_WEIGHTS, rigTextures[0], previousTextureBindings);
             bindTextureBuffer(TEXTURE_UNIT_NORMALS, rigTextures[1], previousTextureBindings);
             bindTextureBuffer(TEXTURE_UNIT_OFFSETS, rigTextures[2], previousTextureBindings);
+            bindTextureBuffer(TEXTURE_UNIT_VZ, rigTextures[3], previousTextureBindings);
             bindTextureBuffer(TEXTURE_UNIT_NODES, nodeTexture, previousTextureBindings);
 
             GL20.glUseProgram(transformProgramId);
