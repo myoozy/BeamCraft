@@ -80,25 +80,26 @@ public class WheelContainer {
     //     means no explicit braking reaction (the load is carried structurally).
     // ================================================================
     /**
-     * Whether a drive torque also gets an explicit per-wheel chassis reaction.
+     * Whether a drive torque also gets an explicit per-wheel chassis reaction. On,
+     * because BeamNG applies it: {@code torqueCoupling}/{@code torqueArm}/{@code torqueArm2}
+     * are defined by its docs and reach its wheel object, alongside the torsion
+     * reactor's own reaction.
      *
-     * <p><b>Off by default, on measurement.</b> The HUD pitch readout showed every
-     * driveline case too strong while static attitude, coasting and service braking all
-     * matched BeamNG — and the excess scaled with the driveline torque (engine braking
-     * is about a quarter of the WOT torque and its excess was about a quarter as
-     * large). Isolating this path moved acceleration from +2.5 deg to +1.4 against
-     * BeamNG's +1.7, so the path is needed but only at roughly a quarter of the
-     * magnitude it applies: it is about 3.7x too strong on top of the torsion
-     * reactor's reaction, which in BeamNG is the same per-wheel mechanism
-     * ({@code engineReactionTorque = |T_wheel| * T_reactor / sum|T_wheel|}).
+     * <p>It is a probe rather than a tuning knob. The HUD pitch readout puts the stack
+     * about 3.7x over BeamNG's (acceleration +2.5 deg against +1.7, falling to +1.4 with
+     * this path alone disabled, +1.3 with the reactor alone disabled), but that is a
+     * symptom rather than the fault: with <em>every</em> reaction path off the
+     * acceleration pitch collapses to about zero, so the chassis is seeing almost none
+     * of the pitch moment a traction force at the contact patch should produce. The
+     * reaction paths have been standing in for that missing moment, which is why they
+     * had to be over-strong to land anywhere near BeamNG's numbers — and why removing
+     * the stiffness limiter and raising the rate never changed anything, pitch being a
+     * question of where the forces act rather than of stiffness.
      *
-     * <p>Kept rather than deleted because the model is not pinned down: with this off
-     * the pitch comes out 0.3 deg short of BeamNG's, so the true arrangement has some
-     * magnitude or sharing nuance that is not visible from the vehicles' data. Flip
-     * this on to reproduce the over-strong behaviour, and see
-     * {@code PressureWheelReactionTest}, which pins this path with the switch on.
+     * <p>The real fault is therefore in how a contact force reaches the body, not here.
+     * Keep this on and fix that; these switches exist to separate the two.
      */
-    public static boolean DRIVE_REACTION_ENABLED = false;
+    public static boolean DRIVE_REACTION_ENABLED = true;
 
     /**
      * A/B switch for the braking counter-torque, the third of the reaction probes.
