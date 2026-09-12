@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.render;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import me.mzy.beamcraft.client.material.MaterialLibrary;
 import me.mzy.beamcraft.client.material.TextureResource;
 import me.mzy.beamcraft.texture.DecodedImage;
@@ -153,13 +154,20 @@ public final class VehicleTextureUploader {
             return getWhiteTexture();
         }
         try {
+            // Decode and upload are timed separately because only the decode is
+            // movable off the render thread; the upload must stay here.
+            long decodeStart = LoadTiming.start();
             DecodedImage image = MaterialLibrary.acquireDecodedTexture(resource, namespace);
+            LoadTiming.logSlowFile("  [texture] decode " + resource.describe(), decodeStart);
+
+            long uploadStart = LoadTiming.start();
             int textureId;
             try {
                 textureId = upload(image);
             } finally {
                 MaterialLibrary.releaseDecodedTexture(resource);
             }
+            LoadTiming.logSlowFile("  [texture] upload " + resource.describe(), uploadStart);
             String ownership = MaterialLibrary.resolveTextureOwnership(resource, namespace);
             textures.put(resource, new Entry(textureId, ownership));
             if (ownership != null) {
@@ -212,7 +220,11 @@ public final class VehicleTextureUploader {
             return getOrUpload(diffuse, namespace);
         }
         try {
+            long decodeStart = LoadTiming.start();
             DecodedImage image = MaterialLibrary.composeDiffuseAndOpacity(diffuse, opacity, namespace);
+            LoadTiming.logSlowFile("  [texture] compose " + diffuse.describe() + " + " + opacity.describe(), decodeStart);
+
+            long uploadStart = LoadTiming.start();
             int textureId;
             try {
                 textureId = upload(image);
@@ -221,6 +233,7 @@ public final class VehicleTextureUploader {
                 // returns a caller-owned, uncached image; after upload there is
                 // nothing left to pin or release. Only the GL texture is cached.
             }
+            LoadTiming.logSlowFile("  [texture] upload (composed) " + diffuse.describe(), uploadStart);
             String diffOwn = MaterialLibrary.resolveTextureOwnership(diffuse, namespace);
             String opOwn = MaterialLibrary.resolveTextureOwnership(opacity, namespace);
             String ownership = diffOwn != null ? diffOwn : opOwn;

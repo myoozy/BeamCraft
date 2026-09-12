@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.physics;
 import me.mzy.beamcraft.client.assets.AssetScanner;
 import me.mzy.beamcraft.client.assets.NamespaceScan;
 import me.mzy.beamcraft.client.assets.ResolvedEntry;
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import me.mzy.beamcraft.client.material.RelaxedJson;
 
 import com.google.gson.JsonObject;
@@ -62,10 +63,14 @@ public class JBeamLoader {
         System.out.println("Scanning JBeam assets");
 
         // 1. 加载 common 资源 (common 里的 .pc 永不锁定)
-        scanEntries(AssetScanner.INSTANCE.scan(assetRoots, "common"), false, partRegistry, pcContents, loadedCount);
+        long scanStart = LoadTiming.start();
+        int commonFiles = scanEntries(AssetScanner.INSTANCE.scan(assetRoots, "common"), false, partRegistry, pcContents, loadedCount);
+        LoadTiming.log("  [jbeam] common namespace, " + commonFiles + " files", scanStart);
 
         // 2. 扫描目标车辆
-        scanEntries(AssetScanner.INSTANCE.scan(assetRoots, targetVehicleName), true, partRegistry, pcContents, loadedCount);
+        scanStart = LoadTiming.start();
+        int vehicleFiles = scanEntries(AssetScanner.INSTANCE.scan(assetRoots, targetVehicleName), true, partRegistry, pcContents, loadedCount);
+        LoadTiming.log("  [jbeam] " + targetVehicleName + " namespace, " + vehicleFiles + " files", scanStart);
 
         System.out.println("Part library loaded: " + loadedCount[0] + " files, " + partRegistry.size() + " parts");
 
@@ -139,8 +144,14 @@ public class JBeamLoader {
         }
     }
 
-    private static void scanEntries(NamespaceScan scan, boolean collectPc, Map<String, JsonObject> registry,
+    /**
+     * Reads and parses every {@code .jbeam}/{@code .pc} entry in {@code scan}.
+     *
+     * @return the number of entries that were read and processed, for load timing
+     */
+    private static int scanEntries(NamespaceScan scan, boolean collectPc, Map<String, JsonObject> registry,
                                     Map<String, String> pcContents, int[] loadedCount) {
+        int processed = 0;
         for (ResolvedEntry entry : scan.entries()) {
             // logicalPath() is the lowercased dedupe key, so this filter is already
             // case-insensitive; entryName() keeps the real casing.
@@ -149,13 +160,19 @@ public class JBeamLoader {
                 continue;
             }
             String fileName = basename(entry.entryName());
+            long fileStart = LoadTiming.start();
             try {
                 String content = new String(entry.readBytes(), StandardCharsets.UTF_8);
                 processFileContent(fileName, content, collectPc, registry, pcContents, loadedCount);
             } catch (Exception e) {
                 System.err.println(e.getMessage());
             }
+            // Only files that stand out are reported: this loop runs over hundreds of
+            // files, so a per-file line would bury the signal.
+            LoadTiming.logSlowFile("  [jbeam] slow file " + logical, fileStart);
+            processed++;
         }
+        return processed;
     }
 
     private static String basename(String path) {

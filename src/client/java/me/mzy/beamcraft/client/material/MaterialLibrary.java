@@ -4,6 +4,7 @@ import me.mzy.beamcraft.client.assets.AssetScanner;
 import me.mzy.beamcraft.client.assets.AssetSource;
 import me.mzy.beamcraft.client.assets.NamespaceScan;
 import me.mzy.beamcraft.client.assets.ResolvedEntry;
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.texture.DecodedImage;
@@ -59,7 +60,7 @@ import java.util.Set;
  *
  * <p><b>Lifecycle</b>: {@link #requireMaterials} / {@link #releaseMaterials}
  * follow the same reference-counting scheme as
- * {@code DaeMeshLoader.requireVehicleModels}. Concurrent instances of the same
+ * {@code DaeMeshLoader.requireMeshes}. Concurrent instances of the same
  * vehicle share one index; when the last instance is released, the vehicle-only
  * index is reclaimed and the vehicle's texture sources are unregistered from the
  * locator (dropping their lazily built ZIP indexes), so requiring the vehicle
@@ -171,13 +172,19 @@ public final class MaterialLibrary {
         if (!ns.equals(COMMON_NS)) {
             DECODED_TEXTURES.retainNamespace(ns);
         }
+        long totalStart = LoadTiming.start();
         if (!isCommonLoaded) {
+            long commonStart = LoadTiming.start();
             scanCommon(assetRoots);
+            LoadTiming.log("  [materials] common namespace total", commonStart);
             isCommonLoaded = true;
         }
         if (!ns.equals(COMMON_NS)) {
+            long vehicleStart = LoadTiming.start();
             scanVehicle(assetRoots, ns);
+            LoadTiming.log("  [materials] " + ns + " namespace total", vehicleStart);
         }
+        LoadTiming.log("  [materials] requireMaterials total (ns=" + ns + ")", totalStart);
     }
 
     /**
@@ -456,13 +463,20 @@ public final class MaterialLibrary {
 
     private static void scanCommon(List<File> roots) {
         NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, COMMON_NS);
+        long indexStart = LoadTiming.start();
         for (ResolvedEntry entry : scan.entries()) {
             processScanEntry(entry, COMMON_NS, true);
         }
+        LoadTiming.log("    material entries: " + scan.entries().size(), indexStart);
+
+        // Registering the containers is what makes the texture locator walk them
+        // (and index their zip central directories), so it is timed separately.
+        long sourceStart = LoadTiming.start();
         for (AssetSource source : scan.sources()) {
             LOCATOR.registerSource(source.file());
             COMMON_SOURCE_IDS.add(canonicalPath(source.file()));
         }
+        LoadTiming.log("    texture source registration: " + scan.sources().size(), sourceStart);
     }
 
     private static void scanVehicle(List<File> roots, String ns) {
@@ -477,14 +491,20 @@ public final class MaterialLibrary {
         NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, ns);
         List<File> ownedSources = new ArrayList<>();
         Set<String> ownedSourceIds = new HashSet<>();
+        long indexStart = LoadTiming.start();
         for (ResolvedEntry entry : scan.entries()) {
             processScanEntry(entry, ns, false);
         }
+        LoadTiming.log("    material entries: " + scan.entries().size(), indexStart);
+
+        long sourceStart = LoadTiming.start();
         for (AssetSource source : scan.sources()) {
             LOCATOR.registerSource(source.file());
             ownedSources.add(source.file());
             ownedSourceIds.add(canonicalPath(source.file()));
         }
+        LoadTiming.log("    texture source registration: " + scan.sources().size(), sourceStart);
+
         NAMESPACE_SOURCES.put(ns, ownedSources);
         NAMESPACE_SOURCE_IDS.put(ns, ownedSourceIds);
     }

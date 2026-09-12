@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import me.mzy.beamcraft.client.material.MaterialLibrary;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
@@ -19,6 +20,7 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +90,9 @@ public final class ClientVehicleManager {
         Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
         Map<String, String> localConfig = new HashMap<>();
         List<File> assetRoots = BeamCraftConfigManager.assetRoots();
+
+        long totalStart = LoadTiming.start();
+        long phaseStart = LoadTiming.start();
         if (!JBeamLoader.loadVehicle(
                 assetRoots,
                 rootPart,
@@ -107,9 +112,12 @@ public final class ClientVehicleManager {
             System.err.println("Vehicle load failed for entity " + vehicleEntity.getId());
             return;
         }
+        LoadTiming.log("[load 1/4] JBeam scan + parse", phaseStart);
 
-        DaeMeshLoader.requireVehicleModels(assetRoots, rootPart);
-        MaterialLibrary.requireMaterials(assetRoots, rootPart);
+        // Assembly comes before the mesh import because the flexbody table it builds
+        // is what names the meshes this vehicle needs. Importing by name is what keeps
+        // the load off the ~615 MB of common assets the vehicle never touches.
+        phaseStart = LoadTiming.start();
         boolean assembled = new JBeamAssembler().assembleVehicle(
                 rootPart,
                 localConfig,
@@ -117,8 +125,8 @@ public final class ClientVehicleManager {
                 softBody
         );
         if (!assembled) {
-            DaeMeshLoader.releaseVehicleModels(rootPart);
-            MaterialLibrary.releaseMaterials(rootPart);
+            // Nothing has been acquired yet here, so there is nothing to release —
+            // releasing would unbalance a live sibling instance's ref count.
             LOAD_FAILURES.recordFailure(
                     vehicleEntity.getId(),
                     vehicleEntity.getUuid(),
@@ -127,12 +135,33 @@ public final class ClientVehicleManager {
             System.err.println("Vehicle assembly failed for entity " + vehicleEntity.getId());
             return;
         }
+        LoadTiming.log("[load 2/4] assembly", phaseStart);
+
+        phaseStart = LoadTiming.start();
+        MaterialLibrary.requireMaterials(assetRoots, rootPart);
+        LoadTiming.log("[load 3/4] material index", phaseStart);
+
+        phaseStart = LoadTiming.start();
+        DaeMeshLoader.requireMeshes(assetRoots, rootPart, flexbodyMeshNames(softBody));
+        LoadTiming.log("[load 4/4] mesh import", phaseStart);
+
+        LoadTiming.log("[load total] vehicle load (" + rootPart + ")", totalStart);
 
         float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
         softBody.nodes.rotateNodes(playerYaw, 0, 0);
         BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
         VEHICLE_MAP.put(vehicleEntity.getId(), softBody);
         LOAD_FAILURES.recordSuccess(vehicleEntity.getId());
+    }
+
+    /** The mesh names the assembled vehicle's flexbodies resolve against. */
+    private static List<String> flexbodyMeshNames(SoftBodyVehicle vehicle) {
+        FlexbodyContainer flex = vehicle.flexbodies;
+        List<String> names = new ArrayList<>(flex.meshCount);
+        for (int mesh = 0; mesh < flex.meshCount; mesh++) {
+            names.add(flex.meshName[mesh]);
+        }
+        return names;
     }
 
     private static void updateEntityBounds(SoftBodyVehicle vehicle) {

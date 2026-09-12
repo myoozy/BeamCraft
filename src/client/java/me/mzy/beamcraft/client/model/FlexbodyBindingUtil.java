@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.model;
 
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import me.mzy.beamcraft.client.physics.JBeamAssembler;
 import me.mzy.beamcraft.client.physics.NodeContainer;
@@ -31,8 +32,10 @@ public class FlexbodyBindingUtil {
         NodeContainer nodes = vehicle.nodes;
         if (flex.isSkinningBound || flex.meshCount == 0) return;
 
+        long totalStart = LoadTiming.start();
         int totalVerts = 0;
 
+        long scanStart = LoadTiming.start();
         for (int m = 0; m < flex.meshCount; m++) {
             boolean valid = true;
             if (flex.targetGroups[m] != null && !flex.targetGroups[m].isEmpty()) {
@@ -55,7 +58,11 @@ public class FlexbodyBindingUtil {
             }
         }
 
+        LoadTiming.log("[flex] mesh scan (" + flex.meshCount + " meshes)", scanStart);
+
+        long allocStart = LoadTiming.start();
         flex.allocateSkinningBuffers(totalVerts);
+        LoadTiming.log("[flex] buffer allocation (" + totalVerts + " verts)", allocStart);
         if (totalVerts == 0) {
             flex.isSkinningBound = true;
             return;
@@ -65,6 +72,7 @@ public class FlexbodyBindingUtil {
         boolean[] wheelAxisNodes = collectWheelAxisNodes(vehicle.wheels, nodes.count);
         boolean[] generatedWheelNodes = collectGeneratedWheelNodes(vehicle.wheels, nodes.count);
 
+        long bindStart = LoadTiming.start();
         for (int m = 0; m < flex.meshCount; m++) {
             // Skip meshes cleared above.
             if (flex.meshName[m].isEmpty()) continue;
@@ -193,8 +201,11 @@ public class FlexbodyBindingUtil {
                 ptr++;
             }
         }
+        LoadTiming.log("[flex] per-vertex binding (" + ptr + " verts)", bindStart);
+
         flex.isSkinningBound = true;
         System.out.println("Flexbody binding complete, total render vertices: " + flex.totalVertexCount);
+        LoadTiming.log("[flex] binding total", totalStart);
     }
 
     private static boolean[] collectWheelAxisNodes(WheelContainer wheels, int nodeCount) {
