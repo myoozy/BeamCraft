@@ -111,6 +111,48 @@ public class SoftBodyVehicle {
         this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
     }
 
+    /**
+     * Body pitch and roll in degrees, measured from the vehicle's authored
+     * {@code refNodes} triple the same way BeamNG builds its body frame: the
+     * longitudinal axis runs {@code ref -> back} and the lateral one {@code ref -> left}
+     * ({@code lua/ge/extensions/core/cameraModes/autopoint.lua}).
+     *
+     * <p>Pitch is the angle of the longitudinal axis above horizontal, positive
+     * nose-up; roll is the angle of the lateral axis, positive when the left side is
+     * up. Both are read straight off the anchors' world positions, so they are
+     * directly comparable with BeamNG's pitch/roll readout — which is the point: it
+     * turns "looks like it squats more" into a number.
+     *
+     * @param out receives {@code {pitch, roll}}; must hold at least two elements
+     * @return false when the vehicle has no usable ref nodes, leaving {@code out} alone
+     */
+    public boolean bodyAttitudeDeg(float[] out) {
+        VehicleCameraData.RefNodes refs = cameras.refNodes();
+        if (refs == null) return false;
+        int r = refs.ref(), b = refs.back(), l = refs.left();
+        if (r < 0 || b < 0 || l < 0 || r >= nodes.count || b >= nodes.count || l >= nodes.count) {
+            return false;
+        }
+
+        double fx = nodes.posX[r] - nodes.posX[b];
+        double fy = nodes.posY[r] - nodes.posY[b];
+        double fz = nodes.posZ[r] - nodes.posZ[b];
+        double forwardLength = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (forwardLength < 1.0e-9) return false;
+
+        double lx = nodes.posX[l] - nodes.posX[r];
+        double ly = nodes.posY[l] - nodes.posY[r];
+        double lz = nodes.posZ[l] - nodes.posZ[r];
+        double leftLength = Math.sqrt(lx * lx + ly * ly + lz * lz);
+        if (leftLength < 1.0e-9) return false;
+
+        // Minecraft's world up is +Y, so the sine of each axis' elevation above
+        // horizontal is just its normalised Y component.
+        out[0] = (float) Math.toDegrees(Math.asin(Math.clamp(fy / forwardLength, -1.0, 1.0)));
+        out[1] = (float) Math.toDegrees(Math.asin(Math.clamp(ly / leftLength, -1.0, 1.0)));
+        return true;
+    }
+
     public void updateBeamPrecompression(double dt) {
         float fDt = (float) dt;
         normalBeams.updatePrecompression(fDt);

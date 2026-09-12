@@ -10,6 +10,7 @@ import me.mzy.beamcraft.client.render.VehicleTextureUploader;
 import me.mzy.beamcraft.client.physics.AsyncPhysicsScheduler;
 import me.mzy.beamcraft.client.physics.PhysicsWorld;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.VehicleCameraData;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -40,6 +41,12 @@ public class BeamCraftClient implements ClientModInitializer {
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
+
+	/**
+	 * Scratch for the HUD's body-attitude readout, reused every frame so the render
+	 * path stays allocation-free.
+	 */
+	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
 	public static double[] lastPhysicsMsDetail = new double[9];
@@ -147,7 +154,22 @@ public class BeamCraftClient implements ClientModInitializer {
 			float shiftTime = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugShiftRemaining();
 			String rangeMode = debugVehicle == null ? "-" : debugVehicle.powertrain.debugRangeBoxMode();
 			float rangeRatio = debugVehicle == null ? 1.0f : debugVehicle.powertrain.debugRangeBoxRatio();
+
+			// Body attitude, measured from the vehicle's authored refNodes triple the way
+			// BeamNG builds its body frame, so the numbers can be lined up against
+			// BeamNG's own pitch/roll readout instead of judged by eye.
+			boolean hasAttitude = debugVehicle != null && debugVehicle.bodyAttitudeDeg(ATTITUDE_DEG);
+			VehicleCameraData.RefNodes refNodes = debugVehicle == null ? null : debugVehicle.cameras.refNodes();
+			String refLabel = debugVehicle == null || refNodes == null
+					? "none"
+					: debugVehicle.nodes.names[refNodes.ref()] + "->" + debugVehicle.nodes.names[refNodes.back()]
+							+ "/" + debugVehicle.nodes.names[refNodes.left()];
+
 			String[] lines = {
+					hasAttitude
+							? String.format("pitch: %+.2f deg (nose up +) | roll: %+.2f deg (left up +) | refNodes: %s",
+									ATTITUDE_DEG[0], ATTITUDE_DEG[1], refLabel)
+							: "pitch/roll: refNodes unavailable",
 					"powertrain: " + powertrainState,
 					String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
 							throttleInput * 100.0f, actualThrottle * 100.0f),
