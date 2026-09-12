@@ -596,7 +596,7 @@ public class SoftBodyVehicle {
         float m1 = nodes.mass[beams.node1[i]];
         float m2 = nodes.mass[beams.node2[i]];
         if (m1 <= KINDA_SMALL_NUMBER || m2 <= KINDA_SMALL_NUMBER) return 0.0f;
-        return Utility.reducedMass(m1, m2) * invDt * 0.95f;
+        return Utility.reducedMass(m1, m2) * invDt * 1.95f;
     }
 
     /**
