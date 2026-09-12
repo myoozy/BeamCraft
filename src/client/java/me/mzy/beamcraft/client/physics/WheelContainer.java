@@ -100,6 +100,19 @@ public class WheelContainer {
      */
     public static boolean DRIVE_REACTION_ENABLED = false;
 
+    /**
+     * A/B switch for the braking counter-torque, the third of the reaction probes.
+     *
+     * <p>With both drive paths off the acceleration pitch collapses to about zero,
+     * which says the chassis sees almost none of the pitch moment a traction force at
+     * the contact patch should produce. The braking side could not be read the same way
+     * because this path was still active, so turning it off completes the picture: a
+     * braking pitch that also collapses to about zero confirms that no contact force is
+     * producing a body pitch moment, and that every reading so far has come from the
+     * reaction paths compensating for it.
+     */
+    public static boolean BRAKE_REACTION_ENABLED = true;
+
     public int[] torqueCouplingNode = newReactionNodeArray();
     public int[] torqueArmNode = newReactionNodeArray();
     public int[] torqueArm2Node = newReactionNodeArray();
@@ -931,6 +944,7 @@ public class WheelContainer {
      * through the hub/suspension beams, exactly as before this feature existed.
      */
     public void applyBrakeReaction(int wheelIdx, float appliedWheelTorque) {
+        if (!BRAKE_REACTION_ENABLED) return;
         if (wheelIdx < 0 || wheelIdx >= count) return;
         int nodeArm = nodeArmNode[wheelIdx];
         if (nodeArm < 0) return;
