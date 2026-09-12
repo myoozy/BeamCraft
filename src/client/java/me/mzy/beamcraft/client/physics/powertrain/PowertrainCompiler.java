@@ -730,13 +730,8 @@ final class PowertrainCompiler {
                 splitShafts.activeMode[splitIndex] = splitShafts.initialMode[splitIndex];
                 splitShafts.primaryOutputID[splitIndex] = splitShaft.primaryOutputID();
                 splitShafts.canDisconnect[splitIndex] = splitShaft.canDisconnect();
-                // BeamNG normally supplies this through an electronic controller. Until
-                // BeamCraft has that layer, a connected split shaft must remain useful:
-                // defaultClutchRatio=0 therefore falls back to fully engaged instead of
-                // silently turning an AWD configuration into primary-axle-only drive.
                 float configuredClutchRatio = Math.clamp((float) splitShaft.defaultClutchRatio(), 0.0f, 1.0f);
-                splitShafts.defaultClutchRatio[splitIndex] = configuredClutchRatio > 1.0e-6f
-                        ? configuredClutchRatio : 1.0f;
+                splitShafts.defaultClutchRatio[splitIndex] = configuredClutchRatio;
                 splitShafts.clutchRatio[splitIndex] = splitShafts.defaultClutchRatio[splitIndex];
                 splitShafts.lockCapacity[splitIndex] = Math.max(0.0f, (float) splitShaft.lockTorque());
                 float lockSpring = (float) splitShaft.lockSpring();

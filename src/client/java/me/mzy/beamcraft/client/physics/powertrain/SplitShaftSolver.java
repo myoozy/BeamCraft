@@ -31,11 +31,60 @@ public final class SplitShaftSolver {
         }
 
         state.viscousTorque[split] = 0.0f;
-        ImplicitCouplingSolver.solveInto(
-                dt, primaryAV - secondaryAV, primaryInertia, secondaryInertia,
-                state.lockSpring[split], state.lockDampingRatio[split], state.lockCapacity[split],
-                state.clutchRatio[split], state.lockTorque, state.shaftAngle, split);
-        return state.lockTorque[split];
+        return solveLocked(dt, primaryAV - secondaryAV, primaryInertia,
+                secondaryInertia, state, split);
+    }
+
+    /**
+     * Locally implicit linear locked-shaft solve.  Torque and the stored shaft angle use
+     * the same post-impulse slip; the generic clutch solver historically calculated an
+     * implicit torque but then advanced this angle from the old slip, which could retain
+     * artificial transfer-case wind-up after the axle speeds had already converged.
+     *
+     * <p>The spring remains linear here.  BeamNG's squared-angle spring law can replace
+     * the constitutive term independently without changing the two-inertia coupling.
+     */
+    private static float solveLocked(float dt, float slip, float primaryInertia,
+                                     float secondaryInertia, SplitShaftContainer state,
+                                     int split) {
+        float lock = Math.clamp(state.clutchRatio[split], 0.0f, 1.0f);
+        float capacity = Math.max(0.0f, state.lockCapacity[split]);
+        if (lock <= 0.0f || capacity <= 0.0f) {
+            state.lockTorque[split] = 0.0f;
+            state.shaftAngle[split] = 0.0f;
+            return 0.0f;
+        }
+
+        float jp = Math.max(primaryInertia, MIN_INERTIA);
+        float js = Math.max(secondaryInertia, MIN_INERTIA);
+        float reducedInertia = jp * js / (jp + js);
+        float spring = Math.max(0.0f, state.lockSpring[split]);
+        float damping = 2.0f * Math.max(0.0f, state.lockDampingRatio[split])
+                * (float) Math.sqrt(spring * reducedInertia);
+
+        // nextAngle = lock * (oldAngle + dt * lock * postSlip)
+        // torque = spring * nextAngle + damping * lock * postSlip
+        // postSlip = slip - dt * torque / reducedInertia
+        float response = spring * dt * lock * lock + damping * lock;
+        float numerator = spring * lock * state.shaftAngle[split] + response * slip;
+        float denominator = 1.0f + response * dt / reducedInertia;
+        float unconstrainedTorque = numerator / denominator;
+        float torque = Math.clamp(unconstrainedTorque, -capacity * lock, capacity * lock);
+        float postSlip = slip - dt * torque / reducedInertia;
+        float nextAngle = lock * (state.shaftAngle[split] + dt * lock * postSlip);
+
+        // Linear counterpart of BeamNG's maxShaftAngle bound.  It prevents stored spring
+        // energy from exceeding the configured lock capacity while still allowing a
+        // saturated coupling to unwind on subsequent steps.
+        if (spring > 1.0e-9f) {
+            float maxAngle = capacity * lock / spring;
+            nextAngle = Math.clamp(nextAngle, -maxAngle, maxAngle);
+        } else {
+            nextAngle = 0.0f;
+        }
+        state.lockTorque[split] = torque;
+        state.shaftAngle[split] = nextAngle;
+        return torque;
     }
 
     private static float clampToNoSlipImpulse(float dt, float slip, float primaryInertia,

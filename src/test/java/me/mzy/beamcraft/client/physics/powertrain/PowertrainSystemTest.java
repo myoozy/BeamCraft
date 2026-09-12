@@ -99,7 +99,7 @@ class PowertrainSystemTest {
                 new GearboxSpec("manualGearbox", "gearbox", "clutch", 1,
                         List.of(3.0), true, 0, 0, 0, List.of()),
                 new SplitShaftSpec("splitShaft", "transfercase", "gearbox", 1,
-                        1, 2, "locked", true, false, 0,
+                        1, 2, "locked", true, false, 1,
                         3000, -1, 1, 0.15, 1,
                         10, 100, 1, 25, 0, 0, 0, List.of()),
                 new DifferentialSpec("differential", "front", "transfercase", 2,
@@ -127,8 +127,17 @@ class PowertrainSystemTest {
         assertEquals(2, system.splitShafts.primaryPathCount[0]);
         assertEquals(2, system.splitShafts.secondaryPathCount[0]);
         assertEquals(SplitShaftContainer.MODE_LOCKED, system.splitShafts.activeMode[0]);
+        assertEquals(1.0f, system.splitShafts.defaultClutchRatio[0], 1e-6f,
+                "the authored BeamNG default remains available to a future controller");
         assertEquals(1.0f, system.splitShafts.clutchRatio[0], 1e-6f,
-                "without the electronic controller, a connected AWD split must not become FWD");
+                "startup uses the authored BeamNG clutch ratio");
+
+        system.setSplitShaftClutchRatio("transfercase", 0.0f);
+        assertEquals(0.0f, system.splitShafts.clutchRatio[0], 1e-6f,
+                "the existing control interface can disengage the split after startup");
+        system.reset();
+        assertEquals(1.0f, system.splitShafts.clutchRatio[0], 1e-6f,
+                "reset restores the authored BeamNG default");
 
         system.setSplitShaftMode("transfercase", "disconnected");
         assertEquals(SplitShaftContainer.MODE_DISCONNECTED, system.splitShafts.activeMode[0]);
