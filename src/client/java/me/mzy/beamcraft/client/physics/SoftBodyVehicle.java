@@ -153,6 +153,48 @@ public class SoftBodyVehicle {
         return true;
     }
 
+    /**
+     * Longitudinal acceleration in g, positive accelerating forward, projected onto the
+     * body's forward axis ({@code back -> ref} of the same refNodes triple the attitude
+     * uses).
+     *
+     * <p>Needs no per-frame state: a body's centre-of-mass acceleration is the summed
+     * node forces over total mass, and each node's force already carries its own mass
+     * (the sub-step integrates {@code v += force / mass * dt}). Gravity drops out of the
+     * projection while the car is level, so a parked car reads ~0 — a car whose pitch is
+     * changing by a degree also picks up a small cross-term, which is fine for a readout.
+     *
+     * <p>Pairs with {@link #bodyAttitudeDeg}: if a pitch difference comes with an equal
+     * acceleration difference it is the longitudinal force that differs, and if only the
+     * pitch is off then it is the torque reaction.
+     */
+    public float longitudinalAccelG() {
+        VehicleCameraData.RefNodes refs = cameras.refNodes();
+        if (refs == null) return 0.0f;
+        int r = refs.ref(), b = refs.back();
+        if (r < 0 || b < 0 || r >= nodes.count || b >= nodes.count) return 0.0f;
+
+        double fx = nodes.posX[r] - nodes.posX[b];
+        double fy = nodes.posY[r] - nodes.posY[b];
+        double fz = nodes.posZ[r] - nodes.posZ[b];
+        double length = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (length < 1.0e-9) return 0.0f;
+        fx /= length; fy /= length; fz /= length;
+
+        double totalMass = 0.0;
+        double forceX = 0.0, forceY = 0.0, forceZ = 0.0;
+        for (int i = 0; i < nodes.count; i++) {
+            totalMass += nodes.mass[i];
+            forceX += nodes.forceX[i];
+            forceY += nodes.forceY[i];
+            forceZ += nodes.forceZ[i];
+        }
+        if (totalMass < 1.0e-9) return 0.0f;
+
+        double along = (forceX * fx + forceY * fy + forceZ * fz) / totalMass;
+        return (float) (along / 9.80665);
+    }
+
     public void updateBeamPrecompression(double dt) {
         float fDt = (float) dt;
         normalBeams.updatePrecompression(fDt);

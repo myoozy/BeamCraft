@@ -79,6 +79,27 @@ public class WheelContainer {
     //     undefined nodeCoupling falls back to the inner axle node; an undefined nodeArm
     //     means no explicit braking reaction (the load is carried structurally).
     // ================================================================
+    /**
+     * A/B switch for the driveline reaction investigation.
+     *
+     * <p>The measured pitch says the chassis sees too much driveline reaction: static
+     * attitude, coasting and service braking all match BeamNG, while acceleration is
+     * 47% over (+2.5 deg against +1.7) and engine braking 20% over. Every mismatching
+     * case carries driveline torque and every matching one does not, and the excess
+     * scales with that torque.
+     *
+     * <p>{@code torqueCoupling}/{@code torqueArm}/{@code torqueArm2} reach BeamNG's C++
+     * wheel object, but what it does with them is not visible in the Lua — so whether
+     * this per-wheel reaction is an extra one on top of the torsion reactor's, or the
+     * mechanism the reactor feeds, cannot be read off the data. Turning it off decides
+     * that: if the pitch falls to around +1.7 the per-wheel reaction was the excess and
+     * this path should be dropped; if nothing moves, the reactor is carrying it alone
+     * and the excess is elsewhere.
+     *
+     * <p>Leave {@code true} for normal operation; this is a temporary probe.
+     */
+    public static boolean DRIVE_REACTION_ENABLED = true;
+
     public int[] torqueCouplingNode = newReactionNodeArray();
     public int[] torqueArmNode = newReactionNodeArray();
     public int[] torqueArm2Node = newReactionNodeArray();
@@ -892,6 +913,7 @@ public class WheelContainer {
      * torque was applied (e.g. neutral), so nothing is generated here either.
      */
     public void applyDriveReaction(int wheelIdx, float torque) {
+        if (!DRIVE_REACTION_ENABLED) return;
         if (wheelIdx < 0 || wheelIdx >= count) return;
         int torqueCoupling = torqueCouplingNode[wheelIdx];
         int torqueArm = torqueArmNode[wheelIdx];
