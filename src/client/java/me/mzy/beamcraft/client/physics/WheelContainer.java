@@ -121,6 +121,8 @@ public class WheelContainer {
         double hubPeriphDamp = spec.hubPeriphDamp();
         double hubSideSpring = spec.hubSideSpring();
         double hubSideDamp = spec.hubSideDamp();
+        double hubReinfSpring = spec.hubReinfSpring();
+        double hubReinfDamp = spec.hubReinfDamp();
         String hubGroup = spec.hubGroup();
         ensureWheelCapacity();
         int wIdx = count;
@@ -163,23 +165,30 @@ public class WheelContainer {
         double centerZ = midZ - axisZ[0] * offset;
 
         // 2. 生成 Hub 节点
+        //
+        // The two rings are offset by half a ray, matching addPressureWheel: it
+        // advances its ray vector by 2*pi/(numRays*2) between the two nodes of each
+        // iteration, so the node2-side ring sits on the ray angles and the
+        // node1-side ring sits half a step ahead. Aligning the rings instead changes
+        // the length and direction of every across-width beam.
+        double hubStep = (2.0 * Math.PI) / rays;
+        double hubHalfStep = hubStep * 0.5;
         for (int i = 0; i < rays; i++) {
-            double angle = (2.0 * Math.PI * i) / rays;
-            double cosA = Math.cos(angle);
-            double sinA = Math.sin(angle);
+            double inAngle = i * hubStep;
+            double outAngle = inAngle + hubHalfStep;
+            double inCos = Math.cos(inAngle);
+            double inSin = Math.sin(inAngle);
+            double outCos = Math.cos(outAngle);
+            double outSin = Math.sin(outAngle);
 
-            double rayX = uX[0] * cosA + vX[0] * sinA;
-            double rayY = uY[0] * cosA + vY[0] * sinA;
-            double rayZ = uZ[0] * cosA + vZ[0] * sinA;
+            // 内外圈各占 width 的一半。in = n2 侧（角度未偏移），out = n1 侧（偏移半格）
+            double inX = centerX + (uX[0] * inCos + vX[0] * inSin) * radius - axisX[0] * (width * 0.5);
+            double inY = centerY + (uY[0] * inCos + vY[0] * inSin) * radius - axisY[0] * (width * 0.5);
+            double inZ = centerZ + (uZ[0] * inCos + vZ[0] * inSin) * radius - axisZ[0] * (width * 0.5);
 
-            // 内外圈各占 width 的一半
-            double inX = centerX + rayX * radius - axisX[0] * (width * 0.5);
-            double inY = centerY + rayY * radius - axisY[0] * (width * 0.5);
-            double inZ = centerZ + rayZ * radius - axisZ[0] * (width * 0.5);
-
-            double outX = centerX + rayX * radius + axisX[0] * (width * 0.5);
-            double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
-            double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
+            double outX = centerX + (uX[0] * outCos + vX[0] * outSin) * radius + axisX[0] * (width * 0.5);
+            double outY = centerY + (uY[0] * outCos + vY[0] * outSin) * radius + axisY[0] * (width * 0.5);
+            double outZ = centerZ + (uZ[0] * outCos + vZ[0] * outSin) * radius + axisZ[0] * (width * 0.5);
 
             // 生成物理节点
             hubInnerNodes[baseOffset + i] = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
@@ -194,37 +203,43 @@ public class WheelContainer {
         }
 
         // 3. 生成物理拓扑 (Beams)
+        //
+        // Family layout follows addPressureWheel, translated into this naming where
+        // hubInner is the n2 side and hubOuter the n1 side:
+        //   hubTread      : hubInner_i->hubOuter_i and hubOuter_i->hubInner_{i+1}
+        //   hubPeriphery  : the two rings
+        //   hubSide       : each ring to its own axle node
+        //   hubReinf      : each ring to the opposite axle node
+        //   hubStabilizer : hubInner_i -> nodeS (node2 side only, when present)
         for (int i = 0; i < rays; i++) {
             int next = (i + 1) % rays;
             int hInCur = hubInnerNodes[baseOffset + i], hInNext = hubInnerNodes[baseOffset + next];
             int hOutCur = hubOuterNodes[baseOffset + i], hOutNext = hubOuterNodes[baseOffset + next];
 
-            // ================= 1. 轮辋蒙皮 =================
-            // 周长支撑 (Tread)
-            int treadInIdx = addFastBeam(hInCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
-            int treadOutIdx = addFastBeam(hOutCur, hOutNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
-            vehicle.normalBeams.bindToTire(treadInIdx, wIdx);
-            vehicle.normalBeams.bindToTire(treadOutIdx, wIdx);
+            // ================= 1. 轮辋胎面 (Tread) =================
+            // 同射线的跨宽度支撑 + 一格斜撑，两者合起来才是 BeamNG 的胎面
+            addFastBeam(hInCur, hOutCur, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
+            addFastBeam(hOutCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
 
-            // 横向支撑与 X 型交叉防扭曲 (Periphery)
-            //addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, hubBeamStrength); // 直连  <--直连和交叉只能二选一，不然会不稳定，根据观察，BeamNG只有交叉梁
-            addFastBeam(hInCur, hOutNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength); // 交叉 1
-            addFastBeam(hOutCur, hInNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength); // 交叉 2
+            // ================= 2. 圆周环 (Periphery) =================
+            int periInIdx = addFastBeam(hInCur, hInNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength);
+            int periOutIdx = addFastBeam(hOutCur, hOutNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength);
+            vehicle.normalBeams.bindToTire(periInIdx, wIdx);
+            vehicle.normalBeams.bindToTire(periOutIdx, wIdx);
 
-            // ================= 2. 自行车交叉辐条 (Spokes) =================
-            // a) 直连辐条 (内圈连内侧轴，外圈连外侧轴)
-            addFastBeam(hOutCur, n1, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
+            // ================= 3. 辐条 (Spokes) =================
+            // 直连辐条：每圈连自己那一侧的轴节点
             addFastBeam(hInCur, n2, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
+            addFastBeam(hOutCur, n1, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
 
-            // b) 交叉辐条 (内圈连外侧轴，外圈连内侧轴)
-            addFastBeam(hOutCur, n2, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
-            addFastBeam(hInCur, n1, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
+            // 交叉辐条：每圈连对侧的轴节点
+            addFastBeam(hInCur, n1, hubReinfSpring, hubReinfDamp, hubBeamDeform, hubBeamStrength);
+            addFastBeam(hOutCur, n2, hubReinfSpring, hubReinfDamp, hubBeamDeform, hubBeamStrength);
 
-            // ================= 3. 稳定节点支撑 (nodeS) =================
-            // 将轮毂内外圈所有节点都与 nodeS 相连，分摊 n2 的受力
+            // ================= 4. 稳定节点支撑 (nodeS) =================
+            // BeamNG 只把 node2 侧那一圈连到稳定节点
             if (nodeS != null) {
                 addFastBeam(hInCur, nodeS, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
-                addFastBeam(hOutCur, nodeS, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
             }
         }
 
@@ -341,22 +356,28 @@ public class WheelContainer {
         double centerZ = midZ - axisZ[0] * offset;
 
         // 1. 生成轮胎外圈节点
+        //
+        // Same half-ray offset as the hub, matching addPressureWheel. Note the
+        // parity is opposite to the hub: here the n1-side ring sits on the ray angles
+        // and the n2-side ring is half a step ahead, which is what makes the tread
+        // and sidewall diagonals fold the way BeamNG's do.
+        double tireStep = (2.0 * Math.PI) / rays;
+        double tireHalfStep = tireStep * 0.5;
         for (int i = 0; i < rays; i++) {
-            double angle = (2.0 * Math.PI * i) / rays;
-            double cosA = Math.cos(angle);
-            double sinA = Math.sin(angle);
+            double inAngle = i * tireStep + tireHalfStep;
+            double outAngle = i * tireStep;
+            double inCos = Math.cos(inAngle);
+            double inSin = Math.sin(inAngle);
+            double outCos = Math.cos(outAngle);
+            double outSin = Math.sin(outAngle);
 
-            double rayX = uX[0] * cosA + vX[0] * sinA;
-            double rayY = uY[0] * cosA + vY[0] * sinA;
-            double rayZ = uZ[0] * cosA + vZ[0] * sinA;
+            double inX = centerX + (uX[0] * inCos + vX[0] * inSin) * radius - axisX[0] * (width * 0.5);
+            double inY = centerY + (uY[0] * inCos + vY[0] * inSin) * radius - axisY[0] * (width * 0.5);
+            double inZ = centerZ + (uZ[0] * inCos + vZ[0] * inSin) * radius - axisZ[0] * (width * 0.5);
 
-            double inX = centerX + rayX * radius - axisX[0] * (width * 0.5);
-            double inY = centerY + rayY * radius - axisY[0] * (width * 0.5);
-            double inZ = centerZ + rayZ * radius - axisZ[0] * (width * 0.5);
-
-            double outX = centerX + rayX * radius + axisX[0] * (width * 0.5);
-            double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
-            double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
+            double outX = centerX + (uX[0] * outCos + vX[0] * outSin) * radius + axisX[0] * (width * 0.5);
+            double outY = centerY + (uY[0] * outCos + vY[0] * outSin) * radius + axisY[0] * (width * 0.5);
+            double outZ = centerZ + (uZ[0] * outCos + vZ[0] * outSin) * radius + axisZ[0] * (width * 0.5);
 
             int idxIn = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
                     wheelName + "_tire_in_" + i, (float) inX, (float) inY, (float) inZ, (float) nodeWeight,
@@ -423,51 +444,62 @@ public class WheelContainer {
             // ========================================================
             // 2. 胎面横向梁 (Tread Beams) —— 跨宽度，主导过弯侧向支撑
             // ========================================================
-            // 普通胎面横向支撑 (1根直连 + 2根交叉)
-            addFastBeam(tInCur,  tOutCur,  treadSpring, treadDamp, treadDeform, treadStrength);
+            // BeamNG keeps exactly two per ray: the within-ray cross-width beam and one
+            // half-step-folded diagonal. The previous third beam (tOut_c->tIn_next) is
+            // BeamNG's tread-reinforcement beam, so it moved into that family below.
+            addFastBeam(tOutCur, tInCur,  treadSpring, treadDamp, treadDeform, treadStrength);
             addFastBeam(tInCur,  tOutNext, treadSpring, treadDamp, treadDeform, treadStrength);
-            addFastBeam(tOutCur, tInNext,  treadSpring, treadDamp, treadDeform, treadStrength);
 
             // 胎面加强筋 (跨宽度 且 跨圆周的大交叉，文档中的 across +-2 nodes)
             if (enableTreadReinfBeams) {
+                addFastBeam(tOutCur, tInNext,  treadReinfSpring, treadReinfDamp, treadDeform, treadStrength);
                 addFastBeam(tInCur,  tOutNext2, treadReinfSpring, treadReinfDamp, treadDeform, treadStrength);
-                addFastBeam(tOutCur, tInNext2,  treadReinfSpring, treadReinfDamp, treadDeform, treadStrength);
             }
 
             // ========================================================
             // 3. 侧壁梁 (Sidewall Beams) —— 连 Hub 和 Tire，由气压主导
             // ========================================================
-            // 普通侧壁支撑 (沿半径直连)
-            int sideInIdx = addFastAnisotropicBeam(hInCur,  tInCur,  sideSpring, sideDamp, sideDeform, sideStrength,
+            // BeamNG braces each sidewall band with a V per ray: hub ring i to tire ring
+            // i, and tire ring i to hub ring i+1. Two straight radial beams per side (the
+            // previous layout) is half the bracing.
+            int sideOutA = addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
                     sideSpringExp, sideDampExp, sideTransZone);
-            int sideOutIdx = addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
+            int sideOutB = addFastAnisotropicBeam(hOutCur, tOutNext, sideSpring, sideDamp, sideDeform, sideStrength,
                     sideSpringExp, sideDampExp, sideTransZone);
-            vehicle.anisotropicBeams.bindToTire(sideInIdx, wIdx);
-            vehicle.anisotropicBeams.bindToTire(sideOutIdx, wIdx);
+            vehicle.anisotropicBeams.bindToTire(sideOutA, wIdx);
+            vehicle.anisotropicBeams.bindToTire(sideOutB, wIdx);
+            addFastAnisotropicBeam(hInCur, tInCur, sideSpring, sideDamp, sideDeform, sideStrength,
+                    sideSpringExp, sideDampExp, sideTransZone);
+            addFastAnisotropicBeam(tInCur, hInNext, sideSpring, sideDamp, sideDeform, sideStrength,
+                    sideSpringExp, sideDampExp, sideTransZone);
 
-            // 侧壁加强筋 (侧壁交叉防扭曲，连目标环带的 i+2，文档中的 sidewall +-2 nodes)
+            // 侧壁加强筋 (同侧长斜撑，跨 i+1 与 i+2)
             if (enableTireSideReinfBeams) {
-                addFastAnisotropicBeam(hInCur,  tInNext2,  sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
+                addFastAnisotropicBeam(hInCur,  tInNext,  sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
                         sideReinfSpringExp, sideReinfDampExp, sideTransZone);
-                addFastAnisotropicBeam(hOutCur, tOutNext2, sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
+                addFastAnisotropicBeam(tInCur,  hubInnerNodes[baseOffset + next2], sideReinfSpring, sideReinfDamp,
+                        sideDeform, sideStrength, sideReinfSpringExp, sideReinfDampExp, sideTransZone);
+                addFastAnisotropicBeam(tOutCur, hOutNext, sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
                         sideReinfSpringExp, sideReinfDampExp, sideTransZone);
+                addFastAnisotropicBeam(hOutCur, tireOuterNodes[baseOffset + next2], sideReinfSpring, sideReinfDamp,
+                        sideDeform, sideStrength, sideReinfSpringExp, sideReinfDampExp, sideTransZone);
             }
 
             // ========================================================
-            // 4. 内部截面大支撑 (wheelReinfBeam)
+            // 4. 内部截面大支撑 (wheelReinfBeam / L-Beam)
             // ========================================================
-            // 穿过空气腔，连接内侧 Hub 和 外侧 Tire，防止轮胎截面横向塌陷
+            // 穿过空气腔，连接内侧 Hub 和 外侧 Tire，防止轮胎截面横向塌陷。
+            // BeamNG picks exactly one of the two forms; L-beams are the default and the
+            // straight beams are only used when reinforcement beams are explicitly on.
             if (enableTireReinfBeams) {
-                addFastBeam(hInCur,  tOutNext, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
-                addFastBeam(hOutCur, tInNext, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
-            }
+                addFastBeam(tOutCur, hInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
+                addFastBeam(hOutCur, tInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
+            } else if (enableTireLBeams) {
+                // 交叉对角线 1：连接 tOut 和 hIn，以对侧轮辋节点 hOut 为支点
+                addFastLBeam(tOutCur, hInCur, hOutCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
 
-            if (enableTireLBeams) {
-                // 交叉对角线 1：共享点 tIn，连接 hIn 和 tOut
-                addFastLBeam(hInCur, tOutCur, tInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
-
-                // 交叉对角线 2：共享点 tOut，连接 hOut 和 tIn
-                addFastLBeam(hOutCur, tInCur, tOutCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
+                // 交叉对角线 2：连接 hOut 和 tIn，以对侧轮辋节点 hIn 为支点
+                addFastLBeam(hOutCur, tInCur, hInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
             }
 
             // ========================================================

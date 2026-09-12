@@ -83,8 +83,11 @@ public class JBeamPressureWheelsParser {
                 double hubPeripheryBeamDamp = getVal(activeConfig, "hubPeripheryBeamDamp", 6, entry.variables);
                 double hubSideBeamSpring = getVal(activeConfig, "hubSideBeamSpring", 1351000, entry.variables);
                 double hubSideBeamDamp = getVal(activeConfig, "hubSideBeamDamp", 6, entry.variables);
-                double hubReinfBeamSpring = getVal(activeConfig, "hubReinfBeamSpring", 0, entry.variables);
-                double hubReinfBeamDamp = getVal(activeConfig, "hubReinfBeamDamp", 0, entry.variables);
+                // BeamNG builds hubReinfOptions as a deepcopy of hubSideOptions, so an
+                // unauthored hubReinfBeam{Spring,Damp} falls back to the side values
+                // rather than to zero.
+                double hubReinfBeamSpring = getVal(activeConfig, "hubReinfBeamSpring", hubSideBeamSpring, entry.variables);
+                double hubReinfBeamDamp = getVal(activeConfig, "hubReinfBeamDamp", hubSideBeamDamp, entry.variables);
 
                 // ----- 轮胎参数 -----
                 double tireNodeWeight = getFirstVal(activeConfig, "nodeWeight", "tireWeight", 0.15, entry.variables);
@@ -138,11 +141,16 @@ public class JBeamPressureWheelsParser {
                 double wheelPeripheryBeamStrength = getVal(activeConfig, "wheelPeripheryBeamStrength", 40000, entry.variables);
                 double wheelPeripheryReinfBeamSpring = getVal(activeConfig, "wheelPeripheryReinfBeamSpring", 95000, entry.variables);
                 double wheelPeripheryReinfBeamDamp = getVal(activeConfig, "wheelPeripheryReinfBeamDamp", 23, entry.variables);
+                // Gate defaults follow addPressureWheel, where every one of these is an
+                // `if wheel.enableX then` test: unauthored means nil, i.e. OFF. Only
+                // enableTireLbeams has a gate that reads as on-by-default in practice,
+                // because BeamNG's own tire data authors it. Note the key spelling is
+                // lowercase "Lbeams" in the jbeam data.
                 boolean enableTireReinfBeams = getBool(activeConfig, "enableTireReinfBeams", false);
-                boolean enableTireLBeams = getBool(activeConfig, "enableTireLBeams", true);
-                boolean enableTireSideReinfBeams = getBool(activeConfig, "enableTireSideReinfBeams", true);
-                boolean enableTreadReinfBeams = getBool(activeConfig, "enableTreadReinfBeams", true);
-                boolean enableTirePeripheryReinfBeams = getBool(activeConfig, "enableTirePeripheryReinfBeams", true);
+                boolean enableTireLBeams = getBool(activeConfig, "enableTireLbeams", true);
+                boolean enableTireSideReinfBeams = getBool(activeConfig, "enableTireSideReinfBeams", false);
+                boolean enableTreadReinfBeams = getBool(activeConfig, "enableTreadReinfBeams", false);
+                boolean enableTirePeripheryReinfBeams = getBool(activeConfig, "enableTirePeripheryReinfBeams", false);
                 boolean enableTireSupportBeams = getBool(activeConfig, "enableTireSupportBeams", false);
                 double tireSupportBeamSpring = getVal(activeConfig, "tireSupportBeamSpring", 0, entry.variables);
                 double tireSupportBeamDamp = getVal(activeConfig, "tireSupportBeamDamp", 0, entry.variables);
