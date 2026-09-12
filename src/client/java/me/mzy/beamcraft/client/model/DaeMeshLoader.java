@@ -82,7 +82,7 @@ public class DaeMeshLoader {
         VEHICLE_REF_COUNT.put(targetVehicleName, count + 1);
 
         if (count == 0) {
-            System.out.println("====== 🚀 按需加载 DAE 资产: " + targetVehicleName + " ======");
+            System.out.println("Loading DAE assets for: " + targetVehicleName);
 
             // 1. 确保基础 common 资产已加载
             if (!isCommonLoaded) {
@@ -104,7 +104,7 @@ public class DaeMeshLoader {
         int count = VEHICLE_REF_COUNT.getOrDefault(targetVehicleName, 0) - 1;
         if (count <= 0) {
             VEHICLE_REF_COUNT.remove(targetVehicleName);
-            System.out.println("====== 🗑️ 回收 DAE 资产: " + targetVehicleName + " ======");
+            System.out.println("Releasing DAE assets for: " + targetVehicleName);
 
             // 从缓存中安全移除属于该车系的所有网格数据，释放堆内存
             String prefix = targetVehicleName + ":";
@@ -135,7 +135,7 @@ public class DaeMeshLoader {
                     entry.deleteTemp();
                 }
             } catch (Exception e) {
-                System.err.println("🚨 加载 DAE 资产失败: " + entry.sourceAddress());
+                System.err.println("Failed to load DAE asset: " + entry.sourceAddress());
             }
         }
     }
@@ -147,8 +147,8 @@ public class DaeMeshLoader {
                         Assimp.aiProcess_JoinIdenticalVertices |    // 优化合并
                         Assimp.aiProcess_ImproveCacheLocality;
 
-        // 创建属性存储器，强制禁止 Assimp 自动将 Z-up 转换为 Y-up！
-        // 这样读取进来的顶点就是纯正的 BeamNG 原始数据，完美对接 JBeam 插槽旋转。
+        // Disable Assimp's automatic Z-up to Y-up conversion so the imported
+        // vertices stay in BeamNG's native frame, matching the JBeam slot transforms.
         AIPropertyStore store = Assimp.aiCreatePropertyStore();
         if (store != null) {
             Assimp.aiSetImportPropertyInteger(store, Assimp.AI_CONFIG_IMPORT_COLLADA_IGNORE_UP_DIRECTION, 1);
@@ -235,7 +235,7 @@ public class DaeMeshLoader {
 
                 int currentMergedVertPtr = 0;
                 int currentMergedIndexPtr = 0;
-                // 复用临时向量对象，避免高频创建销毁产生内存垃圾
+                // Reuse temporary vectors instead of allocating per vertex.
                 Vector3f tempPos = new Vector3f();
                 Vector3f tempNorm = new Vector3f();
 
@@ -338,7 +338,7 @@ public class DaeMeshLoader {
                 unifiedGeometry.indexCount  = currentMergedIndexPtr;
                 unifiedGeometry.subMeshes   = subMeshes;
 
-                // 完美映射：基于原生节点名与切片名进行双重全域覆盖
+                // Register under both the cleaned and the original node name so either resolves.
                 MESH_CACHE.put(namespace + ":" + cleanNodeName, unifiedGeometry);
                 if (!cleanNodeName.equals(rawNodeName)) {
                     MESH_CACHE.put(namespace + ":" + rawNodeName, unifiedGeometry);

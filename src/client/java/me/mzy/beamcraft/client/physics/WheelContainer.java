@@ -49,7 +49,7 @@ public class WheelContainer {
     public float[] fullLoadCoef         = new float[INIT_WHEEL_CAP];
     public float[] softnessCoef         = new float[INIT_WHEEL_CAP];
 
-    // 🚀 一维展平数组：内存地址 100% 连续
+    // 一维展平数组，内存连续
     // 寻址方式： index = (wheelIndex * MAX_RAYS) + rayIndex
     public int[] hubInnerNodes = new int[INIT_WHEEL_CAP * MAX_RAYS];
     public int[] hubOuterNodes = new int[INIT_WHEEL_CAP * MAX_RAYS];
@@ -154,12 +154,12 @@ public class WheelContainer {
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
-        // 🚀 1. 算出 n1 和 n2 的物理中点
+        // 1. 算出 n1 和 n2 的物理中点
         double midX = (vehicle.nodes.posX[n1] + vehicle.nodes.posX[n2]) * 0.5;
         double midY = (vehicle.nodes.posY[n1] + vehicle.nodes.posY[n2]) * 0.5;
         double midZ = (vehicle.nodes.posZ[n1] + vehicle.nodes.posZ[n2]) * 0.5;
 
-        // 🚀 2. 基于中点施加 Offset 偏距 (减号保持不变，因为 axisX 指向外侧，减去负 offset 刚好向外拓展)
+        // 2. 基于中点施加 Offset 偏距 (减号保持不变：axisX 指向外侧，减去 offset 即向外)
         double centerX = midX - axisX[0] * offset;
         double centerY = midY - axisY[0] * offset;
         double centerZ = midZ - axisZ[0] * offset;
@@ -217,7 +217,7 @@ public class WheelContainer {
             int hOutCur = hubOuterNodes[baseOffset + i], hOutNext = hubOuterNodes[baseOffset + next];
 
             // ================= 1. 轮辋胎面 (Tread) =================
-            // 同射线的跨宽度支撑 + 一格斜撑，两者合起来才是 BeamNG 的胎面
+            // 同射线的跨宽度支撑，加一格斜撑，两者构成 BeamNG 的胎面
             addFastBeam(hInCur, hOutCur, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
             addFastBeam(hOutCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
 
@@ -345,12 +345,12 @@ public class WheelContainer {
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
-        // 🚀 1. 算出 n1 和 n2 的物理中点
+        // 1. 算出 n1 和 n2 的物理中点
         double midX = (vehicle.nodes.posX[n1] + vehicle.nodes.posX[n2]) * 0.5;
         double midY = (vehicle.nodes.posY[n1] + vehicle.nodes.posY[n2]) * 0.5;
         double midZ = (vehicle.nodes.posZ[n1] + vehicle.nodes.posZ[n2]) * 0.5;
 
-        // 🚀 2. 基于中点施加 Offset 偏距 (减号保持不变，因为 axisX 指向外侧，减去负 offset 刚好向外拓展)
+        // 2. 基于中点施加 Offset 偏距 (减号保持不变：axisX 指向外侧，减去 offset 即向外)
         double centerX = midX - axisX[0] * offset;
         double centerY = midY - axisY[0] * offset;
         double centerZ = midZ - axisZ[0] * offset;
@@ -421,7 +421,7 @@ public class WheelContainer {
             addTriangle(tInCur, tInNext, tOutNext, partId, COLLISION);
             addTriangle(tInCur, tOutNext, tOutCur, partId, COLLISION);
 
-            // 轮胎与轮辋接触面（纯粹用于闭合散度体积，绝对关闭碰撞）
+            // 轮胎与轮辋接触面（仅用于闭合散度体积，关闭碰撞）
             // Use the same hOut_i -> hIn_{i+1} diagonal as hubTread. The former
             // triangulation was left over from the aligned-ring topology.
             addTriangle(hOutCur, hInNext, hInCur, partId, false);
@@ -512,14 +512,14 @@ public class WheelContainer {
             // ========================================================
             if (enableTireSupportBeams) {
                 // TODO: 优先级不高
-                // 这里的梁应当存入 supportBeams 容器，并且设置 beamPrecompression（如 0.85）
-                // 使得它们平时处于松弛状态，只有当轮胎快要彻底压死碰壁时才提供极强的推力
+                // 这里的梁应当存入 supportBeams 容器，并设置 beamPrecompression（如 0.85），
+                // 使其平时处于松弛状态，只在轮胎接近压死时提供较大的推力
                 // vehicle.supportBeams.addBeam(...);
             }
         }
         tireTriangleIdxEnd[wIdx] = vehicle.triangles.count - 1;
 
-        // 废弃圆柱公式，使用离散网格精准求积，保证初始内外压强比绝对为 1.0
+        // 用离散网格积分求体积，不用圆柱公式，这样初始内外压强比恰为 1.0
         double volSum = 0.0;
         for (int i = tireTriangleIdxStart[wIdx]; i <= tireTriangleIdxEnd[wIdx]; i++) {
             int nA = vehicle.triangles.node1[i];
@@ -536,10 +536,10 @@ public class WheelContainer {
 
             volSum += (ax * crossX + ay * crossY + az * crossZ);
         }
-        // 记录绝对静止体积
+        // 记录静止体积
         initialVolume[wIdx] = (float) Math.abs(volSum / 6.0);
 
-        // 不要忘记初始化！！！
+        // 初始化 prevVolume 与 normalSign
         prevVolume[wIdx] = initialVolume[wIdx];
         normalSign[wIdx] = (volSum < 0.0) ? -1.0f : 1.0f;
     }
@@ -621,7 +621,7 @@ public class WheelContainer {
         double n1x = vehicle.nodes.posX[n1], n1y = vehicle.nodes.posY[n1], n1z = vehicle.nodes.posZ[n1];
         double n2x = vehicle.nodes.posX[n2], n2y = vehicle.nodes.posY[n2], n2z = vehicle.nodes.posZ[n2];
 
-        // n1 永远是外侧，n2 是内侧。因此 n1 - n2 永远指向车外
+        // n1 是外侧，n2 是内侧，因此 n1 - n2 指向车外
         ax[0] = n1x - n2x; ay[0] = n1y - n2y; az[0] = n1z - n2z;
         double len = Math.sqrt(ax[0]*ax[0] + ay[0]*ay[0] + az[0]*az[0]);
         if (len > 0) { ax[0]/=len; ay[0]/=len; az[0]/=len; }

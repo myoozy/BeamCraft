@@ -134,12 +134,12 @@ public class JBeamParser {
         if (el.isJsonNull()) return defaultValue;
 
         String str = el.getAsString().trim();
-        if (str.isEmpty()) return defaultValue; // 完美拦截 ""
+        if (str.isEmpty()) return defaultValue; // 空串直接返回默认值
 
         try {
             return Integer.parseInt(str);
         } catch (NumberFormatException e) {
-            // 如果遇到小数或者乱码，退回到默认值
+            // 非整数（小数或非法字符）退回默认值
             return defaultValue;
         }
     }
@@ -1023,7 +1023,7 @@ public class JBeamParser {
 
         for (JsonElement element : slidenodes) {
 
-            // 1. 拦截全局修饰符（字典 {}），这里就可以用 getDoubleSafe 了！
+            // 1. 全局修饰符（字典 {}）
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
                 currentSpring = getFloatSafe(modifier, "spring", currentSpring, entry.variables);
@@ -1045,24 +1045,24 @@ public class JBeamParser {
                     float inlineSpring = currentSpring;
                     float inlineDamp = currentDamp;
 
-                    // 3. 拦截行内修饰符（字典 {}），比如 ["fh4r", "strut_FR", {"spring": 12000}]
+                    // 3. 行内修饰符（字典 {}），如 ["fh4r", "strut_FR", {"spring": 12000}]
                     if (row.get(row.size() - 1).isJsonObject()) {
                         JsonObject inline = row.get(row.size() - 1).getAsJsonObject();
                         inlineSpring = getFloatSafe(inline, "spring", inlineSpring, entry.variables);
                         inlineDamp = getFloatSafe(inline, "damp", inlineDamp, entry.variables);
                     }
-                    // 4. 兼容那个偷懒的旧写法（按格子顺序读）
+                    // 4. 旧写法：按格子顺序读取
                     else if (row.size() > 5) {
                         try {
                             String sStr = row.get(5).getAsString().trim();
-                            // 过滤掉 FLT_MAX 这种没用的占位符
+                            // 跳过 FLT_MAX 占位符
                             if (!sStr.isEmpty() && !sStr.contains("FLT")) {
                                 inlineSpring = Float.parseFloat(sStr);
                             }
-                        } catch (Exception ignored) {} // 如果读不到数字就算了，用默认值
+                        } catch (Exception ignored) {} // 读到非数字时保留默认值
                     }
 
-                    // 绑定到轨道上
+                    // 绑定到轨道
                     String[] links = globalRailMap.get(railName);
                     if (links != null && links.length >= 2) {
                         vehicle.addSlideNode(new PhysicsSpecs.SlideNodeSpec(nodeId, links, inlineSpring, inlineDamp));
@@ -1081,7 +1081,7 @@ public class JBeamParser {
         String currentDeformMaterialDamaged = "";
 
         for (JsonElement element : flexbodies) {
-            // 拦截并更新全局状态修改器
+            // 更新全局状态修改器
             if (element.isJsonObject()) {
                 JsonObject modifier = element.getAsJsonObject();
                 if (modifier.has("group")) {
@@ -1113,7 +1113,7 @@ public class JBeamParser {
 
                     if (row.size() >= 2 && !row.get(1).isJsonObject()) {
                         JsonElement groupElement = row.get(1);
-                        // 无条件覆写！即使 JBeam 传入的是 ""，它也能正确解析为空列表，从而实现 BeamNG 的“清除 Group”指令。
+                        // 无条件覆写：即便 JBeam 传入 ""，也会解析为空列表，对应 BeamNG 的清除 Group 指令。
                         targetGroups = parseGroups(groupElement, entry.variables);
                     }
 

@@ -117,7 +117,7 @@ public class JBeamAssembler {
                 collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, new TransformContext(), globalVariables);
             }
 
-            System.out.println("====== 🛠️ Starting multi-Pass Assembly ======");
+            System.out.println("Starting multi-Pass Assembly");
             System.out.println("Collected " + activeParts.size() + " valid part modules.");
 
             // Pass 1: Create all nodes FIRST
@@ -171,7 +171,7 @@ public class JBeamAssembler {
             System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + beamsCount);
 
             // Pass 3: 逆向解析车轮
-            System.out.println("====== 🛞 Assembling Wheels ======");
+            System.out.println("Assembling Wheels");
             JsonObject wheelConfigBlackboard = new JsonObject();
             for (PartEntry entry : activeParts) {
                 if (entry.json.has("pressureWheels")) {
@@ -197,7 +197,7 @@ public class JBeamAssembler {
                     AdaptiveDamperParser.parsePart(assembledData, globalVariables));
 
             // Pass 4: Resolve Couplers
-            System.out.println("====== 🔗 Resolving Couplers ======");
+            System.out.println("Resolving Couplers");
             int attachedCount = 0;
             for (CouplerRegistry.DirectCouplerDef direct : couplerRegistry.directDefinitions) {
                 if (addSpawnCoupler(vehicle, direct.node1, direct.node2,
@@ -245,7 +245,7 @@ public class JBeamAssembler {
 
             return true;
         } catch (Throwable t) {
-            System.err.println("🚨 车辆装配过程中发生严重错误！");
+            System.err.println("Fatal error while assembling vehicle");
             t.printStackTrace();
             return false;
         }

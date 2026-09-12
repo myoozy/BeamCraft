@@ -45,8 +45,8 @@ public class FlexbodyBindingUtil {
                 if (!foundAny) valid = false;
             }
 
-            // 如果判定为幽灵网格，直接把它的名字清空。
-            // 这样不仅这里不会统计它的顶点，后期的 Renderer 也会因为名字为空找不到模型而自动跳过！
+            // An unresolvable mesh gets its name cleared. Its vertices are not counted
+            // here, and the renderer later skips it because the name resolves to nothing.
             if (!valid) {
                 flex.meshName[m] = "";
             } else {
@@ -66,7 +66,7 @@ public class FlexbodyBindingUtil {
         boolean[] generatedWheelNodes = collectGeneratedWheelNodes(vehicle.wheels, nodes.count);
 
         for (int m = 0; m < flex.meshCount; m++) {
-            // 直接判断名字是否为空，跳过被我们“处决”的幽灵网格
+            // Skip meshes cleared above.
             if (flex.meshName[m].isEmpty()) continue;
 
             DaeMeshLoader.RawGeometry geom = DaeMeshLoader.resolveMesh(flex.vehicleNamespace, flex.meshName[m]);
@@ -177,8 +177,9 @@ public class FlexbodyBindingUtil {
                     nOrigZ = -(gNorm[1] - gOrigin[1]);
                 }
 
-                // 彻底砍掉 globalPool 备用池逻辑！
-                // 如果在自己的专属 Group 里找不到合适的投射面，乖乖原位退化成货斗门上的刚体，绝不越界去抓车身！
+                // There is no global fallback pool. If no usable basis exists inside the
+                // mesh's own groups, fall back to a rigid binding at the vertex's own
+                // position rather than reaching into nodes owned by other parts.
                 boolean success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
                 if (!success) {
                     applyFallbackRigidBinding(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
@@ -193,7 +194,7 @@ public class FlexbodyBindingUtil {
             }
         }
         flex.isSkinningBound = true;
-        System.out.println("🎨 工业级平滑蒙皮出厂绑定完美闭环！总渲染点数: " + flex.totalVertexCount);
+        System.out.println("Flexbody binding complete, total render vertices: " + flex.totalVertexCount);
     }
 
     private static boolean[] collectWheelAxisNodes(WheelContainer wheels, int nodeCount) {

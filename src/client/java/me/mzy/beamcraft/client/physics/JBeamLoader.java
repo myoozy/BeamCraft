@@ -44,7 +44,7 @@ public class JBeamLoader {
         String[] pcContentBox = new String[]{""};
         int[] loadedCount = new int[]{0};
 
-        System.out.println("====== 🔍 启动 JBeam 资产扫描 ======");
+        System.out.println("Scanning JBeam assets");
 
         // 1. 加载 common 资源 (common 里的 .pc 永不锁定)
         scanEntries(AssetScanner.INSTANCE.scan(assetRoots, "common"), null, partRegistry, pcContentBox, loadedCount);
@@ -52,7 +52,7 @@ public class JBeamLoader {
         // 2. 扫描目标车辆
         scanEntries(AssetScanner.INSTANCE.scan(assetRoots, targetVehicleName), pcFileName, partRegistry, pcContentBox, loadedCount);
 
-        System.out.println("📦 零件库加载完成。共读取 " + loadedCount[0] + " 个文件，提取 " + partRegistry.size() + " 个零件!");
+        System.out.println("Part library loaded: " + loadedCount[0] + " files, " + partRegistry.size() + " parts");
 
         // 3. 解析 .pc 配置文件
         if (!pcContentBox[0].isEmpty()) {
@@ -65,13 +65,13 @@ public class JBeamLoader {
                 for (String slot : parts.keySet()) {
                     userConfig.put(slot, parts.get(slot).getAsString());
                 }
-                System.out.println("📄 PC配置解析成功，载入 " + userConfig.size() + " 个插槽设定。");
+                System.out.println("Parsed .pc config: " + userConfig.size() + " slot entries");
             } catch (Exception e) {
-                System.err.println("🚨 无法解析 .pc 配置文件结构");
+                System.err.println("Failed to parse .pc config structure");
                 System.err.println(e.getMessage());
             }
         } else {
-            System.err.println("⚠️ 未找到指定的 .pc 配置文件或其内容为空: " + pcFileName);
+            System.err.println(".pc config not found or empty: " + pcFileName);
         }
     }
 
@@ -101,7 +101,7 @@ public class JBeamLoader {
         if (fileName.endsWith(".pc")) {
             if (targetPcName != null && fileName.equals(targetPcName)) {
                 pcContentBox[0] = cleanJBeamSafe(rawContent);
-                System.out.println("   🔒 Locked PC config: " + fileName);
+                System.out.println("Locked PC config: " + fileName);
             }
             return;
         }
