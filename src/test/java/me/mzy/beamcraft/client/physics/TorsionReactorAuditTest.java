@@ -70,6 +70,15 @@ class TorsionReactorAuditTest {
                     vehicle.wheels.name[w], moment);
         }
 
+        System.out.println("  -- topology (child <- parent, with the device's own ratio) --");
+        var topology = vehicle.powertrain.topology;
+        for (int d = 0; d < topology.deviceCount; d++) {
+            int parent = topology.parentDevice[d];
+            System.out.printf(Locale.ROOT, "     %-18s type=%-2d ratio=%8.4f  parent=%s%n",
+                    topology.deviceName[d], topology.deviceType[d], topology.deviceRatio[d],
+                    parent >= 0 ? topology.deviceName[parent] : "(root)");
+        }
+
         double reactorTotal = 0.0;
         var reactions = vehicle.powertrain.reactions;
         for (int r = 0; r < reactions.reactorGain.length; r++) {
