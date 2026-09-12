@@ -88,13 +88,25 @@ public final class ClientVehicleManager {
         Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
         Map<String, String> localConfig = new HashMap<>();
         List<File> assetRoots = BeamCraftConfigManager.assetRoots();
-        JBeamLoader.loadVehicle(
+        if (!JBeamLoader.loadVehicle(
                 assetRoots,
                 rootPart,
                 vehicleEntity.getPcFileName(),
                 localRegistry,
                 localConfig
-        );
+        )) {
+            // The named .pc could not be resolved. Stopping here is the point: an
+            // empty userConfig assembles every slot from its default part, so
+            // carrying on would produce a vehicle other than the one that was asked
+            // for, with nothing reported.
+            LOAD_FAILURES.recordFailure(
+                    vehicleEntity.getId(),
+                    vehicleEntity.getUuid(),
+                    rootPart,
+                    vehicleEntity.getPcFileName());
+            System.err.println("Vehicle load failed for entity " + vehicleEntity.getId());
+            return;
+        }
 
         DaeMeshLoader.requireVehicleModels(assetRoots, rootPart);
         MaterialLibrary.requireMaterials(assetRoots, rootPart);
