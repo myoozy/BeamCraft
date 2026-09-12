@@ -378,10 +378,21 @@ public class JBeamParser {
 
     // --- 1. Node Parsing ---
 
+    /**
+     * Node defaults BeamNG applies when a part's node section never authors the
+     * property. Taken from {@code lua/common/jbeam/loader.lua}
+     * ({@code defaultNodeWeight = 25}) and {@code lua/vehicle/jbeam/stage2.lua}
+     * ({@code frictionCoef or 1}); {@code slidingFriction} stays a negative
+     * sentinel because BeamNG falls back to the resolved friction coefficient, not
+     * to a constant.
+     */
+    static final float DEFAULT_NODE_WEIGHT = 25.0f;
+    static final float DEFAULT_NODE_FRICTION = 1.0f;
+
     /** 可变的行内默认状态，随 nodes 数组中的修饰符对象 {} 逐步更新。 */
     static final class NodeRowState {
-        float weight = 50.0f;
-        float friction = 0.5f;
+        float weight = DEFAULT_NODE_WEIGHT;
+        float friction = DEFAULT_NODE_FRICTION;
         float slidingFriction = -1.0f;
         boolean collision = true;
         boolean selfCollision = false;
@@ -1002,8 +1013,12 @@ public class JBeamParser {
     public static void parseSlidenodes(JsonArray slidenodes, Map<String, String[]> globalRailMap, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
         boolean isHeader = true;
 
-        // 给定默认值
-        float currentSpring = 0.0f;
+        // BeamNG does not default a slidenode spring to zero: processSlidenodes uses
+        // `snode.spring or vehicle.options.beamSpring`, i.e. an unauthored spring is
+        // the global beam spring, so the node rides the rail stiffly rather than
+        // floating on it. Damping has no BeamNG counterpart at all — addSlidenode
+        // takes only a spring — so zero stays the right default there.
+        float currentSpring = DEFAULT_BEAM_SPRING;
         float currentDamp = 0.0f;
 
         for (JsonElement element : slidenodes) {
