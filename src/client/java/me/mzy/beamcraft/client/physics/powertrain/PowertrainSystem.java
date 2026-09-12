@@ -51,6 +51,24 @@ public final class PowertrainSystem {
     private final List<DeviceSpec> pendingSpecs = new ArrayList<>();
 
     // Runtime containers adopted on each finalizeSetup. Read by solve() and by the HUD.
+    /**
+     * A/B switch for the driveline reaction investigation, the counterpart of
+     * {@code WheelContainer.DRIVE_REACTION_ENABLED}.
+     *
+     * <p>BeamNG applies the reaction in two places — the torsion reactor's
+     * {@code engineReactionTorque} and whatever its C++ wheel object does with
+     * {@code torqueCoupling}/{@code torqueArm}/{@code torqueArm2} — and its docs define
+     * both, so stacking them is likely right in principle. The measured pitch says the
+     * stack is about 3.7x too strong (acceleration +2.5 deg against BeamNG's +1.7 with
+     * both on, +1.4 with the per-wheel path off), but that only says the *combination*
+     * is too strong, not which half carries the excess.
+     *
+     * <p>Turning this off while leaving the per-wheel path on decides it: if the pitch
+     * again lands near +1.4, each path alone reacts too strongly and the fault is in how
+     * they compose; if it stays high, the per-wheel path is the stronger of the two.
+     */
+    public static boolean REACTOR_REACTION_ENABLED = true;
+
     private PowertrainData data = new PowertrainData();
     public final PowertrainTopologyContainer topology = data.topology;
     public final CombustionEngineContainer engines = data.engines;
@@ -434,10 +452,12 @@ public final class PowertrainSystem {
             applyReactionTorque(reactions.reactionStart[unit], reactions.reactionCount[unit],
                     externalTorque - couplerInputTorque);
             int rEnd = reactions.reactorStart[unit] + reactions.reactorCount[unit];
-            for (int reactor = reactions.reactorStart[unit]; reactor < rEnd; reactor++) {
-                applyReactionTorque(reactions.reactorNodeStart[reactor], reactions.reactorNodeCount[reactor],
-                        couplerOutputTorque * reactions.reactorGain[reactor]
-                                * (isDct ? pathBaseRatio * rangeFactor : ratioFactor));
+            if (REACTOR_REACTION_ENABLED) {
+                for (int reactor = reactions.reactorStart[unit]; reactor < rEnd; reactor++) {
+                    applyReactionTorque(reactions.reactorNodeStart[reactor], reactions.reactorNodeCount[reactor],
+                            couplerOutputTorque * reactions.reactorGain[reactor]
+                                    * (isDct ? pathBaseRatio * rangeFactor : ratioFactor));
+                }
             }
 
             if (unit == 0) {
