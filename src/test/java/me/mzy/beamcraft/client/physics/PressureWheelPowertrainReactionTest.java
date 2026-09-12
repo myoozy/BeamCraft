@@ -6,6 +6,8 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutch
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.TorquePoint;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -21,6 +23,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PressureWheelPowertrainReactionTest {
     private static final float DT = 0.0005f;
+    @BeforeEach
+    void enableDriveReaction() {
+        WheelContainer.DRIVE_REACTION_ENABLED = true;
+    }
+
+    @AfterEach
+    void restoreDriveReactionDefault() {
+        WheelContainer.DRIVE_REACTION_ENABLED = false;
+    }
+
 
     @Test
     void engagedGearClosesWheelTorqueOnTheCouplingNodes() {

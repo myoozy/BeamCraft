@@ -80,25 +80,25 @@ public class WheelContainer {
     //     means no explicit braking reaction (the load is carried structurally).
     // ================================================================
     /**
-     * A/B switch for the driveline reaction investigation.
+     * Whether a drive torque also gets an explicit per-wheel chassis reaction.
      *
-     * <p>The measured pitch says the chassis sees too much driveline reaction: static
-     * attitude, coasting and service braking all match BeamNG, while acceleration is
-     * 47% over (+2.5 deg against +1.7) and engine braking 20% over. Every mismatching
-     * case carries driveline torque and every matching one does not, and the excess
-     * scales with that torque.
+     * <p><b>Off by default, on measurement.</b> The HUD pitch readout showed every
+     * driveline case too strong while static attitude, coasting and service braking all
+     * matched BeamNG — and the excess scaled with the driveline torque (engine braking
+     * is about a quarter of the WOT torque and its excess was about a quarter as
+     * large). Isolating this path moved acceleration from +2.5 deg to +1.4 against
+     * BeamNG's +1.7, so the path is needed but only at roughly a quarter of the
+     * magnitude it applies: it is about 3.7x too strong on top of the torsion
+     * reactor's reaction, which in BeamNG is the same per-wheel mechanism
+     * ({@code engineReactionTorque = |T_wheel| * T_reactor / sum|T_wheel|}).
      *
-     * <p>{@code torqueCoupling}/{@code torqueArm}/{@code torqueArm2} reach BeamNG's C++
-     * wheel object, but what it does with them is not visible in the Lua — so whether
-     * this per-wheel reaction is an extra one on top of the torsion reactor's, or the
-     * mechanism the reactor feeds, cannot be read off the data. Turning it off decides
-     * that: if the pitch falls to around +1.7 the per-wheel reaction was the excess and
-     * this path should be dropped; if nothing moves, the reactor is carrying it alone
-     * and the excess is elsewhere.
-     *
-     * <p>Leave {@code true} for normal operation; this is a temporary probe.
+     * <p>Kept rather than deleted because the model is not pinned down: with this off
+     * the pitch comes out 0.3 deg short of BeamNG's, so the true arrangement has some
+     * magnitude or sharing nuance that is not visible from the vehicles' data. Flip
+     * this on to reproduce the over-strong behaviour, and see
+     * {@code PressureWheelReactionTest}, which pins this path with the switch on.
      */
-    public static boolean DRIVE_REACTION_ENABLED = true;
+    public static boolean DRIVE_REACTION_ENABLED = false;
 
     public int[] torqueCouplingNode = newReactionNodeArray();
     public int[] torqueArmNode = newReactionNodeArray();
