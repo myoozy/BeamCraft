@@ -240,6 +240,27 @@ public final class VehicleInternalForceSolver {
         return currentDeform + Math.min(remainingHardening, stiffness * permanentDelta);
     }
 
+    /**
+     * BeamNG's two-slope damper branch for a bounded beam.
+     *
+     * <p>Below {@code split} the force follows {@code slowDamp}; above it
+     * {@code fastDamp} takes over, but only the force <em>increment</em> beyond the
+     * split, so the value reached at the knee is preserved. The curve therefore
+     * stays continuous and monotonic: digressive when {@code fastDamp < slowDamp}
+     * (the road-car tuning these vehicles use) and progressive when it is larger.
+     * Comparing the plain coefficients instead would make the force fall at the
+     * knee, which is what a damper emphatically does not do.
+     *
+     * <p>An unbounded split — {@code beamDampVelocitySplit} unauthored, which the
+     * parser stores as {@link Float#MAX_VALUE} — degenerates to a plain linear
+     * damper, so beams without a split behave exactly as before.
+     */
+    private static float twoSlopeDampingForce(float slowDamp, float fastDamp, float split, float velocity) {
+        float excess = Math.max(0.0f, Math.abs(velocity) - split);
+        if (excess <= 0.0f) return slowDamp * velocity;
+        return slowDamp * velocity + Math.signum(velocity) * (fastDamp - slowDamp) * excess;
+    }
+
     private static double hardenDeform(double currentDeform, double maxDeform,
                                        double stiffness, double permanentDelta) {
         double remainingHardening = Math.max(0.0, maxDeform - currentDeform);
@@ -409,23 +430,27 @@ public final class VehicleInternalForceSolver {
             float vz = nodes.velZ[n2] - nodes.velZ[n1];
             float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
 
-            // Split selection follows the raw axial velocity (a sign/magnitude switch),
-            // while the damping magnitude itself uses the dampCutoffHz-filtered one.
-            float dampVelocity = boundedBeams.dampingCutoffEnabled(i)
-                    ? boundedBeams.filteredDampingVelocity(i, relVel) : relVel;
-
-            float activeDamp = boundedBeams.damp[i];
+            // BeamNG's damper is a two-slope curve: the coefficient changes at
+            // beamDampVelocitySplit, but the force built up on the slow slope carries
+            // into the fast branch, so the force keeps rising with speed (BeamNG docs:
+            // "the resulting forces will always keep going up as the speed increases").
+            // Swapping the coefficient outright would drop the force at the split
+            // whenever beamDampFast < beamDamp, which no damper does.
+            //
+            // The branch is selected from the raw axial velocity (a sign/magnitude
+            // switch), while the force is shaped from the dampCutoffHz-filtered one.
             boolean isRebound = relVel > 0;
             // A lengthening (rebound) beam uses beamDampVelocitySplitRebound when it was
             // authored; compression always keeps the common beamDampVelocitySplit.
             float split = isRebound
                     ? boundedBeams.dampVelocitySplitRebound[i] : boundedBeams.dampVelocitySplit[i];
-            boolean isFast = Math.abs(relVel) > split;
-            if (isRebound) {
-                activeDamp = isFast ? boundedBeams.dampReboundFast[i] : boundedBeams.dampRebound[i];
-            } else {
-                if (isFast) activeDamp = boundedBeams.dampFast[i];
-            }
+            float slowDamp = isRebound ? boundedBeams.dampRebound[i] : boundedBeams.damp[i];
+            float fastDamp = isRebound
+                    ? boundedBeams.dampReboundFast[i] : boundedBeams.dampFast[i];
+
+            float dampVelocity = boundedBeams.dampingCutoffEnabled(i)
+                    ? boundedBeams.filteredDampingVelocity(i, relVel) : relVel;
+            float dampForce = twoSlopeDampingForce(slowDamp, fastDamp, split, dampVelocity);
 
             float shortBoundary, longBoundary;
 
@@ -488,13 +513,15 @@ public final class VehicleInternalForceSolver {
 
                 // beamLimitDampRebound defaults to beamLimitDamp; when authored it
                 // selects the limit damping by axial velocity sign and blends from
-                // the ordinary channel already chosen above.
+                // the ordinary channel already chosen above. The blend runs on the
+                // force rather than the coefficient so the two-slope curve keeps its
+                // continuity; for a linear channel the two are identical.
                 float limitDamp = isRebound
                         ? boundedBeams.limitDampRebound[i] : boundedBeams.limitDamp[i];
-                activeDamp += limitBlend * (limitDamp - activeDamp);
+                dampForce += limitBlend * (limitDamp * dampVelocity - dampForce);
             }
 
-            float totalForce = springForce + (dampVelocity * activeDamp);
+            float totalForce = springForce + dampForce;
             float absTotalForce = Math.abs(totalForce);
 
             if (absTotalForce > boundedBeams.strength[i]) {

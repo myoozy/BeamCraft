@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Coverage for {@code beamDampVelocitySplitRebound}.
@@ -18,8 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * unauthored rebound split falls straight back to it.
  *
  * <p>The solver cases use massless nodes, a zero spring and a beam sitting at its
- * rest length, so {@code nodes.forceX[0]} is exactly {@code relVel * activeDamp}
- * for the selected channel.
+ * rest length, so {@code nodes.forceX[0]} is exactly the axial damping force: on
+ * the slow slope below the split, and the knee-preserving two-slope branch above
+ * it, where the fast coefficient only carries the increment past the split.
+ * {@link #twoSlope} spells that out for the assertions.
  */
 class BeamDampVelocitySplitReboundTest {
 
@@ -120,8 +123,9 @@ class BeamDampVelocitySplitReboundTest {
 
     @Test
     void withoutAReboundSplitTheCommonSplitDecidesReboundToo() {
-        assertEquals(3.0f * DAMP_REBOUND_FAST, axialForce(3.0f, -1.0f),
-                EPS, "3 m/s exceeds the common 1 m/s split, so beamDampReboundFast applies");
+        assertEquals(twoSlope(3.0f, COMMON_SPLIT, DAMP_REBOUND, DAMP_REBOUND_FAST),
+                axialForce(3.0f, -1.0f), EPS,
+                "3 m/s exceeds the common 1 m/s split, so the fast branch applies");
     }
 
     @Test
@@ -134,10 +138,38 @@ class BeamDampVelocitySplitReboundTest {
     @Test
     void reboundSplitOnlyAffectsTheLengtheningDirection() {
         assertEquals(3.0f * DAMP_REBOUND, axialForce(3.0f, REBOUND_SPLIT), EPS);
-        assertEquals(3.0f * DAMP_REBOUND_FAST, axialForce(3.0f, -1.0f), EPS);
-        assertEquals(-3.0f * DAMP_FAST, axialForce(-3.0f, REBOUND_SPLIT), EPS,
+        assertEquals(twoSlope(3.0f, COMMON_SPLIT, DAMP_REBOUND, DAMP_REBOUND_FAST),
+                axialForce(3.0f, -1.0f), EPS);
+        assertEquals(twoSlope(-3.0f, COMMON_SPLIT, DAMP, DAMP_FAST),
+                axialForce(-3.0f, REBOUND_SPLIT), EPS,
                 "the compression side is identical with and without the override");
-        assertEquals(-3.0f * DAMP_FAST, axialForce(-3.0f, -1.0f), EPS);
+        assertEquals(twoSlope(-3.0f, COMMON_SPLIT, DAMP, DAMP_FAST),
+                axialForce(-3.0f, -1.0f), EPS);
+    }
+
+    @Test
+    void theForceNeverFallsBackAtTheVelocitySplit() {
+        // A digressive tuning: the fast coefficient is *below* the slow one, which is
+        // exactly the case a plain coefficient swap gets wrong.
+        float slow = 9000.0f, fast = 3000.0f, split = 0.25f;
+        float below = twoSlope(0.25f, split, slow, fast);
+        float above = twoSlope(0.26f, split, slow, fast);
+
+        assertEquals(split * slow, below, EPS, "up to the split the slow slope applies");
+        assertTrue(above > below, "the force must keep rising across the split");
+        assertEquals(split * slow + fast * 0.01f, above, EPS,
+                "past the split the fast coefficient drives only the increment");
+
+        // The old coefficient swap would have dropped the force by 65% right here.
+        float swapped = 0.26f * fast;
+        assertTrue(swapped < below * 0.4f, "the swap this replaces lost most of the force");
+    }
+
+    /** BeamNG's two-slope damper branch, spelled out for the assertions above. */
+    private static float twoSlope(float velocity, float split, float slow, float fast) {
+        float a = Math.abs(velocity);
+        if (a <= split) return slow * velocity;
+        return Math.signum(velocity) * (slow * split + fast * (a - split));
     }
 
     /**
