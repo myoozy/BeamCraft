@@ -211,6 +211,7 @@ public class PhysicsWorld {
         activeVehicles.parallelStream().forEach(vehicle -> {
             vehicle.updateLocalOriginCache();
             vehicle.updateBeamPrecompression(dt);
+            vehicle.sampleMotion(dt);
         });
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;

@@ -172,7 +172,7 @@ public class BeamCraftClient implements ClientModInitializer {
 							: "pitch/roll: refNodes unavailable",
 					debugVehicle == null
 							? "accel: n/a"
-							: String.format("accel: %+.3f g longitudinal", debugVehicle.longitudinalAccelG()),
+							: String.format("accel: %+.3f g longitudinal", debugVehicle.longitudinalAccelG),
 					"powertrain: " + powertrainState,
 					String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
 							throttleInput * 100.0f, actualThrottle * 100.0f),

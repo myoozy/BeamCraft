@@ -156,43 +156,71 @@ public class SoftBodyVehicle {
     /**
      * Longitudinal acceleration in g, positive accelerating forward, projected onto the
      * body's forward axis ({@code back -> ref} of the same refNodes triple the attitude
-     * uses).
+     * uses). Sampled once per physics step by {@link #sampleMotion}.
      *
-     * <p>Needs no per-frame state: a body's centre-of-mass acceleration is the summed
-     * node forces over total mass, and each node's force already carries its own mass
-     * (the sub-step integrates {@code v += force / mass * dt}). Gravity drops out of the
-     * projection while the car is level, so a parked car reads ~0 — a car whose pitch is
-     * changing by a degree also picks up a small cross-term, which is fine for a readout.
+     * <p>It has to be a centre-of-mass velocity difference, not a force sum: the contact
+     * phase applies its impulses straight to the node velocities, so those forces never
+     * appear in {@code nodes.force*} and a force-based readout misses the traction
+     * entirely (it read 0.02 g under full throttle).
      *
      * <p>Pairs with {@link #bodyAttitudeDeg}: if a pitch difference comes with an equal
-     * acceleration difference it is the longitudinal force that differs, and if only the
-     * pitch is off then it is the torque reaction.
+     * acceleration difference then the longitudinal force is what differs and the torque
+     * reaction is innocent; if only the pitch moves, the reaction is confirmed.
      */
-    public float longitudinalAccelG() {
-        VehicleCameraData.RefNodes refs = cameras.refNodes();
-        if (refs == null) return 0.0f;
-        int r = refs.ref(), b = refs.back();
-        if (r < 0 || b < 0 || r >= nodes.count || b >= nodes.count) return 0.0f;
+    public float longitudinalAccelG;
 
+    private final float[] previousComVelocity = new float[3];
+    private boolean hasPreviousComVelocity;
+
+    /** Samples the centre-of-mass acceleration for the HUD; once per physics step. */
+    public void sampleMotion(double dt) {
+        if (dt <= 0.0 || nodes.count == 0) return;
+
+        double totalMass = 0.0;
+        double vx = 0.0, vy = 0.0, vz = 0.0;
+        for (int i = 0; i < nodes.count; i++) {
+            double mass = nodes.mass[i];
+            totalMass += mass;
+            vx += nodes.velX[i] * mass;
+            vy += nodes.velY[i] * mass;
+            vz += nodes.velZ[i] * mass;
+        }
+        if (totalMass < 1.0e-9) return;
+        vx /= totalMass; vy /= totalMass; vz /= totalMass;
+
+        if (!hasPreviousComVelocity) {
+            previousComVelocity[0] = (float) vx;
+            previousComVelocity[1] = (float) vy;
+            previousComVelocity[2] = (float) vz;
+            hasPreviousComVelocity = true;
+            return;
+        }
+
+        double ax = (vx - previousComVelocity[0]) / dt;
+        double ay = (vy - previousComVelocity[1]) / dt;
+        double az = (vz - previousComVelocity[2]) / dt;
+        previousComVelocity[0] = (float) vx;
+        previousComVelocity[1] = (float) vy;
+        previousComVelocity[2] = (float) vz;
+
+        VehicleCameraData.RefNodes refs = cameras.refNodes();
+        if (refs == null) return;
+        int r = refs.ref(), b = refs.back();
+        if (r < 0 || b < 0 || r >= nodes.count || b >= nodes.count) return;
         double fx = nodes.posX[r] - nodes.posX[b];
         double fy = nodes.posY[r] - nodes.posY[b];
         double fz = nodes.posZ[r] - nodes.posZ[b];
         double length = Math.sqrt(fx * fx + fy * fy + fz * fz);
-        if (length < 1.0e-9) return 0.0f;
+        if (length < 1.0e-9) return;
         fx /= length; fy /= length; fz /= length;
 
-        double totalMass = 0.0;
-        double forceX = 0.0, forceY = 0.0, forceZ = 0.0;
-        for (int i = 0; i < nodes.count; i++) {
-            totalMass += nodes.mass[i];
-            forceX += nodes.forceX[i];
-            forceY += nodes.forceY[i];
-            forceZ += nodes.forceZ[i];
-        }
-        if (totalMass < 1.0e-9) return 0.0f;
+        longitudinalAccelG = (float) ((ax * fx + ay * fy + az * fz) / 9.80665);
+    }
 
-        double along = (forceX * fx + forceY * fy + forceZ * fz) / totalMass;
-        return (float) (along / 9.80665);
+    /** Clears the motion sampler so a reset does not report a spike across the gap. */
+    public void resetMotionSample() {
+        hasPreviousComVelocity = false;
+        longitudinalAccelG = 0.0f;
     }
 
     public void updateBeamPrecompression(double dt) {
@@ -772,6 +800,7 @@ public class SoftBodyVehicle {
         // Matches the BeamNG controller's empty reset(): the selected damper mode
         // stays selected and is re-derived from the authored values.
         adaptiveDampers.reset();
+        resetMotionSample();
         System.out.println("Vehicle reset.");
     }
 
