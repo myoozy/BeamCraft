@@ -431,6 +431,19 @@ public final class MaterialLibrary {
      */
     public static DecodedImage composeDiffuseAndOpacity(TextureResource diffuse, TextureResource opacity,
                                                         String namespace) throws IOException {
+        return composeDiffuseAndOpacity(diffuse, opacity, namespace, false);
+    }
+
+    /**
+     * As above, optionally premultiplying the rgb by the mask. Required for a material
+     * whose {@code translucentBlendOp} is {@code PreMulAlpha}, whose blend weights the
+     * source rgb by nothing; see
+     * {@link TextureCompositor#composeBaseWithOpacity(DecodedImage, DecodedImage, boolean)}.
+     *
+     * @param premultiplyRgb scale rgb by the mask as well as the alpha
+     */
+    public static DecodedImage composeDiffuseAndOpacity(TextureResource diffuse, TextureResource opacity,
+                                                        String namespace, boolean premultiplyRgb) throws IOException {
         DecodedImage base = acquireDecodedTexture(diffuse, namespace);
         DecodedImage opacityImage;
         try {
@@ -440,7 +453,7 @@ public final class MaterialLibrary {
             throw e;
         }
         try {
-            return TextureCompositor.composeBaseWithOpacity(base, opacityImage);
+            return TextureCompositor.composeBaseWithOpacity(base, opacityImage, premultiplyRgb);
         } finally {
             releaseDecodedTexture(opacity);
             releaseDecodedTexture(diffuse);
@@ -460,9 +473,19 @@ public final class MaterialLibrary {
      * @throws IOException if the texture cannot be decoded
      */
     public static DecodedImage composeWhiteWithOpacity(TextureResource opacity, String namespace) throws IOException {
+        return composeWhiteWithOpacity(opacity, namespace, false);
+    }
+
+    /**
+     * As above, optionally premultiplying the white by the mask — premultiplied white
+     * is the mask itself. See
+     * {@link TextureCompositor#composeWhiteWithOpacity(DecodedImage, boolean)}.
+     */
+    public static DecodedImage composeWhiteWithOpacity(TextureResource opacity, String namespace,
+                                                       boolean premultiplyRgb) throws IOException {
         DecodedImage opacityImage = acquireDecodedTexture(opacity, namespace);
         try {
-            return TextureCompositor.composeWhiteWithOpacity(opacityImage);
+            return TextureCompositor.composeWhiteWithOpacity(opacityImage, premultiplyRgb);
         } finally {
             releaseDecodedTexture(opacity);
         }

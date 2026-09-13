@@ -118,7 +118,7 @@ public final class MaterialRenderPlan {
      * Translucent plan: blended in the translucent pass. {@code opacityPath} is
      * optional — without one the diffuse's own baked alpha (and the factor's
      * alpha) drives blending. {@code blendOp} is the BeamNG
-     * {@code translucentBlendOp} ("None" or "Additive"); null/unknown values
+     * {@code translucentBlendOp} ("None", "PreMulAlpha" or "Additive"); null/unknown
      * fall back to normal alpha blending.
      */
     public static MaterialRenderPlan translucent(String diffusePath, String opacityPath, RgbaColor factor,
@@ -169,7 +169,7 @@ public final class MaterialRenderPlan {
         return alphaRef;
     }
 
-    /** The BeamNG {@code translucentBlendOp} string ("None", "Additive"), or null. */
+    /** The BeamNG {@code translucentBlendOp} string ("None", "PreMulAlpha", "Additive"), or null. */
     public String blendOp() {
         return blendOp;
     }

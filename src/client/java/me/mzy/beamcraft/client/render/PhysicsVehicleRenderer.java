@@ -183,8 +183,18 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             }
         }
 
+        // The pass enabled culling for everything; a declared double-sided shell has to
+        // relax it for its own range, or a grille is invisible from one side.
+        Set<String> meshMaterialNames = collectMeshMaterialNames(flex);
         for (RangeDraw draw : opaqueCutout) {
+            boolean doubleSided = isDoubleSided(draw.range().materialName, meshMaterialNames, draw.material());
+            if (doubleSided) {
+                RenderSystem.disableCull();
+            }
             drawRangeWithPlan(flex, draw, modelView, projection, packedLight);
+            if (doubleSided) {
+                RenderSystem.enableCull();
+            }
         }
         if (!translucent.isEmpty()) {
             drawTranslucentRanges(flex, translucent, modelView, projection, packedLight);
@@ -253,7 +263,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
                     continue;
                 }
                 MaterialDefinition material = materialByRange.get(range);
-                boolean doubleSided = isDoubleSidedTranslucentGlass(
+                boolean doubleSided = isDoubleSided(
                         range.materialName, meshMaterialNames, material);
                 if (doubleSided) {
                     RenderSystem.disableCull();
@@ -337,7 +347,8 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
                 plan,
                 diffuse != null,
                 composedAvailable,
-                () -> VehicleTextureUploader.INSTANCE.getOrUploadComposed(capturedDiffuse, capturedOpacity, namespace),
+                () -> VehicleTextureUploader.INSTANCE.getOrUploadComposed(capturedDiffuse, capturedOpacity,
+                        namespace, isPremultipliedBlend(plan.blendOp())),
                 () -> VehicleTextureUploader.INSTANCE.getOrUpload(capturedDiffuse, namespace),
                 VehicleTextureUploader.INSTANCE::getWhiteTexture);
     }
@@ -390,16 +401,45 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
     /**
      * Pure, unit-tested blend pair for a BeamNG {@code translucentBlendOp}.
-     * Only "Additive" is handled specially (src = SRC_ALPHA, dst = ONE); every
-     * other value — "None", null, anything unknown — falls back to normal alpha
-     * blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA). No other BeamNG blend mode is
-     * guessed.
+     * "Additive" (src = SRC_ALPHA, dst = ONE) and "PreMulAlpha" (src = ONE,
+     * dst = ONE_MINUS_SRC_ALPHA) are handled; every other value — "None", null,
+     * anything unknown — falls back to normal alpha blending (SRC_ALPHA,
+     * ONE_MINUS_SRC_ALPHA). Other BeamNG ops in the stock library ("Add", "Sub",
+     * "AddAlpha", four materials between them) are deliberately not guessed.
      */
     static int[] blendFuncFor(String blendOp) {
         if (blendOp != null && blendOp.trim().equalsIgnoreCase("Additive")) {
             return new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE};
         }
+        if (isPremultipliedBlend(blendOp)) {
+            return new int[]{GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA};
+        }
         return new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA};
+    }
+
+    /**
+     * True when the material's blend op expects premultiplied colour. This has to agree
+     * with how the mask is composed, which is why the composition takes the same answer:
+     * premultiplied blending reads the source rgb as already scaled by its alpha, so a
+     * mask applied to alpha alone would leave its soft edges glowing.
+     */
+    static boolean isPremultipliedBlend(String blendOp) {
+        return blendOp != null && blendOp.trim().equalsIgnoreCase("PreMulAlpha");
+    }
+
+    /**
+     * Whether a range is drawn without back-face culling. The asset's own
+     * {@code doubleSided} flag is honoured first — 64 materials in the stock library
+     * declare it, and the ones that matter are thin shells like a grille or a vent that
+     * are single surfaces seen from both sides — with the glass-provenance heuristic
+     * kept as the fallback for materials that do not declare it.
+     */
+    static boolean isDoubleSided(String rawMaterialName, Set<String> meshMaterialNames,
+                                 MaterialDefinition resolvedMaterial) {
+        if (resolvedMaterial != null && resolvedMaterial.doubleSided) {
+            return true;
+        }
+        return isDoubleSidedTranslucentGlass(rawMaterialName, meshMaterialNames, resolvedMaterial);
     }
 
     /**

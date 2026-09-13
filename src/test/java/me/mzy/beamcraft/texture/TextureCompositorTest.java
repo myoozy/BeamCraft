@@ -36,6 +36,33 @@ class TextureCompositorTest {
     }
 
     @Test
+    void premultipliedCompositionScalesRgbByTheMask() {
+        // For a PreMulAlpha material the blend weights rgb by nothing, so the mask has to
+        // scale rgb as well as alpha; scaling only alpha leaves soft parts adding
+        // full-strength colour.
+        DecodedImage base = rgba(2, 1, new int[] {0xFFFFFFFF, 0xFFFFFFFF});
+        DecodedImage opacity = rgba(2, 1, new int[] {0xFF000000, 0xFF808080});
+
+        DecodedImage out = TextureCompositor.composeBaseWithOpacity(base, opacity, true);
+
+        assertEquals(0x00000000, out.getPixelRgba(0, 0), "a cut texel contributes nothing at all");
+        assertEquals(0x80808080, out.getPixelRgba(1, 0), "a half texel is half-weighted in rgb and alpha");
+
+        // The default stays unpremultiplied, which is what normal alpha blending expects.
+        assertEquals(0x00FFFFFF, TextureCompositor.composeBaseWithOpacity(base, opacity).getPixelRgba(0, 0));
+    }
+
+    @Test
+    void premultipliedWhiteIsTheMask() {
+        DecodedImage opacity = rgba(2, 1, new int[] {0xFF000000, 0xFF808080});
+
+        DecodedImage out = TextureCompositor.composeWhiteWithOpacity(opacity, true);
+
+        assertEquals(0x00000000, out.getPixelRgba(0, 0));
+        assertEquals(0x80808080, out.getPixelRgba(1, 0));
+    }
+
+    @Test
     void multipliesOpacityIntoBaseAlpha() {
         // Base: red, alpha 128 (0x80). Opacity: value 128 (0x80).
         // out.a = round(128*128/255) = 64.

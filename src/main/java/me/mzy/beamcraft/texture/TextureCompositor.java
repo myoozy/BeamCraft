@@ -44,6 +44,23 @@ public final class TextureCompositor {
      * @throws IllegalArgumentException if the dimensions differ
      */
     public static DecodedImage composeBaseWithOpacity(DecodedImage base, DecodedImage opacity) {
+        return composeBaseWithOpacity(base, opacity, false);
+    }
+
+    /**
+     * As {@link #composeBaseWithOpacity(DecodedImage, DecodedImage)}, optionally
+     * premultiplying {@code rgb} by the mask.
+     *
+     * <p>{@code premultiplyRgb} is for a material whose BeamNG {@code translucentBlendOp}
+     * is {@code PreMulAlpha}: that mode blends with {@code (ONE, ONE_MINUS_SRC_ALPHA)},
+     * which weights the source rgb by nothing, so the rgb has to arrive already scaled
+     * by the effective alpha. Scaling only the alpha would leave the mask's soft parts
+     * adding full-strength colour — the mask's antialiased edge would glow.
+     *
+     * @param premultiplyRgb scale {@code rgb} by the mask as well as the alpha
+     */
+    public static DecodedImage composeBaseWithOpacity(DecodedImage base, DecodedImage opacity,
+                                                      boolean premultiplyRgb) {
         if (base.width() != opacity.width() || base.height() != opacity.height()) {
             throw new IllegalArgumentException("diffuse/opacity dimension mismatch: " + base.width() + "x" + base.height()
                     + " vs " + opacity.width() + "x" + opacity.height());
@@ -52,11 +69,12 @@ public final class TextureCompositor {
         byte[] opacityPixels = opacity.pixelData();
         byte[] out = new byte[basePixels.length];
         for (int i = 0; i < basePixels.length; i += 4) {
-            out[i] = basePixels[i];
-            out[i + 1] = basePixels[i + 1];
-            out[i + 2] = basePixels[i + 2];
-            int baseAlpha = basePixels[i + 3] & 0xFF;
             int opacityValue = opacityPixels[i] & 0xFF;
+            int rgbScale = premultiplyRgb ? opacityValue : 255;
+            out[i] = (byte) (((basePixels[i] & 0xFF) * rgbScale + 127) / 255);
+            out[i + 1] = (byte) (((basePixels[i + 1] & 0xFF) * rgbScale + 127) / 255);
+            out[i + 2] = (byte) (((basePixels[i + 2] & 0xFF) * rgbScale + 127) / 255);
+            int baseAlpha = basePixels[i + 3] & 0xFF;
             out[i + 3] = (byte) ((baseAlpha * opacityValue + 127) / 255);
         }
         return DecodedImage.ofOwned(base.width(), base.height(), out, base.isSrgb());
@@ -77,12 +95,23 @@ public final class TextureCompositor {
      * @return a new image with white {@code rgb} and {@code a = opacity.r}
      */
     public static DecodedImage composeWhiteWithOpacity(DecodedImage opacity) {
+        return composeWhiteWithOpacity(opacity, false);
+    }
+
+    /**
+     * As {@link #composeWhiteWithOpacity(DecodedImage)}, optionally premultiplying the
+     * white by the mask — premultiplied white <em>is</em> the mask, so the rgb becomes
+     * the mask value rather than 255. See the base-composite overload for why.
+     */
+    public static DecodedImage composeWhiteWithOpacity(DecodedImage opacity, boolean premultiplyRgb) {
         byte[] opacityPixels = opacity.pixelData();
         byte[] out = new byte[opacityPixels.length];
         for (int i = 0; i < out.length; i += 4) {
-            out[i] = (byte) 0xFF;
-            out[i + 1] = (byte) 0xFF;
-            out[i + 2] = (byte) 0xFF;
+            int mask = opacityPixels[i] & 0xFF;
+            byte channel = (byte) (premultiplyRgb ? mask : 0xFF);
+            out[i] = channel;
+            out[i + 1] = channel;
+            out[i + 2] = channel;
             // The mask's own srgb flag is ignored, as it is for the base-composite path:
             // the channel is coverage, not colour.
             out[i + 3] = opacityPixels[i];

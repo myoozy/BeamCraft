@@ -76,10 +76,13 @@ public final class VehicleTextureUploader {
     private static final class ComposedKey {
         final TextureResource diffuse;
         final TextureResource opacity;
+        /** Part of the key: the same pair composes differently for a premultiplied blend. */
+        final boolean premultiplied;
 
-        ComposedKey(TextureResource diffuse, TextureResource opacity) {
+        ComposedKey(TextureResource diffuse, TextureResource opacity, boolean premultiplied) {
             this.diffuse = diffuse;
             this.opacity = opacity;
+            this.premultiplied = premultiplied;
         }
 
         @Override
@@ -90,13 +93,15 @@ public final class VehicleTextureUploader {
             if (!(o instanceof ComposedKey that)) {
                 return false;
             }
-            return java.util.Objects.equals(diffuse, that.diffuse)
+            return premultiplied == that.premultiplied
+                    && java.util.Objects.equals(diffuse, that.diffuse)
                     && java.util.Objects.equals(opacity, that.opacity);
         }
 
         @Override
         public int hashCode() {
-            return 31 * java.util.Objects.hashCode(diffuse) + java.util.Objects.hashCode(opacity);
+            return 31 * (31 * java.util.Objects.hashCode(diffuse) + java.util.Objects.hashCode(opacity))
+                    + Boolean.hashCode(premultiplied);
         }
     }
 
@@ -207,14 +212,16 @@ public final class VehicleTextureUploader {
      *                  plan's flat factor supplies the tint (BeamNG's grille materials)
      * @param opacity   single-channel opacity texture handle (must be non-null)
      * @param namespace vehicle namespace owning the request, for lifecycle
+     * @param premultiplied scale rgb by the mask too, for a {@code PreMulAlpha} material
      * @return a valid GL texture id, never -1
      */
-    public int getOrUploadComposed(TextureResource diffuse, TextureResource opacity, String namespace) {
+    public int getOrUploadComposed(TextureResource diffuse, TextureResource opacity, String namespace,
+                                   boolean premultiplied) {
         RenderSystem.assertOnRenderThread();
         if (opacity == null) {
             return diffuse == null ? getWhiteTexture() : getOrUpload(diffuse, namespace);
         }
-        ComposedKey key = new ComposedKey(diffuse, opacity);
+        ComposedKey key = new ComposedKey(diffuse, opacity, premultiplied);
         Entry entry = composedTextures.get(key);
         if (entry != null) {
             return entry.textureId;
@@ -225,8 +232,8 @@ public final class VehicleTextureUploader {
         try {
             long decodeStart = LoadTiming.start();
             DecodedImage image = diffuse == null
-                    ? MaterialLibrary.composeWhiteWithOpacity(opacity, namespace)
-                    : MaterialLibrary.composeDiffuseAndOpacity(diffuse, opacity, namespace);
+                    ? MaterialLibrary.composeWhiteWithOpacity(opacity, namespace, premultiplied)
+                    : MaterialLibrary.composeDiffuseAndOpacity(diffuse, opacity, namespace, premultiplied);
             LoadTiming.logSlowFile("  [texture] compose "
                     + (diffuse == null ? "(flat colour)" : diffuse.describe()) + " + " + opacity.describe(), decodeStart);
 

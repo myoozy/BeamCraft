@@ -63,6 +63,13 @@ public final class MaterialDefinition {
     public final boolean translucent;
 
     /**
+     * {@code doubleSided}; defaults to false when absent. 64 materials in the stock
+     * library declare it, and the ones that matter are thin shells — a grille or a
+     * vent is a single surface seen from both sides.
+     */
+    public final boolean doubleSided;
+
+    /**
      * Material-level {@code opacityFactor} (a scalar multiplier for the diffuse
      * alpha), or null when absent. An explicit 0 is preserved (never folded into
      * null). The stage-level value takes precedence for the selected stage; see
@@ -70,7 +77,7 @@ public final class MaterialDefinition {
      */
     public final Float opacityFactor;
 
-    /** {@code translucentBlendOp} (e.g. "None", "Additive"); may be null. */
+    /** {@code translucentBlendOp} (e.g. "None", "PreMulAlpha", "Additive"); may be null. */
     public final String translucentBlendOp;
 
     /** {@code version} of the material JSON; 0 when absent. */
@@ -81,7 +88,7 @@ public final class MaterialDefinition {
 
     MaterialDefinition(String name, String mapTo, int activeLayers,
                        List<MaterialStage> stages, RgbaColor baseColorFactor,
-                       float alphaRef, boolean translucent, Float opacityFactor,
+                       float alphaRef, boolean translucent, boolean doubleSided, Float opacityFactor,
                        String translucentBlendOp, float version, String source) {
         this.name = name;
         this.mapTo = mapTo;
@@ -90,6 +97,7 @@ public final class MaterialDefinition {
         this.baseColorFactor = baseColorFactor;
         this.alphaRef = alphaRef;
         this.translucent = translucent;
+        this.doubleSided = doubleSided;
         this.opacityFactor = opacityFactor;
         this.translucentBlendOp = translucentBlendOp;
         this.version = version;
@@ -119,6 +127,7 @@ public final class MaterialDefinition {
                 parseColorFactor(json),
                 normalizeAlphaRef(number(json, "alphaRef", 0f)),
                 bool(json, "translucent", false),
+                bool(json, "doubleSided", false),
                 parseOpacityFactor(json),
                 string(json, "translucentBlendOp"),
                 number(json, "version", 0f),

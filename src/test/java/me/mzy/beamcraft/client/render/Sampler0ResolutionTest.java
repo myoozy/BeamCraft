@@ -1,10 +1,13 @@
 package me.mzy.beamcraft.client.render;
 
+import com.google.gson.JsonParser;
+import me.mzy.beamcraft.client.material.MaterialDefinition;
 import me.mzy.beamcraft.client.material.MaterialRenderPlan;
 import me.mzy.beamcraft.client.material.RgbaColor;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.opengl.GL11;
 
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -137,9 +140,52 @@ class Sampler0ResolutionTest {
 
     @Test
     void unknownBlendOpsFallBackToNormalAlpha() {
-        // Only "Additive" is handled specially; anything unrecognised must never
-        // be guessed into an exotic blend mode.
+        // Only "Additive" and "PreMulAlpha" are handled specially; anything unrecognised
+        // must never be guessed into an exotic blend mode. The stock library's remaining
+        // ops are "Add", "Sub" and "AddAlpha", four materials between them.
         assertArrayEquals(new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA}, PhysicsVehicleRenderer.blendFuncFor("Multiply"));
         assertArrayEquals(new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA}, PhysicsVehicleRenderer.blendFuncFor("  "));
+        assertArrayEquals(new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA}, PhysicsVehicleRenderer.blendFuncFor("AddAlpha"));
+    }
+
+    @Test
+    void preMulAlphaUsesPremultipliedBlending() {
+        // Premultiplied colour contributes at full strength and only the destination is
+        // attenuated. isPremultipliedBlend drives the composition as well as this pair,
+        // because blending this way over a non-premultiplied texture would make a mask's
+        // soft edges glow.
+        assertArrayEquals(new int[]{GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA},
+                PhysicsVehicleRenderer.blendFuncFor("PreMulAlpha"));
+        assertArrayEquals(new int[]{GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA},
+                PhysicsVehicleRenderer.blendFuncFor("  premulalpha  "),
+                "the op is trimmed and matched case-insensitively");
+
+        assertTrue(PhysicsVehicleRenderer.isPremultipliedBlend("PreMulAlpha"));
+        assertFalse(PhysicsVehicleRenderer.isPremultipliedBlend("None"));
+        assertFalse(PhysicsVehicleRenderer.isPremultipliedBlend(null));
+    }
+
+    @Test
+    void declaredDoubleSidedIsHonouredWithoutTheGlassHeuristic() {
+        // grille_hex is a thin shell declaring doubleSided. The glass heuristic returns
+        // false for a non-glass name, so the flag is what has to make this work.
+        MaterialDefinition grille = MaterialDefinition.fromJson("grille_hex",
+                JsonParser.parseString("""
+                        {"name":"grille_hex","mapTo":"grille_hex","doubleSided":true,
+                         "Stages":[{"baseColorFactor":[0.14,0.14,0.14,1],"opacityMap":"grille_hex_o.data.png"}]}
+                        """).getAsJsonObject(), "test");
+        assertFalse(PhysicsVehicleRenderer.isDoubleSidedTranslucentGlass("grille_hex", Set.of(), grille),
+                "the heuristic alone does not cover a grille");
+
+        assertTrue(PhysicsVehicleRenderer.isDoubleSided("grille_hex", Set.of(), grille));
+    }
+
+    @Test
+    void aMaterialWithoutTheFlagStillFallsBackToTheHeuristic() {
+        MaterialDefinition plain = MaterialDefinition.fromJson("plain",
+                JsonParser.parseString("{\"name\":\"plain\",\"mapTo\":\"plain\"}").getAsJsonObject(), "test");
+
+        assertFalse(PhysicsVehicleRenderer.isDoubleSided("plain", Set.of(), plain));
+        assertFalse(PhysicsVehicleRenderer.isDoubleSided("plain", Set.of(), null));
     }
 }
