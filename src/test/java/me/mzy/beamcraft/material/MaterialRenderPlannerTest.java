@@ -212,6 +212,85 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
+    void undeclaredCoverageMaskBecomesCutout() {
+        // The shape a stock grille material has (etk800_grille): a colour map and an
+        // opacity map, no translucent flag and no alphaRef. Ignoring the opacity map
+        // here is what painted mesh-style parts as solid panels.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "etk800_grille",
+                  "Stages": [ { "baseColorMap": "/vehicles/etk800/etk800_grille_b.color.png",
+                                "opacityMap": "/vehicles/etk800/etk800_grille_o.data.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
+        assertTrue(plan.hasOpacity());
+        assertEquals("/vehicles/etk800/etk800_grille_o.data.png", plan.opacityPath());
+        assertEquals(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF, plan.alphaRef());
+    }
+
+    @Test
+    void undeclaredCoverageMaskUsesTheConfiguredThreshold() {
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "grille",
+                  "Stages": [ { "baseColorMap": "grille_d.png", "opacityMap": "grille_o.png" } ]
+                }
+                """);
+        assertEquals(0.3f, MaterialRenderPlanner.plan(def, 0.3f).alphaRef());
+    }
+
+    @Test
+    void declaredAlphaRefStillWinsOverTheConfiguredThreshold() {
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "window",
+                  "alphaRef": 0.25,
+                  "Stages": [ { "baseColorMap": "window_d.png", "opacityMap": "window_o.png" } ]
+                }
+                """);
+        assertEquals(0.25f, MaterialRenderPlanner.plan(def, 0.5f).alphaRef());
+    }
+
+    @Test
+    void translucentMaskIsNotStolenByTheCutoutRule() {
+        // The rule only applies to a material that is not translucent; a see-through
+        // material keeps blending even though it also carries an opacity map.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "glass",
+                  "translucent": true,
+                  "Stages": [ { "baseColorMap": "glass_d.png", "opacityMap": "glass_o.png" } ]
+                }
+                """);
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT,
+                MaterialRenderPlanner.plan(def, 0.5f).mode());
+    }
+
+    @Test
+    void coverageMaskWithoutADiffuseStaysColourOnly() {
+        // There is nothing to clip, so the mask cannot turn this into a cutout.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mask_only",
+                  "Stages": [ { "opacityMap": "mask_o.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertFalse(plan.hasTexture());
+        assertEquals(0f, plan.alphaRef());
+    }
+
+    @Test
+    void defaultCutoutThresholdIsAUsableReference() {
+        assertTrue(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF > 0f
+                        && MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF < 1f,
+                "a threshold outside (0,1) clips everything or nothing");
+    }
+
+    @Test
     void alphaRefStaysCutoutNotBlendedForOpaqueAlpha() {
         // A stray alphaRef on a fully-opaque paint material must classify as
         // CUTOUT (alpha-tested, drawn in the opaque pass) — never TRANSLUCENT.

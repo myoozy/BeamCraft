@@ -76,15 +76,44 @@ import java.util.List;
  */
 public final class MaterialRenderPlanner {
 
+    /**
+     * Alpha reference assumed for a coverage mask whose material declares no
+     * {@code alphaRef} of its own, and the value used when the config leaves it unset.
+     *
+     * <p>Note what this number does and does not do: it selects the render mode and is
+     * carried on the plan for diagnostics, but the clip itself is the vanilla cutout
+     * shader's own alpha test (see {@link MaterialRenderPlan#cutout}). Honouring an
+     * exact threshold would need a shader of our own.
+     */
+    public static final float DEFAULT_CUTOUT_ALPHA_REF = 0.5f;
+
     private MaterialRenderPlanner() {
     }
 
     /**
+     * Plans with {@link #DEFAULT_CUTOUT_ALPHA_REF}.
+     *
      * @param material the material resolved for the sub-mesh's DAE name, or null
      *                 when no material matched
      * @return a backend-neutral render plan; never null
      */
     public static MaterialRenderPlan plan(MaterialDefinition material) {
+        return plan(material, DEFAULT_CUTOUT_ALPHA_REF);
+    }
+
+    /**
+     * Plans a material, using {@code defaultCutoutAlphaRef} for an opacity map that
+     * declares no threshold of its own.
+     *
+     * <p>The rule that matters here: BeamNG marks genuinely see-through materials with
+     * {@code translucent}, so an opacity map on a material that is not translucent is
+     * <em>coverage</em> — the holes of a grille — not a blend weight. Dropping it
+     * renders the mesh as an unbroken panel.
+     *
+     * @param defaultCutoutAlphaRef threshold for an undeclared coverage mask
+     * @return a backend-neutral render plan; never null
+     */
+    public static MaterialRenderPlan plan(MaterialDefinition material, float defaultCutoutAlphaRef) {
         if (material == null) {
             return MaterialRenderPlan.colorOnly(RgbaColor.WHITE);
         }
@@ -130,7 +159,7 @@ public final class MaterialRenderPlanner {
             opacityFactor = null;
         }
         RgbaColor factor = applyOpacityFactor(baseFactor, opacityFactor);
-        return classify(material, diffusePath, opacityPath, factor);
+        return classify(material, diffusePath, opacityPath, factor, defaultCutoutAlphaRef);
     }
 
     /**
@@ -292,7 +321,7 @@ public final class MaterialRenderPlanner {
      * in isolation. Never null.
      */
     static MaterialRenderPlan classify(MaterialDefinition material, String diffusePath, String opacityPath,
-                                       RgbaColor factor) {
+                                       RgbaColor factor, float defaultCutoutAlphaRef) {
         if (isMirrorMaterial(material)) {
             // Mirror reflective surfaces must not enter the see-through translucent
             // pass (BeamNG flags them translucent:true for a cubemap reflection that
@@ -330,8 +359,33 @@ public final class MaterialRenderPlanner {
         if (factor.a() < 1.0f) {
             return MaterialRenderPlan.translucent(diffusePath, opacityPath, factor, material.translucentBlendOp);
         }
+        if (opacityPath != null && !isInteriorGlassMaterial(material)) {
+            // A coverage mask on a material that is neither translucent nor carrying an
+            // explicit alphaRef: a grille's holes, not a blend weight. Ignoring it here
+            // is what painted mesh-style parts as solid panels.
+            return diffusePath != null
+                    ? MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, defaultCutoutAlphaRef)
+                    : MaterialRenderPlan.colorOnly(factor);
+        }
         return diffusePath != null
                 ? MaterialRenderPlan.textured(diffusePath, factor)
                 : MaterialRenderPlan.colorOnly(factor);
+    }
+
+    /**
+     * Interior glass is the one mask-carrying material that must stay opaque. It is
+     * not flagged translucent, and cutting its shell open would punch holes in the
+     * cabin; the see-through look comes from the exterior glass instead. Exterior
+     * glass, lamp covers and paint are flagged translucent or handled by an earlier
+     * branch, so they never reach the coverage rule above.
+     *
+     * <p>The classification is BeamNG's own {@code *_glass_int} naming, reused from
+     * {@link InteriorGlassOpacityFallback} rather than restated here. A material that
+     * ships a mask and is genuinely meant to be clipped under an unusual name would
+     * need that classification widened.
+     */
+    private static boolean isInteriorGlassMaterial(MaterialDefinition material) {
+        return InteriorGlassOpacityFallback.isInteriorGlass(material.mapTo)
+                || InteriorGlassOpacityFallback.isInteriorGlass(material.name);
     }
 }

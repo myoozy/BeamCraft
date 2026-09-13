@@ -42,8 +42,22 @@ public final class MaterialDefinition {
      */
     public final RgbaColor baseColorFactor;
 
-    /** {@code alphaRef}; defaults to 0 when absent. */
+    /**
+     * {@code alphaRef} as a 0-1 render threshold, normalised from BeamNG's byte scale;
+     * 0 when absent, which is how the assets say "no cutout".
+     */
     public final float alphaRef;
+
+    /**
+     * BeamNG writes {@code alphaRef} on a byte scale: the stock grille materials use
+     * 127, the ETK800 interior glass 235, and most materials 0 to mean "no cutout at
+     * all". Render thresholds here are 0-1, so a value above 1 is read as that scale.
+     * Only the number is affected — the "is there a cutout" test is a non-zero check
+     * either way, so no material changes pass.
+     */
+    static float normalizeAlphaRef(float raw) {
+        return raw > 1f ? raw / 255f : raw;
+    }
 
     /** {@code translucent}; defaults to false when absent. */
     public final boolean translucent;
@@ -103,7 +117,7 @@ public final class MaterialDefinition {
                 integer(json, "activeLayers", 1),
                 parseStages(json.get("Stages")),
                 parseColorFactor(json),
-                number(json, "alphaRef", 0f),
+                normalizeAlphaRef(number(json, "alphaRef", 0f)),
                 bool(json, "translucent", false),
                 parseOpacityFactor(json),
                 string(json, "translucentBlendOp"),

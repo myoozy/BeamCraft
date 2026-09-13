@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.config;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.mzy.beamcraft.client.material.MaterialRenderPlanner;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,6 +17,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BeamCraftConfigTest {
     @TempDir
     Path tempDir;
+
+    @Test
+    void materialsSectionIsSparseAndItsDefaultComesFromThePlanner() throws Exception {
+        BeamCraftConfig config = BeamCraftConfig.load(tempDir);
+        JsonObject saved = JsonParser.parseString(Files.readString(
+                tempDir.resolve(BeamCraftConfig.FILE_NAME))).getAsJsonObject();
+
+        // Same convention as the input section: the runtime default is not written out.
+        assertEquals(0, saved.getAsJsonObject("materials").size());
+        assertEquals(null, config.materials.cutoutAlphaRef);
+        assertEquals((double) MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF,
+                BeamCraftConfig.Materials.defaults().cutoutAlphaRef);
+    }
+
+    @Test
+    void cutoutThresholdOutsideZeroToOneFallsBackToTheDefault() {
+        BeamCraftConfig config = new BeamCraftConfig();
+        for (double invalid : new double[] {0.0, 1.0, -0.5, 1.5, Double.NaN}) {
+            config.materials.cutoutAlphaRef = invalid;
+            assertEquals(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF,
+                    BeamCraftConfigManager.resolveCutoutAlphaRef(config), "rejected: " + invalid);
+        }
+
+        config.materials.cutoutAlphaRef = 0.25;
+        assertEquals(0.25f, BeamCraftConfigManager.resolveCutoutAlphaRef(config));
+
+        config.materials = null;
+        assertEquals(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF,
+                BeamCraftConfigManager.resolveCutoutAlphaRef(config));
+    }
 
     @Test
     void createsSparseConfigWithoutSerializingInputDefaults() throws Exception {

@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.render;
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.ClientVehicleManager;
+import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
 import me.mzy.beamcraft.client.material.MaterialDefinition;
 import me.mzy.beamcraft.client.material.MaterialLibrary;
 import me.mzy.beamcraft.client.material.MaterialRenderPlan;
@@ -173,7 +174,8 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         List<RangeDraw> translucent = new ArrayList<>();
         for (SubMeshRange range : flex.skinningPipeline.getSubMeshRanges()) {
             MaterialDefinition material = resolveMaterial(vehicle, flex, range);
-            MaterialRenderPlan plan = MaterialRenderPlanner.plan(material);
+            MaterialRenderPlan plan = MaterialRenderPlanner.plan(
+                    material, BeamCraftConfigManager.cutoutAlphaRef());
             if (plan.mode() == MaterialRenderPlan.RenderMode.TRANSLUCENT) {
                 translucent.add(new RangeDraw(range, plan, material));
             } else {
