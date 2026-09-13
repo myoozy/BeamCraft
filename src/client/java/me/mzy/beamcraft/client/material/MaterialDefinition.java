@@ -42,11 +42,32 @@ public final class MaterialDefinition {
      */
     public final RgbaColor baseColorFactor;
 
-    /** {@code alphaRef}; defaults to 0 when absent. */
+    /**
+     * {@code alphaRef} as a 0-1 render threshold, normalised from BeamNG's byte scale;
+     * 0 when absent, which is how the assets say "no cutout".
+     */
     public final float alphaRef;
+
+    /**
+     * BeamNG writes {@code alphaRef} on a byte scale: the stock grille materials use
+     * 127, the ETK800 interior glass 235, and most materials 0 to mean "no cutout at
+     * all". Render thresholds here are 0-1, so a value above 1 is read as that scale.
+     * Only the number is affected — the "is there a cutout" test is a non-zero check
+     * either way, so no material changes pass.
+     */
+    static float normalizeAlphaRef(float raw) {
+        return raw > 1f ? raw / 255f : raw;
+    }
 
     /** {@code translucent}; defaults to false when absent. */
     public final boolean translucent;
+
+    /**
+     * {@code doubleSided}; defaults to false when absent. 64 materials in the stock
+     * library declare it, and the ones that matter are thin shells — a grille or a
+     * vent is a single surface seen from both sides.
+     */
+    public final boolean doubleSided;
 
     /**
      * Material-level {@code opacityFactor} (a scalar multiplier for the diffuse
@@ -56,8 +77,21 @@ public final class MaterialDefinition {
      */
     public final Float opacityFactor;
 
-    /** {@code translucentBlendOp} (e.g. "None", "Additive"); may be null. */
+    /** {@code translucentBlendOp} (e.g. "None", "PreMulAlpha", "Additive"); may be null. */
     public final String translucentBlendOp;
+
+    /** The blend op that reads the source rgb as already scaled by its alpha. */
+    public static final String PREMULTIPLIED_BLEND_OP = "PreMulAlpha";
+
+    /**
+     * True when {@code blendOp} asks for premultiplied-alpha blending, which weights the
+     * source rgb by nothing. One definition, because three places have to agree on it:
+     * the blend function, the mask composition, and how the colour factor is scaled —
+     * a premultiplied fragment whose rgb was not scaled by its alpha adds full colour.
+     */
+    public static boolean isPremultipliedBlend(String blendOp) {
+        return blendOp != null && blendOp.trim().equalsIgnoreCase(PREMULTIPLIED_BLEND_OP);
+    }
 
     /** {@code version} of the material JSON; 0 when absent. */
     public final float version;
@@ -67,7 +101,7 @@ public final class MaterialDefinition {
 
     MaterialDefinition(String name, String mapTo, int activeLayers,
                        List<MaterialStage> stages, RgbaColor baseColorFactor,
-                       float alphaRef, boolean translucent, Float opacityFactor,
+                       float alphaRef, boolean translucent, boolean doubleSided, Float opacityFactor,
                        String translucentBlendOp, float version, String source) {
         this.name = name;
         this.mapTo = mapTo;
@@ -76,6 +110,7 @@ public final class MaterialDefinition {
         this.baseColorFactor = baseColorFactor;
         this.alphaRef = alphaRef;
         this.translucent = translucent;
+        this.doubleSided = doubleSided;
         this.opacityFactor = opacityFactor;
         this.translucentBlendOp = translucentBlendOp;
         this.version = version;
@@ -103,8 +138,9 @@ public final class MaterialDefinition {
                 integer(json, "activeLayers", 1),
                 parseStages(json.get("Stages")),
                 parseColorFactor(json),
-                number(json, "alphaRef", 0f),
+                normalizeAlphaRef(number(json, "alphaRef", 0f)),
                 bool(json, "translucent", false),
+                bool(json, "doubleSided", false),
                 parseOpacityFactor(json),
                 string(json, "translucentBlendOp"),
                 number(json, "version", 0f),

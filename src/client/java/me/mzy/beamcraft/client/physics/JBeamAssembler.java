@@ -3,6 +3,7 @@ package me.mzy.beamcraft.client.physics;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.mzy.beamcraft.client.physics.powertrain.JBeamPowertrainParser;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -116,7 +117,7 @@ public class JBeamAssembler {
                 collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, new TransformContext(), globalVariables);
             }
 
-            System.out.println("====== 🛠️ Starting multi-Pass Assembly ======");
+            System.out.println("Starting multi-Pass Assembly");
             System.out.println("Collected " + activeParts.size() + " valid part modules.");
 
             // Pass 1: Create all nodes FIRST
@@ -124,6 +125,16 @@ public class JBeamAssembler {
                 if (entry.json.has("nodes")) {
                     JBeamParser.parseNodes(entry.json.getAsJsonArray("nodes"), vehicle, entry, couplerRegistry);
                 }
+                JBeamParser.parseAdvancedCouplers(entry.json, entry.variables, couplerRegistry);
+            }
+            // Internal camera rows define their own nodes and link to ordinary
+            // nodes from any active part, so parse them after the node pass.
+            for (PartEntry entry : activeParts) {
+                if (entry.json.has("camerasInternal") && entry.json.get("camerasInternal").isJsonArray()) {
+                    JBeamCameraParser.parseInternal(
+                            entry.json.getAsJsonArray("camerasInternal"), vehicle, entry);
+                }
+                JBeamCameraParser.parseMetadata(entry.json, vehicle, entry);
             }
             System.out.println("✅ Pass 1 Complete: Nodes spawned | Total nodes: " + vehicle.nodes.count);
 
@@ -133,13 +144,17 @@ public class JBeamAssembler {
                     JBeamParser.parseBeams(entry.json.getAsJsonArray("beams"), vehicle, entry);
                 }
                 if (entry.json.has("hydros")) {
-                    JBeamParser.parseBeams(entry.json.getAsJsonArray("hydros"), vehicle, entry);
+                    JBeamParser.parseHydros(entry.json.getAsJsonArray("hydros"), vehicle, entry);
                 }
                 if (entry.json.has("triangles")) {
                     JBeamParser.parseTriangles(entry.json.getAsJsonArray("triangles"), vehicle, entry);
                 }
                 if (entry.json.has("torsionbars")) {
                     JBeamParser.parseTorsionbars(entry.json.getAsJsonArray("torsionbars"), vehicle, entry);
+                }
+                if (entry.json.has("torsionHydros")) {
+                    JBeamParser.parseTorsionHydros(
+                            entry.json.getAsJsonArray("torsionHydros"), vehicle, entry);
                 }
                 if (entry.json.has("rails")) {
                     JBeamParser.parseRails(entry.json.getAsJsonObject("rails"), vehicleRailMap);
@@ -156,7 +171,7 @@ public class JBeamAssembler {
             System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + beamsCount);
 
             // Pass 3: 逆向解析车轮
-            System.out.println("====== 🛞 Assembling Wheels ======");
+            System.out.println("Assembling Wheels");
             JsonObject wheelConfigBlackboard = new JsonObject();
             for (PartEntry entry : activeParts) {
                 if (entry.json.has("pressureWheels")) {
@@ -170,16 +185,31 @@ public class JBeamAssembler {
             }
             System.out.println("✅ Pass 3 Complete: Wheels generated.");
 
+            // BeamNG exposes one vehicle-wide JBeam data view after selected parts have been
+            // unified. Configuration parsers consume that view once; structural parsers above
+            // still use the original parts because their transforms and origins are per-part.
+            JsonObject assembledData = JBeamPartMerger.mergeParts(
+                    activeParts.stream().map(entry -> entry.json).toList());
+            vehicle.powertrain.addSpecs(JBeamPowertrainParser.parsePart(assembledData, globalVariables));
+            // Controller instances are resolved against the named beams below, in
+            // SoftBodyVehicle.finalizePhysicsSetup, after every part has been built.
+            vehicle.setAdaptiveDamperSpecs(
+                    AdaptiveDamperParser.parsePart(assembledData, globalVariables));
+
             // Pass 4: Resolve Couplers
-            System.out.println("====== 🔗 Resolving Couplers ======");
-            int weldedCount = 0;
+            System.out.println("Resolving Couplers");
+            int attachedCount = 0;
+            for (CouplerRegistry.DirectCouplerDef direct : couplerRegistry.directDefinitions) {
+                if (addSpawnCoupler(vehicle, direct.node1, direct.node2,
+                        direct.startRadius, direct.latchSpeed, direct.strength,
+                        direct.lockRadius, direct.breakGroup)) {
+                    attachedCount++;
+                }
+            }
             for (CouplerRegistry.CouplerDef source : couplerRegistry.definitions) {
                 if (source.couplerTag != null && !source.couplerTag.isEmpty()) {
                     CouplerRegistry.CouplerDef bestTarget = null;
                     double minDistanceSq = Double.MAX_VALUE;
-                    double precompTime = 1.0;
-                    double precompRange = 0.0;
-
                     Integer sourceIdx = vehicle.nodes.nameToIndex.get(source.nodeName);
                     if (sourceIdx == null) continue;
                     double sx = vehicle.nodes.posX[sourceIdx], sy = vehicle.nodes.posY[sourceIdx], sz = vehicle.nodes.posZ[sourceIdx];
@@ -195,45 +225,52 @@ public class JBeamAssembler {
                             if (distSq <= source.startRadius * source.startRadius && distSq < minDistanceSq) {
                                 minDistanceSq = distSq;
                                 bestTarget = target;
-                                double dist = Math.sqrt(distSq);
-                                double distanceToTravel = dist - source.lockRadius;
-
-                                if (distanceToTravel > 0) {
-                                    precompTime = distanceToTravel / Math.max(source.latchSpeed, 1e-12);
-                                    precompRange = source.lockRadius;
-                                }
                             }
                         }
                     }
 
                     if (bestTarget != null) {
-                        double finalStrength = source.weld ? PhysicsWorld.KINDA_BIG_NUMBER : source.strength;
-                        vehicle.addBeam(new PhysicsSpecs.BeamSpec(
-                                BeamContainer.BEAM_NORMAL,
-                                source.nodeName, bestTarget.nodeName, null,
-                                null, 0,
-                                1e9f, 1e7f,
-                                PhysicsWorld.KINDA_BIG_NUMBER, (float) finalStrength,
-                                0.0f, (float) precompRange, (float) precompTime,
-                                0.0f, 0.0f, -1.0f, -1.0f,
-                                0.0f, 0.0f,
-                                -1.0f, -1.0f, -1.0f, -1.0f,
-                                0.0f, 0.0f, 0.0f
-                        ));
-                        weldedCount++;
+                        double effectiveStrength = Math.min(source.strength, bestTarget.strength);
+                        if (addSpawnCoupler(vehicle, source.nodeName, bestTarget.nodeName,
+                                source.startRadius, source.latchSpeed, effectiveStrength,
+                                source.lockRadius, null)) {
+                            attachedCount++;
+                        }
                     }
                 }
             }
-            System.out.println("✅ Pass 4 Complete: " + weldedCount + " Couplers welded.");
+            System.out.println("✅ Pass 4 Complete: " + attachedCount + " Couplers attached.");
 
             vehicle.finalizePhysicsSetup();
 
             return true;
         } catch (Throwable t) {
-            System.err.println("🚨 车辆装配过程中发生严重错误！");
+            System.err.println("Fatal error while assembling vehicle");
             t.printStackTrace();
             return false;
         }
+    }
+
+    private static boolean addSpawnCoupler(SoftBodyVehicle vehicle, String node1, String node2,
+                                           double startRadius, double latchSpeed, double strength,
+                                           double lockRadius, String breakGroup) {
+        Integer node1Idx = vehicle.nodes.nameToIndex.get(node1);
+        Integer node2Idx = vehicle.nodes.nameToIndex.get(node2);
+        if (node1Idx == null || node2Idx == null) return false;
+
+        double dx = vehicle.nodes.posX[node1Idx] - vehicle.nodes.posX[node2Idx];
+        double dy = vehicle.nodes.posY[node1Idx] - vehicle.nodes.posY[node2Idx];
+        double dz = vehicle.nodes.posZ[node1Idx] - vehicle.nodes.posZ[node2Idx];
+        double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance > startRadius) return false;
+
+        return vehicle.addCoupler(new PhysicsSpecs.CouplerSpec(
+                node1, node2,
+                (float) strength,
+                (float) startRadius,
+                (float) lockRadius,
+                (float) latchSpeed,
+                breakGroup));
     }
 
     private void collectPartsRecursive(String partName, JsonObject part, Map<String, String> userConfig, Map<String, JsonObject> registry, List<PartEntry> activeParts, TransformContext currentTransform, Map<String, Double> globalVariables) {
@@ -307,8 +344,8 @@ public class JBeamAssembler {
                             Map<String, Double> vars = globalVariables;
 
                             // 1. 提取 nodeRotate (按照标准顺序首先生效旋转)
-                            if (mod.has("nodeRotate")) {
-                                JsonObject nr = mod.getAsJsonObject("nodeRotate");
+                            JsonObject nr = objectMember(mod, "nodeRotate");
+                            if (nr != null) {
                                 Float rx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "x", "0"), vars);
                                 Float ry = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "y", "0"), vars);
                                 Float rz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nr, "z", "0"), vars);
@@ -318,8 +355,8 @@ public class JBeamAssembler {
                             }
 
                             // 2. 提取 nodeOffset (累加至对称镜像平移层)
-                            if (mod.has("nodeOffset")) {
-                                JsonObject no = mod.getAsJsonObject("nodeOffset");
+                            JsonObject no = objectMember(mod, "nodeOffset");
+                            if (no != null) {
                                 Float ox = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "x", "0"), vars);
                                 Float oy = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "y", "0"), vars);
                                 Float oz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(no, "z", "0"), vars);
@@ -329,8 +366,8 @@ public class JBeamAssembler {
                             }
 
                             // 3. 提取 nodeMove (累加至绝对方向平移层)
-                            if (mod.has("nodeMove")) {
-                                JsonObject nm = mod.getAsJsonObject("nodeMove");
+                            JsonObject nm = objectMember(mod, "nodeMove");
+                            if (nm != null) {
                                 Float mx = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "x", "0"), vars);
                                 Float my = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "y", "0"), vars);
                                 Float mz = JBeamParser.evaluateBeamNGExpression(JBeamParser.getStringSafe(nm, "z", "0"), vars);
@@ -346,5 +383,15 @@ public class JBeamAssembler {
                 }
             }
         }
+    }
+
+    /**
+     * BeamNG JBeam files sometimes use an empty string to mean that an optional
+     * slot transform is absent. Only object-valued transforms have x/y/z
+     * components; scalar sentinel values must therefore be ignored.
+     */
+    private static JsonObject objectMember(JsonObject parent, String memberName) {
+        JsonElement value = parent.get(memberName);
+        return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
     }
 }

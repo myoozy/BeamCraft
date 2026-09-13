@@ -13,8 +13,11 @@ import java.util.List;
  * material-level {@code baseColorFactor}, then to white. Its {@code opacityMap}
  * is the opacity source (when present). If no candidate has a diffuse map, the
  * plan is colour-only with the material factor (white default). A
- * null/unparseable material degrades to a colour-only white plan so a broken
- * material can never prevent a vehicle from rendering.
+ * When no diffuse stage exists, the first stage-level opacity factor still
+ * applies to the colour-only fallback; this is how BeamNG's
+ * {@code glass_invisible} suppresses its geometry. A null/unparseable material
+ * degrades to a colour-only white plan so a broken material can never prevent
+ * a vehicle from rendering.
  *
  * <p><b>Deterministic render-mode classification</b> (documented, unit-tested):
  * <ol>
@@ -93,12 +96,35 @@ public final class MaterialRenderPlanner {
         String opacityPath = null;
         RgbaColor baseFactor = fallbackFactor;
         Float stageOpacityFactor = null;
+        Float colorOnlyStageOpacityFactor = null;
+        // First mask and colour factor declared by any stage, kept for the
+        // no-colour-map case below.
+        String colorOnlyOpacityPath = null;
+        RgbaColor colorOnlyBaseFactor = null;
         if (material.activeLayers > 0) {
             List<MaterialStage> stages = material.stages;
             int limit = Math.min(material.activeLayers, stages.size());
             for (int i = 0; i < limit; i++) {
                 MaterialStage stage = stages.get(i);
-                if (stage == null || stage.baseColorMap == null || stage.baseColorMap.isEmpty()) {
+                if (colorOnlyStageOpacityFactor == null && stage != null && stage.opacityFactor != null) {
+                    colorOnlyStageOpacityFactor = stage.opacityFactor;
+                }
+                if (stage == null) {
+                    continue;
+                }
+                // Noted before the colour-map test: BeamNG's flat-colour materials keep
+                // their holes in a stage that carries only a baseColorFactor plus an
+                // opacityMap, and skipping such a stage dropped the mask along with the
+                // colour map it was looking for.
+                if (colorOnlyOpacityPath == null && stage.opacityMap != null && !stage.opacityMap.isEmpty()) {
+                    colorOnlyOpacityPath = stage.opacityMap;
+                }
+                // The flat colour lives here too: grille_hex declares its 0.14 on the
+                // stage, and losing it would paint the part white rather than dark.
+                if (colorOnlyBaseFactor == null && stage.baseColorFactor != null) {
+                    colorOnlyBaseFactor = stage.baseColorFactor;
+                }
+                if (stage.baseColorMap == null || stage.baseColorMap.isEmpty()) {
                     continue;
                 }
                 diffusePath = stage.baseColorMap;
@@ -107,6 +133,15 @@ public final class MaterialRenderPlanner {
                 baseFactor = stage.baseColorFactor != null ? stage.baseColorFactor : fallbackFactor;
                 stageOpacityFactor = stage.opacityFactor;
                 break;
+            }
+        }
+        if (diffusePath == null) {
+            stageOpacityFactor = colorOnlyStageOpacityFactor;
+            // A material with no colour map is not thereby a material with no mask, and
+            // its stage factor is still its colour.
+            opacityPath = colorOnlyOpacityPath;
+            if (colorOnlyBaseFactor != null) {
+                baseFactor = colorOnlyBaseFactor;
             }
         }
         Float explicitOpacity = stageOpacityFactor != null ? stageOpacityFactor : material.opacityFactor;
@@ -119,7 +154,8 @@ public final class MaterialRenderPlanner {
             // translucent flags still honour it; see honorOpacityFactor().
             opacityFactor = null;
         }
-        RgbaColor factor = applyOpacityFactor(baseFactor, opacityFactor);
+        RgbaColor factor = applyOpacityFactor(baseFactor, opacityFactor,
+                MaterialDefinition.isPremultipliedBlend(material.translucentBlendOp));
         return classify(material, diffusePath, opacityPath, factor);
     }
 
@@ -268,13 +304,22 @@ public final class MaterialRenderPlanner {
      * [0,1]), keeping RGB unchanged. Null factor or colour passes through
      * unchanged, so materials without an opacity factor are never altered.
      */
-    static RgbaColor applyOpacityFactor(RgbaColor color, Float opacityFactor) {
+    static RgbaColor applyOpacityFactor(RgbaColor color, Float opacityFactor, boolean premultiplied) {
         if (color == null || opacityFactor == null) {
             return color;
         }
         float clampedFactor = Math.max(0f, Math.min(1f, opacityFactor));
         float alpha = Math.max(0f, Math.min(1f, color.a() * clampedFactor));
-        return new RgbaColor(color.r(), color.g(), color.b(), alpha);
+        if (!premultiplied) {
+            // Normal alpha blending weights the rgb by this alpha itself.
+            return new RgbaColor(color.r(), color.g(), color.b(), alpha);
+        }
+        // A premultiplied blend weights the rgb by nothing, so the factor has to scale rgb
+        // too: for premultiplied output rgb must equal colour x alpha, which is why the
+        // channels move together. Without this, BeamNG's invisible shells — an
+        // opacityFactor of 0 with PreMulAlpha, e.g. glass_invisible on the shattered
+        // windshield mesh — contribute their full rgb and stop being invisible.
+        return new RgbaColor(color.r() * alpha, color.g() * alpha, color.b() * alpha, alpha);
     }
 
     /**
@@ -313,15 +358,48 @@ public final class MaterialRenderPlanner {
             return MaterialRenderPlan.translucent(diffusePath, opacityPath, factor, material.translucentBlendOp);
         }
         if (material.alphaRef > 0f) {
-            return diffusePath != null
-                    ? MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, material.alphaRef)
-                    : MaterialRenderPlan.colorOnly(factor);
+            if (diffusePath != null) {
+                return MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, material.alphaRef);
+            }
+            // No colour map at all: a flat baseColorFactor plus a coverage mask. The mask
+            // still has to reach the alpha test, so it is composed over white and the
+            // factor tints it — dropping to colorOnly is what painted grilles solid.
+            // A declared cutout with no colour map: a flat colour plus a coverage mask.
+            // Interior glass stays excluded — its shell must not be cut open (see
+            // isInteriorGlassMaterial).
+            if (opacityPath != null && !isInteriorGlassMaterial(material)) {
+                return MaterialRenderPlan.cutoutMaskOnly(opacityPath, factor, material.alphaRef);
+            }
+            return MaterialRenderPlan.colorOnly(factor);
         }
         if (factor.a() < 1.0f) {
             return MaterialRenderPlan.translucent(diffusePath, opacityPath, factor, material.translucentBlendOp);
         }
+        // An opacity map with neither an alphaRef nor a translucent flag is deliberately
+        // left alone. BeamNG does not declare those as coverage, and the same _o.data slot
+        // holds maps that are not coverage at all: the Sunburst2 body's is 25% zero, 47%
+        // low and 28% full with no clean separation, so reading it as alpha turned most of
+        // the body transparent. A cutout therefore requires the asset to say so through
+        // alphaRef, which the stock grille materials do (grille_hex: 86, grille: 127).
         return diffusePath != null
                 ? MaterialRenderPlan.textured(diffusePath, factor)
                 : MaterialRenderPlan.colorOnly(factor);
+    }
+
+    /**
+     * Interior glass is the one mask-carrying material that must stay opaque. It is
+     * not flagged translucent, and cutting its shell open would punch holes in the
+     * cabin; the see-through look comes from the exterior glass instead. Exterior
+     * glass, lamp covers and paint are flagged translucent or handled by an earlier
+     * branch, so they never reach the coverage rule above.
+     *
+     * <p>The classification is BeamNG's own {@code *_glass_int} naming, reused from
+     * {@link InteriorGlassOpacityFallback} rather than restated here. A material that
+     * ships a mask and is genuinely meant to be clipped under an unusual name would
+     * need that classification widened.
+     */
+    private static boolean isInteriorGlassMaterial(MaterialDefinition material) {
+        return InteriorGlassOpacityFallback.isInteriorGlass(material.mapTo)
+                || InteriorGlassOpacityFallback.isInteriorGlass(material.name);
     }
 }

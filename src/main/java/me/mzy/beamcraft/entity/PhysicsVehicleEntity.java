@@ -2,11 +2,20 @@ package me.mzy.beamcraft.entity;
 
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.EntityPose;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.Dismounting;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.world.World;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class PhysicsVehicleEntity extends Entity {
     // 自动在双端同步的通道
@@ -16,6 +25,14 @@ public class PhysicsVehicleEntity extends Entity {
     // 【标准构造函数】
     public PhysicsVehicleEntity(EntityType<?> type, World world) {
         super(type, world);
+    }
+
+    @Override
+    public boolean canHit() {
+        // 允许被玩家准星射线命中 (findCrosshairTarget 过滤条件 !spectator && canHit)。
+        // 默认 Entity.canHit() 返回 false，导致准星永远得不到指向车辆的
+        // EntityHitResult，进而无法触发右键上车交互。
+        return !this.isRemoved();
     }
 
     @Override
@@ -49,6 +66,39 @@ public class PhysicsVehicleEntity extends Entity {
     public void tick() {
         super.tick();
         // 仅维护基础包围盒，物理更新完全交由客户端处理
+    }
+
+    @Override
+    public Vec3d updatePassengerForDismount(LivingEntity passenger) {
+        Vec3d offset = getPassengerDismountOffset(
+                this.getWidth() * MathHelper.SQUARE_ROOT_OF_TWO,
+                passenger.getWidth(),
+                passenger.getYaw()
+        );
+        double x = this.getX() + offset.x;
+        double z = this.getZ() + offset.z;
+        BlockPos upper = BlockPos.ofFloored(x, this.getBoundingBox().maxY, z);
+        BlockPos lower = upper.down();
+        List<Vec3d> candidates = new ArrayList<>();
+        addDismountCandidate(candidates, upper, x, z);
+        addDismountCandidate(candidates, lower, x, z);
+
+        for (EntityPose pose : passenger.getPoses()) {
+            for (Vec3d candidate : candidates) {
+                if (Dismounting.canPlaceEntityAt(this.getWorld(), candidate, passenger, pose)) {
+                    passenger.setPose(pose);
+                    return candidate;
+                }
+            }
+        }
+        return super.updatePassengerForDismount(passenger);
+    }
+
+    private void addDismountCandidate(List<Vec3d> candidates, BlockPos pos, double x, double z) {
+        double height = this.getWorld().getDismountHeight(pos);
+        if (Dismounting.canDismountInBlock(height)) {
+            candidates.add(new Vec3d(x, pos.getY() + height, z));
+        }
     }
 
     @Override

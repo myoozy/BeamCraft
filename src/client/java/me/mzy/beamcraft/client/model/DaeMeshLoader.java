@@ -1,22 +1,26 @@
 package me.mzy.beamcraft.client.model;
 
+import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.assets.ResolvedEntry;
+import me.mzy.beamcraft.client.debug.LoadTiming;
+
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.assimp.*;
 import org.lwjgl.PointerBuffer;
 
-import java.io.*;
+import java.io.File;
 import java.nio.IntBuffer;
-import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
-import java.util.stream.Stream;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class DaeMeshLoader {
+
+    /** The shared library namespace every vehicle resolves against. */
+    private static final String COMMON = "common";
 
     public static class SubMesh {
         public String materialName;
@@ -47,8 +51,51 @@ public class DaeMeshLoader {
 
     // 车型存活实例计数器 (例如: "pickup" -> 2 辆)
     private static final Map<String, Integer> VEHICLE_REF_COUNT = new HashMap<>();
-    // 标记 common 库是否已挂载
-    private static boolean isCommonLoaded = false;
+
+    // ---- On-demand mesh loading ---------------------------------------------
+    //
+    // A vehicle needs a small slice of the shared library. The stock common.zip
+    // holds 167 .dae files totalling 615 MB, while an etk800 touches a handful (one
+    // wheel, one tire, the brakes). Handing all of them to Assimp costs ~34 s, so
+    // only the shared-library files that back a requested mesh are imported, and the
+    // provider of a mesh is found by scanning candidate DAE text for node names.
+    //
+    // JBeam cannot say which file a mesh lives in (the flexbody table carries only
+    // the mesh name) and the file names are not a usable index either —
+    // tire_super_modern_sport lives in tires.dae, disc_brake in disc_brakes.dae.
+    //
+    // Every consumer resolves meshes through flex.meshName[], so requireMeshes()
+    // primes exactly the set that can ever be requested; resolveMesh() also
+    // resolves lazily on a miss, so nothing outside that set can silently vanish.
+
+    /** Cached candidate list and scan state for one namespace. */
+    private static final class NamespaceState {
+        List<ResolvedEntry> candidates;
+        /** entryName of every candidate already handed to Assimp. */
+        final Set<String> imported = new HashSet<>();
+        /**
+         * Node names seen in a candidate's text; kept across releases (files do not
+         * change). Written from the parallel harvest, so it must be concurrent.
+         */
+        final Map<String, Set<String>> namesByEntry = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * How many candidates are read and indexed before names are attributed. Each
+     * slice is scanned in parallel; the slice boundary is what keeps a vehicle from
+     * indexing a library it never touches.
+     */
+    private static final int HARVEST_SLICE = 32;
+
+    private static final Map<String, NamespaceState> NAMESPACE_STATE = new HashMap<>();
+    /** Mesh names of the current require call that no candidate declares. */
+    private static final Set<String> unattributed = new LinkedHashSet<>();
+    /** Cap on how many unattributed names the report prints, to keep it readable. */
+    private static final int MAX_REPORTED_NAMES = 12;
+    /** The ATTRIBUTE patterns a COLLADA node or geometry declares its name with. */
+    private static final String[] NAME_ATTRIBUTES = {"name=\"", "id=\""};
+    /** Roots of the most recent require call, for late resolveMesh misses. */
+    private static List<File> activeRoots = List.of();
 
     public static String cleanIdentifier(String name) {
         if (name == null || name.isEmpty()) return "";
@@ -66,26 +113,271 @@ public class DaeMeshLoader {
     }
 
     /**
-     * 当一辆车准备生成时调用（按需加载该车系及 Common 的所有模型）
+     * Loads the meshes behind {@code meshNames} for {@code namespace}. The vehicle's
+     * own namespace is imported whole; each name is then resolved against the shared
+     * library on demand, importing only the {@code .dae} files that declare it.
+     *
+     * <p>Names that no file declares are fine: they cost only the provider search,
+     * and such a mesh never rendered anyway. They are reported rather than chased,
+     * because importing the whole shared library to find out costs ~40 s per miss.
      */
-    public static void requireVehicleModels(File vehiclesRootDir, String targetVehicleName) {
-        int count = VEHICLE_REF_COUNT.getOrDefault(targetVehicleName, 0);
-        VEHICLE_REF_COUNT.put(targetVehicleName, count + 1);
+    public static void requireMeshes(List<File> assetRoots, String namespace, Collection<String> meshNames) {
+        activeRoots = List.copyOf(assetRoots);
+        VEHICLE_REF_COUNT.merge(namespace, 1, Integer::sum);
 
-        if (count == 0) {
-            System.out.println("====== 🚀 按需加载 DAE 资产: " + targetVehicleName + " ======");
+        long started = LoadTiming.start();
 
-            // 1. 确保基础 common 资产已加载
-            if (!isCommonLoaded) {
-                loadSpecificVehicleDae(vehiclesRootDir, "common");
-                isCommonLoaded = true;
-            }
+        // The vehicle's own namespace is imported whole. It is small (two .dae for an
+        // etk800) and nearly all of it is needed, so a provider search would cost more
+        // than it saves — and a name the index cannot see would silently drop the body
+        // mesh. The waste is all in the shared library, so only that side is on demand.
+        if (!COMMON.equals(namespace)) {
+            importAllRemaining(namespace);
+        }
 
-            // 2. 加载目标车系的所有 DAE 资产
-            if (!targetVehicleName.equals("common")) {
-                loadSpecificVehicleDae(vehiclesRootDir, targetVehicleName);
+        // Every wanted name is attributed in one batched pass: it stops as soon as the
+        // last name has a provider, instead of walking the candidate list per name.
+        Set<String> pending = new LinkedHashSet<>();
+        for (String meshName : meshNames) {
+            if (meshName != null && !meshName.isEmpty() && !isCached(namespace, meshName)) {
+                pending.add(meshName);
             }
         }
+        attributeAll(COMMON, pending);
+
+        unattributed.clear();
+        unattributed.addAll(pending);
+        LoadTiming.log("  [dae] " + namespace + ": " + importedSummary(namespace), started);
+        reportUnattributed();
+    }
+
+    /**
+     * Names no {@code .dae} declares. Not necessarily a problem: the flexbody table
+     * keeps rows for parts whose mesh is simply absent, and those meshes never
+     * rendered. It is reported because the other explanation is that the name index
+     * reads a name differently than Assimp does, which would drop a real mesh.
+     */
+    private static void reportUnattributed() {
+        if (unattributed.isEmpty()) {
+            return;
+        }
+        StringBuilder shown = new StringBuilder();
+        int printed = 0;
+        for (String name : unattributed) {
+            if (printed == MAX_REPORTED_NAMES) {
+                shown.append(", …");
+                break;
+            }
+            if (printed > 0) {
+                shown.append(", ");
+            }
+            shown.append(name);
+            printed++;
+        }
+        System.err.println("  [dae] " + unattributed.size() + " mesh name(s) declared no provider, "
+                + "so they will not render: " + shown);
+    }
+
+    /** e.g. {@code etk800 imported 1/2, common imported 4/167}. */
+    private static String importedSummary(String namespace) {
+        StringBuilder summary = new StringBuilder();
+        for (String ns : COMMON.equals(namespace) ? List.of(COMMON) : List.of(namespace, COMMON)) {
+            NamespaceState state = NAMESPACE_STATE.get(ns);
+            if (state == null) {
+                continue;
+            }
+            if (summary.length() > 0) {
+                summary.append(", ");
+            }
+            summary.append(ns).append(" imported ").append(state.imported.size())
+                    .append('/').append(state.candidates.size());
+        }
+        return summary.length() == 0 ? "no candidates scanned" : summary.toString();
+    }
+
+    /**
+     * Maps the shared-library files that declare any of {@code pending}, removing a
+     * name from the set once it resolves. The vehicle's own namespace is already
+     * imported by the caller, so only the shared library is searched.
+     *
+     * <p>Candidates are indexed a slice at a time and attributed in path order, so a
+     * name provided by several files still goes to the same winner it did when the
+     * search ran one name at a time. Inside a slice the scan runs in parallel: the
+     * needed files sit across the whole 615 MB of the shared library, so every
+     * candidate gets read either way, and the text scan is what costs — reading all
+     * 178 of them is 0.5 s against 1.2 s of scanning.
+     */
+    private static void attributeAll(String namespace, Set<String> pending) {
+        NamespaceState state = stateFor(namespace);
+        for (int from = 0; from < state.candidates.size() && !pending.isEmpty(); from += HARVEST_SLICE) {
+            int to = Math.min(from + HARVEST_SLICE, state.candidates.size());
+            List<ResolvedEntry> slice = state.candidates.subList(from, to);
+
+            slice.parallelStream()
+                    .filter(entry -> !state.imported.contains(entry.entryName()))
+                    .forEach(entry -> harvest(state, entry));
+
+            for (ResolvedEntry entry : slice) {
+                if (pending.isEmpty()) {
+                    break;
+                }
+                if (state.imported.contains(entry.entryName())) {
+                    continue;
+                }
+                Set<String> names = state.namesByEntry.get(entry.entryName());
+                if (names == null || Collections.disjoint(names, pending)) {
+                    continue;
+                }
+                importEntry(entry, namespace, state);
+                // An import only counts if the geometry really landed: a file Assimp
+                // rejects must not retire a name it "declared".
+                pending.removeIf(name -> MESH_CACHE.containsKey(namespace + ":" + name));
+            }
+        }
+    }
+
+    /**
+     * Reads a candidate's text into the name index, once. Each entry appears in one
+     * slice, so no two threads ever harvest the same file.
+     */
+    private static void harvest(NamespaceState state, ResolvedEntry entry) {
+        state.namesByEntry.put(entry.entryName(), harvestNames(entry));
+    }
+
+    /** Resolves one mesh name eagerly, for a caller that is not {@link #requireMeshes}. */
+    private static void ensureMesh(String namespace, String meshName) {
+        if (isCached(namespace, meshName)) {
+            return;
+        }
+        Set<String> pending = new LinkedHashSet<>();
+        pending.add(meshName);
+        attributeAll(COMMON, pending);
+        if (!pending.isEmpty()) {
+            unattributed.add(meshName);
+        }
+    }
+
+    private static boolean isCached(String namespace, String meshName) {
+        return MESH_CACHE.containsKey(namespace + ":" + meshName)
+                || MESH_CACHE.containsKey(COMMON + ":" + meshName);
+    }
+
+    /**
+     * Collects the node and geometry names a {@code .dae} declares, without going
+     * through Assimp. Deliberately over-inclusive: both {@code name=} and {@code id=}
+     * are taken, so a name Assimp sanitises differently costs at most one wasted
+     * import before the next candidate is tried.
+     */
+    private static Set<String> harvestNames(ResolvedEntry entry) {
+        try {
+            return extractMeshNames(entry.readBytes());
+        } catch (Exception e) {
+            System.err.println("Failed to index mesh names in " + entry.sourceAddress());
+            return Set.of();
+        }
+    }
+
+    /**
+     * The names a COLLADA document declares on its nodes and geometries. Extracted
+     * without Assimp because the whole point is to avoid importing a file just to
+     * learn whether it holds a name. Package-private so the extraction is testable
+     * without a real mesh or the native importer.
+     *
+     * <p>Casing is preserved: cache keys are Assimp node names, and lookups are
+     * case-sensitive.
+     */
+    static Set<String> extractMeshNames(byte[] bytes) {
+        Set<String> names = new HashSet<>();
+        for (String attribute : NAME_ATTRIBUTES) {
+            int from = 0;
+            while (true) {
+                int at = indexOf(bytes, attribute, from);
+                if (at < 0) {
+                    break;
+                }
+                int start = at + attribute.length();
+                int end = start;
+                while (end < bytes.length && bytes[end] != '"') {
+                    end++;
+                }
+                if (end < bytes.length) {
+                    String cleaned = cleanIdentifier(
+                            new String(bytes, start, end - start, StandardCharsets.US_ASCII));
+                    if (!cleaned.isEmpty()) {
+                        names.add(cleaned);
+                    }
+                }
+                from = end + 1;
+            }
+        }
+        return names;
+    }
+
+    /** Plain byte search; the needles are ASCII, so no decoding is involved. */
+    private static int indexOf(byte[] haystack, String needle, int from) {
+        int last = haystack.length - needle.length();
+        byte first = (byte) needle.charAt(0);
+        outer:
+        for (int i = Math.max(0, from); i <= last; i++) {
+            if (haystack[i] != first) {
+                continue;
+            }
+            for (int j = 1; j < needle.length(); j++) {
+                if (haystack[i + j] != (byte) needle.charAt(j)) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    /** Imports every candidate of a namespace that has not been imported yet. */
+    private static void importAllRemaining(String namespace) {
+        NamespaceState state = stateFor(namespace);
+        for (ResolvedEntry entry : state.candidates) {
+            if (!state.imported.contains(entry.entryName())) {
+                importEntry(entry, namespace, state);
+            }
+        }
+    }
+
+    /** Imports one candidate; marked first so a failure is not retried forever. */
+    private static void importEntry(ResolvedEntry entry, String namespace, NamespaceState state) {
+        state.imported.add(entry.entryName());
+        long fileStart = LoadTiming.start();
+        try {
+            Path path = entry.materializeForAssimp();
+            try {
+                loadMeshUsingAssimp(path.toString(), namespace);
+            } finally {
+                entry.deleteTemp();
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load DAE asset: " + entry.sourceAddress());
+        }
+        LoadTiming.log("  [dae] " + entry.logicalPath() + " total", fileStart);
+    }
+
+    private static NamespaceState stateFor(String namespace) {
+        NamespaceState state = NAMESPACE_STATE.get(namespace);
+        if (state == null) {
+            state = new NamespaceState();
+            state.candidates = candidateMeshes(namespace);
+            NAMESPACE_STATE.put(namespace, state);
+        }
+        return state;
+    }
+
+    private static List<ResolvedEntry> candidateMeshes(String namespace) {
+        List<ResolvedEntry> candidates = new ArrayList<>();
+        for (ResolvedEntry entry : AssetScanner.INSTANCE.scan(activeRoots, namespace).entries()) {
+            // logicalPath() is the lowercased dedupe key, so this is case-insensitive.
+            if (entry.logicalPath().endsWith(".dae")) {
+                candidates.add(entry);
+            }
+        }
+        return candidates;
     }
 
     /**
@@ -95,86 +387,43 @@ public class DaeMeshLoader {
         int count = VEHICLE_REF_COUNT.getOrDefault(targetVehicleName, 0) - 1;
         if (count <= 0) {
             VEHICLE_REF_COUNT.remove(targetVehicleName);
-            System.out.println("====== 🗑️ 回收 DAE 资产: " + targetVehicleName + " ======");
+            System.out.println("Releasing DAE assets for: " + targetVehicleName);
 
             // 从缓存中安全移除属于该车系的所有网格数据，释放堆内存
             String prefix = targetVehicleName + ":";
             MESH_CACHE.entrySet().removeIf(entry -> entry.getKey().startsWith(prefix));
 
+            // The geometries are gone, so a later spawn of this namespace has to
+            // import its providers again. The name index stays valid — files do not
+            // change — so only the import bookkeeping is dropped.
+            NamespaceState state = NAMESPACE_STATE.get(targetVehicleName);
+            if (state != null) {
+                state.imported.clear();
+            }
         } else {
             VEHICLE_REF_COUNT.put(targetVehicleName, count);
         }
     }
 
-    private static void loadSpecificVehicleDae(File vehiclesRootDir, String targetVehicleName) {
-        boolean isCommon = targetVehicleName.equals("common");
-
-        File commonZip = new File(vehiclesRootDir, "common.zip");
-        File commonDir = new File(vehiclesRootDir, "common");
-
-        if (isCommon) {
-            if (commonZip.exists()) scanZipForSpecificDae(commonZip, targetVehicleName, true);
-            if (commonDir.exists()) scanFolderForSpecificDae(commonDir, targetVehicleName, true);
-            return;
+    /**
+     * Shared scoped lookup: the namespace's own mesh first, then the common library.
+     * A miss is resolved on demand so a caller that did not go through
+     * {@link #requireMeshes} cannot silently lose a mesh that does exist.
+     */
+    public static RawGeometry resolveMesh(String namespace, String meshName) {
+        RawGeometry geometry = MESH_CACHE.get(namespace + ":" + meshName);
+        if (geometry != null) {
+            return geometry;
         }
-
-        File[] files = vehiclesRootDir.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                String name = file.getName();
-                if (name.equals("common.zip") || name.equals("common")) continue;
-
-                if (name.toLowerCase().contains(targetVehicleName.toLowerCase())) {
-                    if (file.isDirectory()) {
-                        scanFolderForSpecificDae(file, targetVehicleName, false);
-                    } else if (name.endsWith(".zip")) {
-                        scanZipForSpecificDae(file, targetVehicleName, false);
-                    }
-                }
-            }
+        geometry = MESH_CACHE.get(COMMON + ":" + meshName);
+        if (geometry != null || activeRoots.isEmpty()) {
+            return geometry;
         }
-    }
-
-    private static void scanZipForSpecificDae(File zipFile, String targetVehicleName, boolean isCommon) {
-        try (ZipFile zf = new ZipFile(zipFile)) {
-            Enumeration<? extends ZipEntry> entries = zf.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry entry = entries.nextElement();
-                String name = entry.getName();
-
-                // 定向过滤核心逻辑
-                boolean isTarget = isCommon || name.contains("vehicles/" + targetVehicleName + "/");
-
-                if (isTarget && !entry.isDirectory() && !name.contains("__MACOSX") && name.toLowerCase().endsWith(".dae")) {
-                    File tempFile = File.createTempFile("beamcraft_dae_", ".dae");
-                    try {
-                        try (InputStream is = zf.getInputStream(entry)) {
-                            Files.copy(is, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                        }
-                        loadMeshUsingAssimp(tempFile.getAbsolutePath(), targetVehicleName);
-                    } finally {
-                        tempFile.delete();
-                    }
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("🚨 读取 ZIP 资产失败: " + zipFile.getName());
-        }
-    }
-
-    private static void scanFolderForSpecificDae(File folder, String targetVehicleName, boolean isCommon) {
-        try (Stream<Path> paths = Files.walk(folder.toPath())) {
-            paths.filter(Files::isRegularFile).forEach(path -> {
-                String filePath = path.toString().replace("\\", "/");
-                boolean isTarget = isCommon || filePath.contains("/vehicles/" + targetVehicleName + "/");
-
-                if (isTarget && filePath.toLowerCase().endsWith(".dae")) {
-                    loadMeshUsingAssimp(path.toAbsolutePath().toString(), targetVehicleName);
-                }
-            });
-        } catch (Exception e) {
-            System.err.println("🚨 遍历目录失败: " + folder.getName());
-        }
+        // Not primed, or genuinely absent. Search the shared library's providers so a
+        // lookup that did not go through requireMeshes still finds its mesh.
+        ensureMesh(namespace, meshName);
+        geometry = MESH_CACHE.get(namespace + ":" + meshName);
+        return geometry != null ? geometry : MESH_CACHE.get(COMMON + ":" + meshName);
     }
 
     private static void loadMeshUsingAssimp(String filePath, String namespace) {
@@ -184,13 +433,16 @@ public class DaeMeshLoader {
                         Assimp.aiProcess_JoinIdenticalVertices |    // 优化合并
                         Assimp.aiProcess_ImproveCacheLocality;
 
-        // 创建属性存储器，强制禁止 Assimp 自动将 Z-up 转换为 Y-up！
-        // 这样读取进来的顶点就是纯正的 BeamNG 原始数据，完美对接 JBeam 插槽旋转。
+        // Disable Assimp's automatic Z-up to Y-up conversion so the imported
+        // vertices stay in BeamNG's native frame, matching the JBeam slot transforms.
         AIPropertyStore store = Assimp.aiCreatePropertyStore();
         if (store != null) {
             Assimp.aiSetImportPropertyInteger(store, Assimp.AI_CONFIG_IMPORT_COLLADA_IGNORE_UP_DIRECTION, 1);
         }
 
+        // Split the native import from our own scene walk: the two have very
+        // different fixes (Assimp post-processing flags vs the bake loop).
+        long importStart = LoadTiming.start();
         AIScene scene;
         if (store != null) {
             // 携带属性强制加载
@@ -200,11 +452,14 @@ public class DaeMeshLoader {
             // Fallback (通常不会走到这里)
             scene = Assimp.aiImportFile(filePath, postProcessingFlags);
         }
+        LoadTiming.log("    assimp import", importStart);
 
         if (scene == null || scene.mRootNode() == null) return;
 
         // 继续使用上一版的矩阵级联传递，此时的根矩阵是纯净的 Identity
+        long bakeStart = LoadTiming.start();
         processSceneNodesRecursively(scene.mRootNode(), scene, namespace, new Matrix4f().identity());
+        LoadTiming.log("    scene bake", bakeStart);
         Assimp.aiReleaseImport(scene);
     }
 
@@ -272,7 +527,7 @@ public class DaeMeshLoader {
 
                 int currentMergedVertPtr = 0;
                 int currentMergedIndexPtr = 0;
-                // 复用临时向量对象，避免高频创建销毁产生内存垃圾
+                // Reuse temporary vectors instead of allocating per vertex.
                 Vector3f tempPos = new Vector3f();
                 Vector3f tempNorm = new Vector3f();
 
@@ -375,12 +630,10 @@ public class DaeMeshLoader {
                 unifiedGeometry.indexCount  = currentMergedIndexPtr;
                 unifiedGeometry.subMeshes   = subMeshes;
 
-                // 完美映射：基于原生节点名与切片名进行双重全域覆盖
+                // Register under both the cleaned and the original node name so either resolves.
                 MESH_CACHE.put(namespace + ":" + cleanNodeName, unifiedGeometry);
-                // BeamCraft.LOGGER.info("cleanNodeName: " + namespace + ":" + cleanNodeName);
                 if (!cleanNodeName.equals(rawNodeName)) {
                     MESH_CACHE.put(namespace + ":" + rawNodeName, unifiedGeometry);
-                    // BeamCraft.LOGGER.info("rawNodeName: " + namespace + ":" + rawNodeName);
                 }
             }
         }

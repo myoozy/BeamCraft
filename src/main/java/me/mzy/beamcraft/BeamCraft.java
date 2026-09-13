@@ -2,6 +2,7 @@ package me.mzy.beamcraft;
 
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.network.VehicleSyncPayload;
+import me.mzy.beamcraft.network.VehicleRidePayload;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
@@ -54,13 +55,15 @@ public class BeamCraft implements ModInitializer {
 
 		// 1. 注册 Payload 类型
 		PayloadTypeRegistry.playC2S().register(VehicleSyncPayload.ID, VehicleSyncPayload.CODEC);
+		PayloadTypeRegistry.playC2S().register(VehicleRidePayload.ID, VehicleRidePayload.CODEC);
 
 		// 2. 注册全局服务端接收器
 		ServerPlayNetworking.registerGlobalReceiver(VehicleSyncPayload.ID, (payload, context) -> {
 			// 必须在主线程中执行实体操作
 			context.server().execute(() -> {
 				Entity entity = context.player().getWorld().getEntityById(payload.entityId());
-				if (entity != null) {
+				if (entity instanceof PhysicsVehicleEntity vehicle
+						&& (!vehicle.hasPassengers() || vehicle.hasPassenger(context.player()))) {
 					// 同步服务端实体位置，防止服务端进行视距卸载或判定移动作弊
 					entity.setPosition(payload.x(), payload.y(), payload.z());
 					entity.setYaw(payload.yaw());
@@ -68,6 +71,24 @@ public class BeamCraft implements ModInitializer {
 				}
 			});
 		});
+
+		ServerPlayNetworking.registerGlobalReceiver(VehicleRidePayload.ID, (payload, context) ->
+				context.server().execute(() -> {
+					ServerPlayerEntity player = context.player();
+					Entity entity = player.getWorld().getEntityById(payload.entityId());
+					if (!(entity instanceof PhysicsVehicleEntity vehicle)) {
+						return;
+					}
+
+					if (payload.mount()) {
+						if (!player.hasVehicle() && !vehicle.hasPassengers()
+								&& player.squaredDistanceTo(vehicle) <= 36.0) {
+							player.startRiding(vehicle);
+						}
+					} else if (player.getVehicle() == vehicle) {
+						player.stopRiding();
+					}
+				}));
 
 		// /spawnvehicle <车辆名> <pc配置文件名>
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {

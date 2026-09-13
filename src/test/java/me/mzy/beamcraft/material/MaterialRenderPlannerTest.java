@@ -212,6 +212,153 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
+    void undeclaredCoverageMaskStaysOpaque() {
+        // A colour map and an opacity map with no translucent flag and no alphaRef. The
+        // mask is deliberately NOT treated as coverage: BeamNG does not declare it as
+        // such, and the same _o.data slot holds maps that are not coverage at all. The
+        // Sunburst2 body's mask is 25% zero / 47% low / 28% full with no clean
+        // separation, so reading it as alpha hid three quarters of the body.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "sunburst2_main",
+                  "Stages": [ { "baseColorMap": "/vehicles/sunburst2/sunburst2_main_b.color.png",
+                                "opacityMap": "/vehicles/sunburst2/sunburst2_main_o.data.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertTrue(plan.hasTexture());
+        assertFalse(plan.hasOpacity(), "an undeclared mask is left out of the plan");
+    }
+
+    @Test
+    void anUndeclaredMaskWithoutAColourMapIsLeftAloneToo() {
+        // The same rule from the other side: no colour map either, so there is nothing to
+        // clip and nothing to tint. Only a declared cutout (alphaRef) reaches the mask-only
+        // path, which is how the hood vents are fixed.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mask_only",
+                  "Stages": [ { "opacityMap": "mask_o.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertFalse(plan.hasTexture());
+        assertFalse(plan.hasOpacity());
+    }
+
+    @Test
+    void flatColourMaterialWithAMaskBecomesACutoutOverWhite() {
+        // The shape the stock grille materials have (grille/grille_hex/...): a flat
+        // baseColorFactor and an opacityMap, with no baseColorMap anywhere. The mask is
+        // the only thing that can drive the cutout, and dropping to colorOnly is what
+        // painted the hood vents and every grille as a solid panel.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "grille_hex",
+                  "alphaRef": 86,
+                  "alphaTest": true,
+                  "doubleSided": true,
+                  "Stages": [ { "baseColorFactor": [0.14, 0.14, 0.14, 1],
+                                "normalMap": "vehicles/common/grille_hex_n.normal.png",
+                                "opacityMap": "/vehicles/common/grille_hex_o.data.png" } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
+        assertFalse(plan.hasTexture(), "there is no colour map to sample");
+        assertTrue(plan.hasOpacity(), "the mask is what drives the cutout");
+        assertEquals("/vehicles/common/grille_hex_o.data.png", plan.opacityPath());
+        assertEquals(86f / 255f, plan.alphaRef(), 1e-6f);
+        assertEquals(0.14f, plan.colorFactor().r(), 1e-6f);
+    }
+
+    @Test
+    void flatColourMaterialWithoutAMaskStaysColourOnly() {
+        // No mask means there is nothing to cut, so this stays a flat colour: the scope
+        // is deliberately limited to mask-carrying materials (mirrors, screens and gauge
+        // icons need their own handling).
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mirror_F",
+                  "Stages": [ { "baseColorFactor": [1.0, 1.0, 1.0, 1] } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertFalse(plan.hasTexture());
+        assertFalse(plan.hasOpacity());
+    }
+
+    @Test
+    void premultipliedInvisibleShellScalesRgbToNothing() {
+        // glass_invisible: the shattered-windshield shell hides itself with opacityFactor 0
+        // under PreMulAlpha. A premultiplied blend weights the rgb by nothing, so the factor
+        // must zero rgb as well — scaling alpha alone left the shell adding full white, which
+        // is what made the damaged windshield mesh appear.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "glass_invisible",
+                  "translucent": true,
+                  "translucentBlendOp": "PreMulAlpha",
+                  "Stages": [ { "opacityFactor": 0 } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, plan.mode());
+        assertEquals(new RgbaColor(0f, 0f, 0f, 0f), plan.colorFactor());
+    }
+
+    @Test
+    void aNormalBlendKeepsRgbWhenOnlyTheAlphaFades() {
+        // The same fade without PreMulAlpha scales alpha alone, because normal alpha
+        // blending applies that alpha to the rgb itself.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "tinted",
+                  "translucent": true,
+                  "Stages": [ { "baseColorFactor": [0.8, 0.4, 0.2, 1], "opacityFactor": 0.5 } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(0.5f, plan.colorFactor().a(), 1e-6f);
+        assertEquals(0.8f, plan.colorFactor().r(), 1e-6f);
+    }
+
+    @Test
+    void opacityFactorScalesRgbOnlyForPremultipliedBlending() {
+        assertEquals(new RgbaColor(1f, 1f, 1f, 0.5f),
+                MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, 0.5f, false));
+        assertEquals(new RgbaColor(0.5f, 0.5f, 0.5f, 0.5f),
+                MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, 0.5f, true));
+        assertEquals(new RgbaColor(0f, 0f, 0f, 0f),
+                MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, 0f, true));
+        // No factor at all leaves the colour untouched, premultiplied or not.
+        assertEquals(RgbaColor.WHITE, MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, null, true));
+    }
+
+    @Test
+    void aDeclaredAlphaRefIsTheThreshold() {
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "window",
+                  "alphaRef": 0.25,
+                  "Stages": [ { "baseColorMap": "window_d.png", "opacityMap": "window_o.png" } ]
+                }
+                """);
+        assertEquals(0.25f, MaterialRenderPlanner.plan(def).alphaRef());
+    }
+
+    @Test
     void alphaRefStaysCutoutNotBlendedForOpaqueAlpha() {
         // A stray alphaRef on a fully-opaque paint material must classify as
         // CUTOUT (alpha-tested, drawn in the opaque pass) — never TRANSLUCENT.
@@ -796,6 +943,7 @@ class MaterialRenderPlannerTest {
                 """);
         MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
         assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, plan.mode());
+        assertEquals(0.0f, plan.colorFactor().a(), 0.0f);
     }
 
     @Test

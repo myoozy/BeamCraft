@@ -1,23 +1,24 @@
 package me.mzy.beamcraft.client.material;
 
+import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.assets.AssetSource;
+import me.mzy.beamcraft.client.assets.NamespaceScan;
+import me.mzy.beamcraft.client.assets.ResolvedEntry;
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.texture.DecodedImage;
 import me.mzy.beamcraft.texture.DecodedTextureCache;
-import me.mzy.beamcraft.texture.DdsDecoder;
 import me.mzy.beamcraft.texture.TextureCompositor;
+import me.mzy.beamcraft.texture.TextureDecoder;
 import me.mzy.beamcraft.texture.TextureOwnership;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -25,19 +26,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 /**
  * Client-side material library for BeamNG {@code *.materials.json}.
  *
- * <p><b>Discovery scope</b> mirrors {@code DaeMeshLoader} exactly: the
- * {@code common.zip}/{@code common/} pair is scanned for the shared library,
- * then every file under the vehicles root whose name contains the requested
- * vehicle name (case-insensitive) is scanned as a ZIP archive or loose folder.
- * Only entries below {@code vehicles/&lt;namespace&gt;/} are considered for a
- * vehicle; {@code __MACOSX} junk and directories are skipped.
+ * <p><b>Discovery scope</b> is delegated to {@link AssetScanner}: every
+ * configured asset root is scanned for containers (folders and {@code .zip}
+ * archives) that hold entries below {@code vehicles/&lt;namespace&gt;/}; the
+ * shared common library is resolved the same way, with the legacy
+ * {@code common}/{@code common.zip} all-entries fallback. {@code __MACOSX} junk
+ * and directories are skipped, and path conflicts are resolved per the
+ * configured {@link me.mzy.beamcraft.client.assets.ConflictPolicy}.
  *
  * <p><b>Indexing rules</b>: each JSON material is indexed by its {@code mapTo}
  * (falling back to the material name when {@code mapTo} is absent). Lookups are
@@ -53,15 +52,15 @@ import java.util.zip.ZipFile;
  * DAE only knows raw mesh material names (e.g. {@code pickup_lowbeamglass}),
  * which usually have no {@code mapTo} of their own; the alias redirects them to
  * the real lights-off material ({@code pickup_lightglass}). Alias resolution is
- * scoped to the requesting namespace and can never leak across vehicles. This
- * is static only: live emissive switching ({@code on}/{@code on_intense}) and
- * deformation switching ({@code deformMaterialBase}/{@code deformMaterialDamaged})
- * are out of scope — the latter would need a second JBeam field and is the
- * documented gap that keeps the parser from being fully generic.
+ * scoped to the requesting namespace and can never leak across vehicles. Live
+ * emissive switching ({@code on}/{@code on_intense}) remains out of scope.
+ * Deformation switching is selected per flexbody by the renderer using the
+ * physics layer's latched deform-group state; this index remains immutable and
+ * simply resolves the selected base or damaged material name.
  *
  * <p><b>Lifecycle</b>: {@link #requireMaterials} / {@link #releaseMaterials}
  * follow the same reference-counting scheme as
- * {@code DaeMeshLoader.requireVehicleModels}. Concurrent instances of the same
+ * {@code DaeMeshLoader.requireMeshes}. Concurrent instances of the same
  * vehicle share one index; when the last instance is released, the vehicle-only
  * index is reclaimed and the vehicle's texture sources are unregistered from the
  * locator (dropping their lazily built ZIP indexes), so requiring the vehicle
@@ -140,8 +139,28 @@ public final class MaterialLibrary {
      * locator. Safe to call repeatedly for the same vehicle.
      */
     public static void requireMaterials(File vehiclesRootDir, String targetVehicleName) {
-        if (vehiclesRootDir == null || !vehiclesRootDir.isDirectory()) {
+        requireMaterials(List.of(vehiclesRootDir), targetVehicleName);
+    }
+
+    /**
+     * Multi-root variant: scans every configured asset root for the vehicle's
+     * {@code *.materials.json} and {@code *.jbeam} files (plus the shared common
+     * library) via {@link AssetScanner}, and registers the contributing
+     * containers with the texture locator.
+     */
+    public static void requireMaterials(List<File> assetRoots, String targetVehicleName) {
+        if (assetRoots == null) {
             return;
+        }
+        boolean anyDirectory = false;
+        for (File root : assetRoots) {
+            if (root != null && root.isDirectory()) {
+                anyDirectory = true;
+                break;
+            }
+        }
+        if (!anyDirectory) {
+            return; // No usable root; nothing to index.
         }
         String ns = targetVehicleName.toLowerCase(Locale.ROOT);
         int count = REF_COUNTS.getOrDefault(ns, 0);
@@ -153,13 +172,19 @@ public final class MaterialLibrary {
         if (!ns.equals(COMMON_NS)) {
             DECODED_TEXTURES.retainNamespace(ns);
         }
+        long totalStart = LoadTiming.start();
         if (!isCommonLoaded) {
-            scanCommon(vehiclesRootDir);
+            long commonStart = LoadTiming.start();
+            scanCommon(assetRoots);
+            LoadTiming.log("  [materials] common namespace total", commonStart);
             isCommonLoaded = true;
         }
         if (!ns.equals(COMMON_NS)) {
-            scanVehicle(vehiclesRootDir, targetVehicleName);
+            long vehicleStart = LoadTiming.start();
+            scanVehicle(assetRoots, ns);
+            LoadTiming.log("  [materials] " + ns + " namespace total", vehicleStart);
         }
+        LoadTiming.log("  [materials] requireMaterials total (ns=" + ns + ")", totalStart);
     }
 
     /**
@@ -339,8 +364,8 @@ public final class MaterialLibrary {
     // ------------------------------------------------------------------
 
     /**
-     * Decodes a resolved texture to an RGBA8 image via the backend-neutral DDS
-     * decoder and retains it in the decoded-texture cache. The returned image
+     * Decodes a resolved DDS, PNG, or JPEG texture to a backend-neutral RGBA8
+     * image and retains it in the decoded-texture cache. The returned image
      * is pinned; call {@link #releaseDecodedTexture} when done. The image is
      * owned by the cache (or by a later renderer uploader) and must not be
      * mutated.
@@ -359,7 +384,7 @@ public final class MaterialLibrary {
         String ns = namespace == null ? null : namespace.toLowerCase(Locale.ROOT);
         String ownership = TextureOwnership.resolve(resource.sourceId(), COMMON_SOURCE_IDS, ns,
                 ns == null ? null : NAMESPACE_SOURCE_IDS.get(ns));
-        return DECODED_TEXTURES.acquire(resource, ownership, key -> DdsDecoder.decode(LOCATOR.readBytes(key)));
+        return DECODED_TEXTURES.acquire(resource, ownership, key -> TextureDecoder.decode(LOCATOR.readBytes(key)));
     }
 
     /**
@@ -406,6 +431,19 @@ public final class MaterialLibrary {
      */
     public static DecodedImage composeDiffuseAndOpacity(TextureResource diffuse, TextureResource opacity,
                                                         String namespace) throws IOException {
+        return composeDiffuseAndOpacity(diffuse, opacity, namespace, false);
+    }
+
+    /**
+     * As above, optionally premultiplying the rgb by the mask. Required for a material
+     * whose {@code translucentBlendOp} is {@code PreMulAlpha}, whose blend weights the
+     * source rgb by nothing; see
+     * {@link TextureCompositor#composeBaseWithOpacity(DecodedImage, DecodedImage, boolean)}.
+     *
+     * @param premultiplyRgb scale rgb by the mask as well as the alpha
+     */
+    public static DecodedImage composeDiffuseAndOpacity(TextureResource diffuse, TextureResource opacity,
+                                                        String namespace, boolean premultiplyRgb) throws IOException {
         DecodedImage base = acquireDecodedTexture(diffuse, namespace);
         DecodedImage opacityImage;
         try {
@@ -415,10 +453,41 @@ public final class MaterialLibrary {
             throw e;
         }
         try {
-            return TextureCompositor.composeBaseWithOpacity(base, opacityImage);
+            return TextureCompositor.composeBaseWithOpacity(base, opacityImage, premultiplyRgb);
         } finally {
             releaseDecodedTexture(opacity);
             releaseDecodedTexture(diffuse);
+        }
+    }
+
+    /**
+     * Convenience: acquires the opacity texture, composes it over flat white (see
+     * {@link TextureCompositor#composeWhiteWithOpacity}), releases the acquire and
+     * returns the composed image. Used for a material that carries its colour as a
+     * factor and has no base-colour map at all — BeamNG's stock grille materials —
+     * where the mask is the only thing that can drive the cutout.
+     *
+     * @param opacity   single-channel opacity texture handle
+     * @param namespace vehicle namespace for lifecycle ownership
+     * @return the composed RGBA image (caller-owned, not cached)
+     * @throws IOException if the texture cannot be decoded
+     */
+    public static DecodedImage composeWhiteWithOpacity(TextureResource opacity, String namespace) throws IOException {
+        return composeWhiteWithOpacity(opacity, namespace, false);
+    }
+
+    /**
+     * As above, optionally premultiplying the white by the mask — premultiplied white
+     * is the mask itself. See
+     * {@link TextureCompositor#composeWhiteWithOpacity(DecodedImage, boolean)}.
+     */
+    public static DecodedImage composeWhiteWithOpacity(TextureResource opacity, String namespace,
+                                                       boolean premultiplyRgb) throws IOException {
+        DecodedImage opacityImage = acquireDecodedTexture(opacity, namespace);
+        try {
+            return TextureCompositor.composeWhiteWithOpacity(opacityImage, premultiplyRgb);
+        } finally {
+            releaseDecodedTexture(opacity);
         }
     }
 
@@ -436,54 +505,52 @@ public final class MaterialLibrary {
     // Scanning
     // ------------------------------------------------------------------
 
-    private static void scanCommon(File vehiclesRootDir) {
-        File commonZip = new File(vehiclesRootDir, COMMON_NS + ".zip");
-        File commonDir = new File(vehiclesRootDir, COMMON_NS);
-        if (commonZip.exists()) {
-            LOCATOR.registerSource(commonZip);
-            COMMON_SOURCE_IDS.add(canonicalPath(commonZip));
-            scanZipForMaterials(commonZip, COMMON_NS, true);
+    private static void scanCommon(List<File> roots) {
+        NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, COMMON_NS);
+        long indexStart = LoadTiming.start();
+        for (ResolvedEntry entry : scan.entries()) {
+            processScanEntry(entry, COMMON_NS, true);
         }
-        if (commonDir.isDirectory()) {
-            LOCATOR.registerSource(commonDir);
-            COMMON_SOURCE_IDS.add(canonicalPath(commonDir));
-            scanFolderForMaterials(commonDir, COMMON_NS, true);
+        LoadTiming.log("    material entries: " + scan.entries().size(), indexStart);
+
+        // Registering the containers is what makes the texture locator walk them
+        // (and index their zip central directories), so it is timed separately.
+        long sourceStart = LoadTiming.start();
+        for (AssetSource source : scan.sources()) {
+            LOCATOR.registerSource(source.file());
+            COMMON_SOURCE_IDS.add(canonicalPath(source.file()));
         }
+        LoadTiming.log("    texture source registration: " + scan.sources().size(), sourceStart);
     }
 
-    private static void scanVehicle(File vehiclesRootDir, String targetVehicleName) {
-        File[] files = vehiclesRootDir.listFiles();
-        if (files == null) {
-            return;
-        }
-        // Sort so material/alias collision resolution is deterministic: when two
-        // scanned files define the same mapTo or glowMap key, the later file in
-        // this (now sorted) order wins.
-        Arrays.sort(files, Comparator.comparing(File::getName));
+    private static void scanVehicle(List<File> roots, String ns) {
+        // TODO(texture-vs-conflict-strategy): Texture paths are resolved by
+        // TextureResourceLocator's first-registered-source order, independently
+        // of the AssetScanner conflict strategy. This only diverges when two
+        // registered containers share a texture path with different content and
+        // BOTH hold a winning entry (partial vehicle overlap across roots); a
+        // full override is consistent because the shadowed root is never
+        // registered. Fix: expose the per-logical-path winner from AssetScanner
+        // and have the locator prefer that source (needs mtime for "newer").
+        NamespaceScan scan = AssetScanner.INSTANCE.scan(roots, ns);
         List<File> ownedSources = new ArrayList<>();
         Set<String> ownedSourceIds = new HashSet<>();
-        for (File file : files) {
-            String name = file.getName();
-            if (name.equals(COMMON_NS + ".zip") || name.equals(COMMON_NS)) {
-                continue;
-            }
-            if (!name.toLowerCase(Locale.ROOT).contains(targetVehicleName.toLowerCase(Locale.ROOT))) {
-                continue;
-            }
-            if (file.isDirectory()) {
-                LOCATOR.registerSource(file);
-                ownedSources.add(file);
-                ownedSourceIds.add(canonicalPath(file));
-                scanFolderForMaterials(file, targetVehicleName, false);
-            } else if (name.toLowerCase(Locale.ROOT).endsWith(".zip")) {
-                LOCATOR.registerSource(file);
-                ownedSources.add(file);
-                ownedSourceIds.add(canonicalPath(file));
-                scanZipForMaterials(file, targetVehicleName, false);
-            }
+        long indexStart = LoadTiming.start();
+        for (ResolvedEntry entry : scan.entries()) {
+            processScanEntry(entry, ns, false);
         }
-        NAMESPACE_SOURCES.put(targetVehicleName.toLowerCase(Locale.ROOT), ownedSources);
-        NAMESPACE_SOURCE_IDS.put(targetVehicleName.toLowerCase(Locale.ROOT), ownedSourceIds);
+        LoadTiming.log("    material entries: " + scan.entries().size(), indexStart);
+
+        long sourceStart = LoadTiming.start();
+        for (AssetSource source : scan.sources()) {
+            LOCATOR.registerSource(source.file());
+            ownedSources.add(source.file());
+            ownedSourceIds.add(canonicalPath(source.file()));
+        }
+        LoadTiming.log("    texture source registration: " + scan.sources().size(), sourceStart);
+
+        NAMESPACE_SOURCES.put(ns, ownedSources);
+        NAMESPACE_SOURCE_IDS.put(ns, ownedSourceIds);
     }
 
     /** Canonical absolute path, or null when not resolvable. */
@@ -496,67 +563,20 @@ public final class MaterialLibrary {
     }
 
     /**
-     * True when {@code path} (a ZIP entry name or a filesystem path) sits below
-     * a {@code vehicles/<namespace>/} directory. Matching is case-insensitive
-     * and backslashes are treated as path separators, mirroring how the texture
-     * locator resolves logical paths. The {@code vehicles/<namespace>/} segment
-     * requirement is unchanged from a literal match; only the segment boundary
-     * is enforced, so a {@code <something>vehicles/<namespace>/} entry does not
-     * qualify.
+     * Consumes one conflict-resolved entry into the material/alias index. The
+     * caller registers the entry's container with the locator separately, so a
+     * container that contributed only shadowed entries is never registered.
      */
-    private static boolean underVehiclesNamespace(String path, String namespace) {
-        String normalized = path.replace('\\', '/').toLowerCase(Locale.ROOT);
-        String ns = namespace.toLowerCase(Locale.ROOT);
-        return normalized.contains("/vehicles/" + ns + "/")
-                || normalized.startsWith("vehicles/" + ns + "/");
-    }
-
-    private static void scanZipForMaterials(File zipFile, String namespace, boolean isCommon) {
-        try (ZipFile zf = new ZipFile(zipFile)) {
-            List<? extends ZipEntry> entries = Collections.list(zf.entries());
-            entries.sort(Comparator.comparing(ZipEntry::getName));
-            for (ZipEntry entry : entries) {
-                String entryName = entry.getName();
-                if (entry.isDirectory() || entryName.contains("__MACOSX")) {
-                    continue;
-                }
-                boolean isTarget = isCommon || underVehiclesNamespace(entryName, namespace);
-                String lower = entryName.toLowerCase(Locale.ROOT);
-                if (!isTarget || !isIndexedFile(lower)) {
-                    continue;
-                }
-                String source = zipFile.getAbsolutePath() + "!" + entryName;
-                try (InputStream in = zf.getInputStream(entry)) {
-                    processIndexedFile(in, source, lower, namespace, isCommon);
-                } catch (Exception e) {
-                    System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("⚠️ [Materials] Failed to scan ZIP " + zipFile.getName() + ": " + e.getMessage());
+    private static void processScanEntry(ResolvedEntry entry, String namespace, boolean isCommon) {
+        String lower = entry.logicalPath();
+        if (!isIndexedFile(lower)) {
+            return;
         }
-    }
-
-    private static void scanFolderForMaterials(File folder, String namespace, boolean isCommon) {
-        try (Stream<Path> paths = Files.walk(folder.toPath())) {
-            // Sort so material/alias collision resolution is deterministic across
-            // filesystems; see scanVehicle.
-            paths.sorted().filter(Files::isRegularFile).forEach(path -> {
-                String filePath = path.toString().replace('\\', '/');
-                boolean isTarget = isCommon || underVehiclesNamespace(filePath, namespace);
-                String lower = filePath.toLowerCase(Locale.ROOT);
-                if (!isTarget || !isIndexedFile(lower)) {
-                    return;
-                }
-                String source = path.toAbsolutePath().toString();
-                try (InputStream in = Files.newInputStream(path)) {
-                    processIndexedFile(in, source, lower, namespace, isCommon);
-                } catch (Exception e) {
-                    System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
-                }
-            });
+        String source = entry.sourceAddress();
+        try (InputStream in = entry.open()) {
+            processIndexedFile(in, source, lower, namespace, isCommon);
         } catch (Exception e) {
-            System.err.println("⚠️ [Materials] Failed to walk folder " + folder.getName() + ": " + e.getMessage());
+            System.err.println("⚠️ [Materials] Failed to read " + source + ": " + e.getMessage());
         }
     }
 

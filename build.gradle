@@ -89,6 +89,26 @@ jar {
 	from("LICENSE") {
 		rename { "${it}_${project.name}"}
 	}
+	from("THIRD_PARTY_NOTICES.md") {
+		rename { "THIRD_PARTY_NOTICES_${project.name}.md" }
+	}
+	from("LICENSES/bCDDL-1.1.txt") {
+		rename { "LICENSE_bCDDL-1.1.txt" }
+	}
+	from("SOURCE_PROVENANCE.md")
+}
+
+tasks.named("sourcesJar", Jar) {
+	from("LICENSE") {
+		rename { "${it}_${project.name}"}
+	}
+	from("THIRD_PARTY_NOTICES.md") {
+		rename { "THIRD_PARTY_NOTICES_${project.name}.md" }
+	}
+	from("LICENSES/bCDDL-1.1.txt") {
+		rename { "LICENSE_bCDDL-1.1.txt" }
+	}
+	from("SOURCE_PROVENANCE.md")
 }
 
 // configure the maven publication

@@ -5,6 +5,21 @@ import java.util.List;
 public final class PhysicsSpecs {
     private PhysicsSpecs() {}
 
+    /** Common command-mapping properties shared by linear and torsional hydros. */
+    public interface HydroActuatorSpec {
+        String inputSource();
+        float inLimit();
+        float outLimit();
+        float inputFactor();
+        float inputCenter();
+        float inputInLimit();
+        float inputOutLimit();
+        float inRate();
+        float outRate();
+        float autoCenterRate();
+        Float steeringWheelLock();
+    }
+
     public record NodeSpec(
             String name,
             float x,
@@ -24,34 +39,95 @@ public final class PhysicsSpecs {
             String name1,
             String name2,
             String name3,
+            List<String> deformGroups,
+            float deformationTriggerRatio,
             List<String> breakGroups,
             int breakGroupType,
+            boolean disableTriangleBreaking,
             float spring,
             float damp,
+            float dampCutoffHz,
             float deform,
             float strength,
             float precomp,
             float precompRange,
+            /** True when {@code precompressionRange} was authored; zero/negative are valid values. */
+            boolean precompRangeDefined,
             float precompTime,
             float shortBound,
             float longBound,
             float shortBoundRange,
             float longBoundRange,
+            float boundZone,
             float limitSpring,
             float limitDamp,
+            float limitDampRebound,
             float dampVelSplit,
+            /** Rebound (lengthening) split override; negative means "use dampVelSplit". */
+            float dampVelSplitRebound,
             float dampFast,
             float dampRebound,
             float dampReboundFast,
             float springExpansion,
             float dampExpansion,
-            float transitionZone
+            float transitionZone,
+            float deformLimitStress,
+            /**
+             * Optional BeamNG beam {@code name}. Actuators (for example the adaptive
+             * damper controller) address beams by this name; {@code null} when the
+             * beam is unnamed.
+             */
+            String name
     ) {}
+
+    /** A two-node coupler constraint; unlike a beam it has no elastic/plastic stiffness. */
+    public record CouplerSpec(
+            String name1,
+            String name2,
+            float strength,
+            float captureRadius,
+            float lockRadius,
+            float latchSpeed,
+            String breakGroup
+    ) {}
+
+    /** A normal beam plus the BeamNG hydro actuator properties attached to it. */
+    public record HydroSpec(
+            BeamSpec beam,
+            String inputSource,
+            float inLimit,
+            float outLimit,
+            float inputFactor,
+            float inputCenter,
+            float inputInLimit,
+            float inputOutLimit,
+            float inRate,
+            float outRate,
+            float autoCenterRate,
+            Float steeringWheelLock
+    ) implements HydroActuatorSpec {}
+
+    /** A torsion bar whose target angle is driven by an electric input. */
+    public record TorsionHydroSpec(
+            TorsionBarSpec torsionBar,
+            String inputSource,
+            float inLimit,
+            float outLimit,
+            float inputFactor,
+            float inputCenter,
+            float inputInLimit,
+            float inputOutLimit,
+            float inRate,
+            float outRate,
+            float autoCenterRate,
+            Float steeringWheelLock
+    ) implements HydroActuatorSpec {}
 
     public record TriangleSpec(
             String name1,
             String name2,
             String name3,
+            List<String> breakGroups,
             int partId,
             boolean collision
     ) {}
@@ -63,8 +139,12 @@ public final class PhysicsSpecs {
             String name4,
             float spring,
             float damp,
+            float spring2,
+            float damp2,
             float deform,
-            float strength
+            float strength,
+            float precompressionAngle,
+            float precompressionTime
     ) {}
 
     public record SlideNodeSpec(

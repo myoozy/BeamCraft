@@ -1,6 +1,12 @@
 package me.mzy.beamcraft.client.physics;
 
+import me.mzy.beamcraft.client.input.DriverInputFilter;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
+import me.mzy.beamcraft.client.physics.electrics.ElectricBus;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSignals;
+import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSystem;
+import me.mzy.beamcraft.utility.Utility;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.shape.VoxelShape;
@@ -8,27 +14,44 @@ import net.minecraft.world.World;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SoftBodyVehicle {
     public static final float KINDA_SMALL_NUMBER = PhysicsWorld.KINDA_SMALL_NUMBER;
     public static final int MAX_AABB_SIZE = PhysicsWorld.MAX_AABB_SIZE;
-
+    /** Numerical safety ceiling; Minecraft blocks and physics distances are treated as metres. */
+    public static final float MAX_NODE_SPEED = 343.0f;
+    final int brakeInputSignalId;
+    final int parkingBrakeInputSignalId;
     public final PhysicsVehicleEntity parentEntity;
-    public final float[] localCOM = new float[3];
+    public final float[] localOriginShift = new float[3];
     public int vehicleId = -1;
     public int globalNodeOffset = 0;
 
     public final NodeContainer nodes = new NodeContainer();
+    public final ElectricBus electrics = new ElectricBus();
     public final BeamContainer normalBeams = new BeamContainer();
-    public final BeamContainer supportBeams = new BeamContainer();
+    public final CouplerContainer couplers = new CouplerContainer();
+    public final HydroContainer hydros = new HydroContainer();
+    /** Support beams do not honour dampCutoffHz, matching the documented BeamNG beam types. */
+    public final BeamContainer supportBeams = new BeamContainer(false);
     public final BoundedBeamContainer boundedBeams = new BoundedBeamContainer();
     public final LBeamContainer lBeams = new LBeamContainer();
     public final AnisotropicBeamContainer anisotropicBeams = new AnisotropicBeamContainer();
     public final TriangleContainer triangles = new TriangleContainer();
     public final TorsionBarContainer torsionbars = new TorsionBarContainer();
+    public final TorsionHydroContainer torsionHydros = new TorsionHydroContainer();
     public final SlideNodeContainer slidenodes = new SlideNodeContainer();
     public final WheelContainer wheels = new WheelContainer(this);
+    public final PowertrainSystem powertrain = new PowertrainSystem(this);
+    /** Standalone BeamNG adaptive damper actuator backend; no drive-mode/electrics dependency. */
+    public final AdaptiveDamperActuators adaptiveDampers = new AdaptiveDamperActuators(this);
+    public final DriverInputFilter driverInputs = new DriverInputFilter(electrics);
+    private final VehicleInternalForceSolver internalForceSolver = new VehicleInternalForceSolver(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
+    public final VehicleCameraData cameras = new VehicleCameraData();
+    public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -39,10 +62,14 @@ public class SoftBodyVehicle {
     public boolean[] nodeInPartMatrix;
     public int matrixPartStride;
 
+    /** Adaptive damper controllers parsed during assembly; registered by {@link #finalizePhysicsSetup()}. */
+    private List<AdaptiveDamperSpec> adaptiveDamperSpecs = List.of();
+
     public java.util.Map<String, List<BeamPointer>> breakGroupMap = new java.util.HashMap<>();
     private final java.util.Set<String> triggeredBreakGroups = new java.util.HashSet<>();
+    private final Set<String> triggeredDeformGroups = ConcurrentHashMap.newKeySet();
 
-    private final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
+    final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
     double entityX = 0.0;
     double entityY = 0.0;
@@ -50,7 +77,10 @@ public class SoftBodyVehicle {
 
     public SoftBodyVehicle(PhysicsVehicleEntity parentEntity) {
         this.parentEntity = parentEntity;
-        this.flexbodies.vehicleNamespace = parentEntity.getRootPartName();
+        electrics.register(ElectricSignals.STEERING_INPUT);
+        brakeInputSignalId = electrics.register(ElectricSignals.BRAKE_INPUT);
+        parkingBrakeInputSignalId = electrics.register(ElectricSignals.PARKING_BRAKE_INPUT);
+        this.flexbodies.vehicleNamespace = parentEntity != null ? parentEntity.getRootPartName() : "test";
         cacheEntityLocation();
     }
 
@@ -64,21 +94,133 @@ public class SoftBodyVehicle {
     /*
     Must call updateEntityLocation after
      */
-    public void updateLocalCOMCache() {
-        nodes.getCenterOfMass(localCOM);
-        nodes.moveNodes(-localCOM[0], -localCOM[1], -localCOM[2]);
+    public void updateLocalOriginCache() {
+        nodes.getMedianPosition(localOriginShift);
+        nodes.moveNodes(-localOriginShift[0], -localOriginShift[1], -localOriginShift[2]);
     }
 
     /*
-    Must call updateLocalCOMCache before
+    Must call updateLocalOriginCache before
      */
     public void updateEntityLocation() {
         this.parentEntity.setVelocity(0, 0, 0);
 
-        double newEntityX = entityX + localCOM[0];
-        double newEntityY = entityY + localCOM[1];
-        double newEntityZ = entityZ + localCOM[2];
+        double newEntityX = entityX + localOriginShift[0];
+        double newEntityY = entityY + localOriginShift[1];
+        double newEntityZ = entityZ + localOriginShift[2];
         this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
+    }
+
+    /**
+     * Body pitch and roll in degrees, measured from the vehicle's authored
+     * {@code refNodes} triple the same way BeamNG builds its body frame: the
+     * longitudinal axis runs {@code ref -> back} and the lateral one {@code ref -> left}
+     * ({@code lua/ge/extensions/core/cameraModes/autopoint.lua}).
+     *
+     * <p>Pitch is the angle of the longitudinal axis above horizontal, positive
+     * nose-up; roll is the angle of the lateral axis, positive when the left side is
+     * up. Both are read straight off the anchors' world positions, so they are
+     * directly comparable with BeamNG's pitch/roll readout — which is the point: it
+     * turns "looks like it squats more" into a number.
+     *
+     * @param out receives {@code {pitch, roll}}; must hold at least two elements
+     * @return false when the vehicle has no usable ref nodes, leaving {@code out} alone
+     */
+    public boolean bodyAttitudeDeg(float[] out) {
+        VehicleCameraData.RefNodes refs = cameras.refNodes();
+        if (refs == null) return false;
+        int r = refs.ref(), b = refs.back(), l = refs.left();
+        if (r < 0 || b < 0 || l < 0 || r >= nodes.count || b >= nodes.count || l >= nodes.count) {
+            return false;
+        }
+
+        double fx = nodes.posX[r] - nodes.posX[b];
+        double fy = nodes.posY[r] - nodes.posY[b];
+        double fz = nodes.posZ[r] - nodes.posZ[b];
+        double forwardLength = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (forwardLength < 1.0e-9) return false;
+
+        double lx = nodes.posX[l] - nodes.posX[r];
+        double ly = nodes.posY[l] - nodes.posY[r];
+        double lz = nodes.posZ[l] - nodes.posZ[r];
+        double leftLength = Math.sqrt(lx * lx + ly * ly + lz * lz);
+        if (leftLength < 1.0e-9) return false;
+
+        // Minecraft's world up is +Y, so the sine of each axis' elevation above
+        // horizontal is just its normalised Y component.
+        out[0] = (float) Math.toDegrees(Math.asin(Math.clamp(fy / forwardLength, -1.0, 1.0)));
+        out[1] = (float) Math.toDegrees(Math.asin(Math.clamp(ly / leftLength, -1.0, 1.0)));
+        return true;
+    }
+
+    /**
+     * Longitudinal acceleration in g, positive accelerating forward, projected onto the
+     * body's forward axis ({@code back -> ref} of the same refNodes triple the attitude
+     * uses). Sampled once per physics step by {@link #sampleMotion}.
+     *
+     * <p>It has to be a centre-of-mass velocity difference, not a force sum: the contact
+     * phase applies its impulses straight to the node velocities, so those forces never
+     * appear in {@code nodes.force*} and a force-based readout misses the traction
+     * entirely (it read 0.02 g under full throttle).
+     *
+     * <p>Pairs with {@link #bodyAttitudeDeg}: if a pitch difference comes with an equal
+     * acceleration difference then the longitudinal force is what differs and the torque
+     * reaction is innocent; if only the pitch moves, the reaction is confirmed.
+     */
+    public float longitudinalAccelG;
+
+    private final float[] previousComVelocity = new float[3];
+    private boolean hasPreviousComVelocity;
+
+    /** Samples the centre-of-mass acceleration for the HUD; once per physics step. */
+    public void sampleMotion(double dt) {
+        if (dt <= 0.0 || nodes.count == 0) return;
+
+        double totalMass = 0.0;
+        double vx = 0.0, vy = 0.0, vz = 0.0;
+        for (int i = 0; i < nodes.count; i++) {
+            double mass = nodes.mass[i];
+            totalMass += mass;
+            vx += nodes.velX[i] * mass;
+            vy += nodes.velY[i] * mass;
+            vz += nodes.velZ[i] * mass;
+        }
+        if (totalMass < 1.0e-9) return;
+        vx /= totalMass; vy /= totalMass; vz /= totalMass;
+
+        if (!hasPreviousComVelocity) {
+            previousComVelocity[0] = (float) vx;
+            previousComVelocity[1] = (float) vy;
+            previousComVelocity[2] = (float) vz;
+            hasPreviousComVelocity = true;
+            return;
+        }
+
+        double ax = (vx - previousComVelocity[0]) / dt;
+        double ay = (vy - previousComVelocity[1]) / dt;
+        double az = (vz - previousComVelocity[2]) / dt;
+        previousComVelocity[0] = (float) vx;
+        previousComVelocity[1] = (float) vy;
+        previousComVelocity[2] = (float) vz;
+
+        VehicleCameraData.RefNodes refs = cameras.refNodes();
+        if (refs == null) return;
+        int r = refs.ref(), b = refs.back();
+        if (r < 0 || b < 0 || r >= nodes.count || b >= nodes.count) return;
+        double fx = nodes.posX[r] - nodes.posX[b];
+        double fy = nodes.posY[r] - nodes.posY[b];
+        double fz = nodes.posZ[r] - nodes.posZ[b];
+        double length = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (length < 1.0e-9) return;
+        fx /= length; fy /= length; fz /= length;
+
+        longitudinalAccelG = (float) ((ax * fx + ay * fy + az * fz) / 9.80665);
+    }
+
+    /** Clears the motion sampler so a reset does not report a spike across the gap. */
+    public void resetMotionSample() {
+        hasPreviousComVelocity = false;
+        longitudinalAccelG = 0.0f;
     }
 
     public void updateBeamPrecompression(double dt) {
@@ -126,6 +268,26 @@ public class SoftBodyVehicle {
      * Create physical beam constraint between two existing nodes
      */
     public void addBeam(PhysicsSpecs.BeamSpec spec) {
+        addBeamInternal(spec);
+    }
+
+    /** Adds a non-elastic, two-node coupler without changing the beam topology. */
+    public boolean addCoupler(PhysicsSpecs.CouplerSpec spec) {
+        Integer n1 = nodes.nameToIndex.get(spec.name1());
+        Integer n2 = nodes.nameToIndex.get(spec.name2());
+        if (n1 == null || n2 == null || n1.equals(n2)) return false;
+        couplers.add(spec, n1, n2);
+        return true;
+    }
+
+    public void addHydro(PhysicsSpecs.HydroSpec spec) {
+        BeamPointer beam = addBeamInternal(spec.beam());
+        if (beam != null) {
+            hydros.addHydro(spec, beam.index, normalBeams, electrics);
+        }
+    }
+
+    private BeamPointer addBeamInternal(PhysicsSpecs.BeamSpec spec) {
         String name1 = spec.name1();
         String name2 = spec.name2();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
@@ -188,7 +350,9 @@ public class SoftBodyVehicle {
                             .add(new BeamPointer(container, beamIdx));
                 }
             }
+            return new BeamPointer(container, beamIdx);
         }
+        return null;
     }
 
     /**
@@ -211,6 +375,17 @@ public class SoftBodyVehicle {
      * Spawn torsion bar joint with four control nodes and physical properties
      */
     public void addTorsionBar(PhysicsSpecs.TorsionBarSpec spec) {
+        addTorsionBarInternal(spec);
+    }
+
+    public void addTorsionHydro(PhysicsSpecs.TorsionHydroSpec spec) {
+        int torsionBarIndex = addTorsionBarInternal(spec.torsionBar());
+        if (torsionBarIndex >= 0) {
+            torsionHydros.addTorsionHydro(spec, torsionBarIndex, torsionbars, electrics);
+        }
+    }
+
+    private int addTorsionBarInternal(PhysicsSpecs.TorsionBarSpec spec) {
         String name1 = spec.name1();
         String name2 = spec.name2();
         String name3 = spec.name3();
@@ -225,8 +400,9 @@ public class SoftBodyVehicle {
             int n3 = nodes.nameToIndex.get(name3);
             int n4 = nodes.nameToIndex.get(name4);
 
-            torsionbars.addTorsionBar(spec, n1, n2, n3, n4, nodes);
+            return torsionbars.addTorsionBar(spec, n1, n2, n3, n4, nodes);
         }
+        return -1;
     }
 
     /**
@@ -285,155 +461,320 @@ public class SoftBodyVehicle {
         }
     }
 
+    /**
+     * Hands the parsed adaptive damper controllers to the vehicle. They are
+     * registered in {@link #finalizePhysicsSetup()}, once every named beam exists.
+     */
+    public void setAdaptiveDamperSpecs(List<AdaptiveDamperSpec> specs) {
+        this.adaptiveDamperSpecs = specs == null ? List.of() : List.copyOf(specs);
+    }
+
     public void finalizePhysicsSetup() {
-
-
-        // ==========================================
-        // ==========================================
+        powertrain.finalizeSetup();
         flexbodies.compileGroupsCSR(nodes);
+        triangles.buildBreakIndices();
 
-        // ==========================================
-        // ==========================================
+        // Actuators address beams by their authored name, so the lookup must be
+        // built only once every beam of every selected part exists.
+        boundedBeams.rebuildNameIndex();
+        adaptiveDampers.registerAll(adaptiveDamperSpecs);
 
         matrixPartStride = maxTrackedPartId + 1;
         nodeInPartMatrix = new boolean[nodes.count * matrixPartStride];
-
         for (int i = 0; i < nodes.count; i++) {
             int originalPart = nodes.partId[i];
             if (originalPart >= 0 && originalPart < matrixPartStride) {
                 nodeInPartMatrix[i * matrixPartStride + originalPart] = true;
             }
         }
-
         for (int i = 0; i < triangles.count; i++) {
-            int tPart = triangles.partId[i];
-            if (tPart >= 0 && tPart < matrixPartStride) {
-                nodeInPartMatrix[triangles.node1[i] * matrixPartStride + tPart] = true;
-                nodeInPartMatrix[triangles.node2[i] * matrixPartStride + tPart] = true;
-                nodeInPartMatrix[triangles.node3[i] * matrixPartStride + tPart] = true;
+            int part = triangles.partId[i];
+            if (part >= 0 && part < matrixPartStride) {
+                nodeInPartMatrix[triangles.node1[i] * matrixPartStride + part] = true;
+                nodeInPartMatrix[triangles.node2[i] * matrixPartStride + part] = true;
+                nodeInPartMatrix[triangles.node3[i] * matrixPartStride + part] = true;
             }
         }
 
-        // ==========================================
-        // ==========================================
+        limitConstraintStiffnessAndDamping(PhysicsWorld.invPhysicsDT, 0.90f);
 
-        float invDt = PhysicsWorld.invPhysicsDT;
-        float safeFractionSpring = 0.95f;
-        float safeFractionDamp = 0.95f;
-        float avgCosSq = 1.0f;
+        // Every channel is now bounded by the cutoff-aware stability ceiling, so the
+        // neutral mode (when authored) can be applied without exceeding the budget.
+        adaptiveDampers.applyDefaultModes();
+    }
 
-        // ==========================================
-        // ==========================================
-        for (int i = 0; i < normalBeams.count; i++) {
-            int n1 = normalBeams.node1[i];
-            int n2 = normalBeams.node2[i];
+    /**
+     * A limiter with every constraint family registered, plus the constraint id each
+     * beam index maps to. {@link #limitConstraintStiffnessAndDamping} solves it and
+     * writes the result back; the budget diagnostic solves it and throws it away.
+     */
+    private record StabilityRegistration(
+            DirectionalStabilityLimiter limiter,
+            int[] normalIds, int[] supportIds, int[] boundedIds,
+            int[] lBeamIds, float[] lBeamDampingCeilings, int[] anisotropicIds) {
+    }
 
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
+    private StabilityRegistration registerStabilityConstraints(float invDt, float safetyFraction) {
+        DirectionalStabilityLimiter limiter =
+                new DirectionalStabilityLimiter(nodes.count, nodes.mass, invDt, safetyFraction);
+        float dt = 1.0f / invDt;
 
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
+        int[] normalIds = addAxialConstraints(limiter, normalBeams, normalBeams.spring, normalBeams.damp, invDt);
+        int[] supportIds = addAxialConstraints(limiter, supportBeams, supportBeams.spring, supportBeams.damp, invDt);
 
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            normalBeams.spring[i] = Math.min(normalBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            normalBeams.damp[i] = Math.min(normalBeams.damp[i], maxSafeDamp);
-        }
-
-        // ==========================================
-        // ==========================================
-        for (int i = 0; i < supportBeams.count; i++) {
-            int n1 = supportBeams.node1[i];
-            int n2 = supportBeams.node2[i];
-
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            supportBeams.spring[i] = Math.min(supportBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            supportBeams.damp[i] = Math.min(supportBeams.damp[i], maxSafeDamp);
-        }
-
-        // ==========================================
-        // ==========================================
+        int[] boundedIds = new int[boundedBeams.count];
         for (int i = 0; i < boundedBeams.count; i++) {
-            int n1 = boundedBeams.node1[i];
-            int n2 = boundedBeams.node2[i];
-
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            boundedBeams.spring[i] = Math.min(boundedBeams.spring[i], maxSafeSpring);
-            boundedBeams.limitSpring[i] = Math.min(boundedBeams.limitSpring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            boundedBeams.damp[i] = Math.min(boundedBeams.damp[i], maxSafeDamp);
-            boundedBeams.limitDamp[i] = Math.min(boundedBeams.limitDamp[i], maxSafeDamp);
-            boundedBeams.dampFast[i] = Math.min(boundedBeams.dampFast[i], maxSafeDamp);
-            boundedBeams.dampRebound[i] = Math.min(boundedBeams.dampRebound[i], maxSafeDamp);
-            boundedBeams.dampReboundFast[i] = Math.min(boundedBeams.dampReboundFast[i], maxSafeDamp);
+            // A bounded beam transitions from its ordinary coefficient to its
+            // limit coefficient; the two springs are not active in parallel.
+            float stiffness = Math.max(Utility.positive(boundedBeams.spring[i]),
+                    Utility.positive(boundedBeams.limitSpring[i]));
+            float damping = Utility.maxPositive(
+                    boundedBeams.damp[i], boundedBeams.limitDamp[i],
+                    boundedBeams.limitDampRebound[i], boundedBeams.dampFast[i],
+                    boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
+            boundedIds[i] = addAxialConstraint(limiter, boundedBeams, i, stiffness,
+                    stabilityDamping(boundedBeams, i, damping, invDt, dt));
         }
 
-        // ==========================================
-        // ==========================================
+        int[] lBeamIds = new int[lBeams.count];
+        float[] lBeamDampingCeilings = new float[lBeams.count];
         for (int i = 0; i < lBeams.count; i++) {
-            int n1 = lBeams.node1[i];
-            int n2 = lBeams.node2[i];
-            int n3 = lBeams.node3[i];
-
-            float m1 = nodes.mass[n1];
-            float m2 = nodes.mass[n2];
-            float m3 = nodes.mass[n3];
-
-            float wTotal = (1.0f / m1) + (1.0f / m2) + (2.0f / m3);
-            float genMass = 1.0f / wTotal;
-
-            float maxSafeSpring = 4.0f * genMass * invDt * invDt * safeFractionSpring;
-            lBeams.spring[i] = Math.min(lBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = genMass * invDt * safeFractionDamp;
-            lBeams.damp[i] = Math.min(lBeams.damp[i], maxSafeDamp);
+            lBeamIds[i] = addLBeamConstraint(limiter, i, invDt, dt, lBeamDampingCeilings);
         }
 
-        // ==========================================================
-        // ==========================================================
+        int[] anisotropicIds = new int[anisotropicBeams.count];
         for (int i = 0; i < anisotropicBeams.count; i++) {
-            int n1 = anisotropicBeams.node1[i];
-            int n2 = anisotropicBeams.node2[i];
-
-            float effM1 = nodes.mass[n1] / Math.max(1.0f, nodes.degree[n1] * avgCosSq);
-            float effM2 = nodes.mass[n2] / Math.max(1.0f, nodes.degree[n2] * avgCosSq);
-            float effReducedMass = (effM1 * effM2) / (effM1 + effM2);
-
-            float realM1 = nodes.mass[n1];
-            float realM2 = nodes.mass[n2];
-            float unscaledReducedMass = (realM1 * realM2) / (realM1 + realM2);
-
-            float maxSafeSpring = 4.0f * effReducedMass * invDt * invDt * safeFractionSpring;
-            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], maxSafeSpring);
-
-            float maxSafeDamp = unscaledReducedMass * invDt * safeFractionDamp;
-            anisotropicBeams.damp[i] = Math.min(anisotropicBeams.damp[i], maxSafeDamp);
-
-            anisotropicBeams.springExpansion[i] = Math.min(anisotropicBeams.springExpansion[i], maxSafeSpring);
-            anisotropicBeams.dampExpansion[i]   = Math.min(anisotropicBeams.dampExpansion[i],   maxSafeDamp);
+            float stiffness = Math.max(Utility.positive(anisotropicBeams.spring[i]),
+                    Utility.positive(anisotropicBeams.springExpansion[i]));
+            float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
+                    Utility.positive(anisotropicBeams.dampExpansion[i]));
+            anisotropicIds[i] = addAxialConstraint(limiter, anisotropicBeams, i, stiffness,
+                    stabilityDamping(anisotropicBeams, i, damping, invDt, dt));
         }
+
+        return new StabilityRegistration(limiter, normalIds, supportIds, boundedIds,
+                lBeamIds, lBeamDampingCeilings, anisotropicIds);
+    }
+
+    /**
+     * Diagnostic only: re-registers and re-solves the stability limiter, then
+     * reports how the budget at {@code node} is distributed across its constraints.
+     * Writes nothing back to any container, so it is safe to call after assembly.
+     *
+     * @param familyOffset constraint id of the first bounded beam, which the caller
+     *                     derives from the container counts; see
+     *                     {@link #boundedConstraintOffset()}.
+     */
+    List<DirectionalStabilityLimiter.NodePressure> debugBudgetPressureAt(
+            int node, float invDt, float safetyFraction) {
+        StabilityRegistration registration = registerStabilityConstraints(invDt, safetyFraction);
+        registration.limiter().solve();
+        return registration.limiter().pressure(node);
+    }
+
+    /**
+     * Constraint id of the first bounded beam under the registration order used by
+     * {@link #registerStabilityConstraints}; lets a diagnostic label the ids it gets
+     * back from {@link #debugBudgetPressureAt}.
+     */
+    int boundedConstraintOffset() {
+        return normalBeams.count + supportBeams.count;
+    }
+
+    private void limitConstraintStiffnessAndDamping(float invDt, float safetyFraction) {
+        StabilityRegistration registration = registerStabilityConstraints(invDt, safetyFraction);
+        DirectionalStabilityLimiter limiter = registration.limiter();
+        float dt = 1.0f / invDt;
+        int[] boundedIds = registration.boundedIds();
+
+        limiter.solve();
+
+        allocateAxialBeams(normalBeams, registration.normalIds(), limiter, invDt, dt);
+        allocateAxialBeams(supportBeams, registration.supportIds(), limiter, invDt, dt);
+        for (int i = 0; i < boundedBeams.count; i++) {
+            float dampingCeiling = axialDampingCeiling(boundedBeams, i, invDt, dt);
+            float stiffness = Math.max(Utility.positive(boundedBeams.spring[i]),
+                    Utility.positive(boundedBeams.limitSpring[i]));
+            float damping = Utility.maxPositive(
+                    boundedBeams.damp[i], boundedBeams.limitDamp[i],
+                    boundedBeams.limitDampRebound[i], boundedBeams.dampFast[i],
+                    boundedBeams.dampRebound[i], boundedBeams.dampReboundFast[i]);
+            // The ceiling is the budget this constraint may reach, not the value it was
+            // clamped to, so an actuator can raise a coefficient above the authored
+            // magnitude (a "hard" damper mode) up to, but never past, this bound.
+            boundedBeams.dampStabilityCeiling[i] =
+                    limiter.maxDampingCeiling(boundedIds[i], dampingCeiling);
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    boundedIds[i], stiffness, damping, dampingCeiling);
+            boundedBeams.spring[i] = Math.min(boundedBeams.spring[i], ceilings.maxStiffness());
+            boundedBeams.limitSpring[i] = Math.min(
+                    boundedBeams.limitSpring[i], ceilings.maxStiffness());
+            boundedBeams.damp[i] = Math.min(boundedBeams.damp[i], ceilings.maxDamping());
+            boundedBeams.limitDamp[i] = Math.min(boundedBeams.limitDamp[i], ceilings.maxDamping());
+            boundedBeams.limitDampRebound[i] = Math.min(
+                    boundedBeams.limitDampRebound[i], ceilings.maxDamping());
+            boundedBeams.dampFast[i] = Math.min(boundedBeams.dampFast[i], ceilings.maxDamping());
+            boundedBeams.dampRebound[i] = Math.min(boundedBeams.dampRebound[i], ceilings.maxDamping());
+            boundedBeams.dampReboundFast[i] = Math.min(
+                    boundedBeams.dampReboundFast[i], ceilings.maxDamping());
+        }
+        for (int i = 0; i < lBeams.count; i++) {
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    registration.lBeamIds()[i], lBeams.spring[i], lBeams.damp[i],
+                    registration.lBeamDampingCeilings()[i]);
+            lBeams.spring[i] = Math.min(lBeams.spring[i], ceilings.maxStiffness());
+            lBeams.damp[i] = Math.min(lBeams.damp[i], ceilings.maxDamping());
+        }
+        for (int i = 0; i < anisotropicBeams.count; i++) {
+            float dampingCeiling = axialDampingCeiling(anisotropicBeams, i, invDt, dt);
+            float stiffness = Math.max(Utility.positive(anisotropicBeams.spring[i]),
+                    Utility.positive(anisotropicBeams.springExpansion[i]));
+            float damping = Math.max(Utility.positive(anisotropicBeams.damp[i]),
+                    Utility.positive(anisotropicBeams.dampExpansion[i]));
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    registration.anisotropicIds()[i], stiffness, damping, dampingCeiling);
+            anisotropicBeams.spring[i] = Math.min(anisotropicBeams.spring[i], ceilings.maxStiffness());
+            anisotropicBeams.springExpansion[i] = Math.min(
+                    anisotropicBeams.springExpansion[i], ceilings.maxStiffness());
+            anisotropicBeams.damp[i] = Math.min(anisotropicBeams.damp[i], ceilings.maxDamping());
+            anisotropicBeams.dampExpansion[i] = Math.min(
+                    anisotropicBeams.dampExpansion[i], ceilings.maxDamping());
+        }
+    }
+
+    /**
+     * Registers the damping the linear stability budget must see. A beam with an
+     * authored {@code dampCutoffHz} only lets the attenuated high-frequency share
+     * of its damping reach the fastest mode, so {@code damp * hfGain} is what can
+     * actually destabilise the step; the safety budget itself is unchanged.
+     */
+    private float stabilityDamping(BeamContainer beams, int i, float damping, float invDt, float dt) {
+        return Math.min(damping * beams.cutoffHighFrequencyGain(i, dt),
+                dampingBudget(beams, i, invDt));
+    }
+
+    private int[] addAxialConstraints(DirectionalStabilityLimiter limiter, BeamContainer beams,
+                                      float[] stiffness, float[] damping, float invDt) {
+        float dt = 1.0f / invDt;
+        int[] ids = new int[beams.count];
+        for (int i = 0; i < beams.count; i++) {
+            ids[i] = addAxialConstraint(limiter, beams, i, stiffness[i],
+                    stabilityDamping(beams, i, damping[i], invDt, dt));
+        }
+        return ids;
+    }
+
+    private int addAxialConstraint(DirectionalStabilityLimiter limiter, BeamContainer beams, int i,
+                                   float stiffness, float damping) {
+        int n1 = beams.node1[i];
+        int n2 = beams.node2[i];
+        double dx = nodes.posX[n2] - nodes.posX[n1];
+        double dy = nodes.posY[n2] - nodes.posY[n1];
+        double dz = nodes.posZ[n2] - nodes.posZ[n1];
+        double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (length < KINDA_SMALL_NUMBER) {
+            return limiter.addIsotropicTwoNode(n1, n2, stiffness, damping);
+        }
+        return limiter.addTwoNode(n1, n2, dx / length, dy / length, dz / length, stiffness, damping);
+    }
+
+    private int addLBeamConstraint(DirectionalStabilityLimiter limiter, int i, float invDt, float dt,
+                                   float[] dampingCeilings) {
+        int n1 = lBeams.node1[i];
+        int n2 = lBeams.node2[i];
+        int n3 = lBeams.node3[i];
+
+        double dx13 = nodes.posX[n1] - nodes.posX[n3];
+        double dy13 = nodes.posY[n1] - nodes.posY[n3];
+        double dz13 = nodes.posZ[n1] - nodes.posZ[n3];
+        double dx23 = nodes.posX[n2] - nodes.posX[n3];
+        double dy23 = nodes.posY[n2] - nodes.posY[n3];
+        double dz23 = nodes.posZ[n2] - nodes.posZ[n3];
+        double dx12 = nodes.posX[n2] - nodes.posX[n1];
+        double dy12 = nodes.posY[n2] - nodes.posY[n1];
+        double dz12 = nodes.posZ[n2] - nodes.posZ[n1];
+
+        double l1 = Math.sqrt(dx13 * dx13 + dy13 * dy13 + dz13 * dz13);
+        double l2 = Math.sqrt(dx23 * dx23 + dy23 * dy23 + dz23 * dz23);
+        double dist = Math.sqrt(dx12 * dx12 + dy12 * dy12 + dz12 * dz12);
+        double targetDistSq = l1 * l1 + l2 * l2 - 2.0 * l1 * l2 * lBeams.restCosTheta[i];
+        if (l1 < KINDA_SMALL_NUMBER || l2 < KINDA_SMALL_NUMBER || dist < KINDA_SMALL_NUMBER
+                || targetDistSq < KINDA_SMALL_NUMBER
+                || nodes.mass[n1] <= KINDA_SMALL_NUMBER
+                || nodes.mass[n2] <= KINDA_SMALL_NUMBER
+                || nodes.mass[n3] <= KINDA_SMALL_NUMBER) {
+            dampingCeilings[i] = 0.0f;
+            return limiter.addThreeNode(n1, 0, 0, 0, n2, 0, 0, 0, n3, 0, 0, 0, 0, 0);
+        }
+
+        double targetDist = Math.sqrt(targetDistSq);
+        double g1 = (l1 - l2 * lBeams.restCosTheta[i]) / targetDist;
+        double g2 = (l2 - l1 * lBeams.restCosTheta[i]) / targetDist;
+        double u13x = dx13 / l1, u13y = dy13 / l1, u13z = dz13 / l1;
+        double u23x = dx23 / l2, u23y = dy23 / l2, u23z = dz23 / l2;
+        double u12x = dx12 / dist, u12y = dy12 / dist, u12z = dz12 / dist;
+
+        double g1x = u12x + g1 * u13x, g1y = u12y + g1 * u13y, g1z = u12z + g1 * u13z;
+        double g2x = -u12x + g2 * u23x, g2y = -u12y + g2 * u23y, g2z = -u12z + g2 * u23z;
+        double g3x = -g1 * u13x - g2 * u23x;
+        double g3y = -g1 * u13y - g2 * u23y;
+        double g3z = -g1 * u13z - g2 * u23z;
+        double inverseGeneralizedMass = (g1x * g1x + g1y * g1y + g1z * g1z) / nodes.mass[n1]
+                + (g2x * g2x + g2y * g2y + g2z * g2z) / nodes.mass[n2]
+                + (g3x * g3x + g3y * g3y + g3z * g3z) / nodes.mass[n3];
+        float budget = inverseGeneralizedMass > KINDA_SMALL_NUMBER
+                ? (float) ((1.0 / inverseGeneralizedMass) * invDt * 0.95)
+                : 0.0f;
+        float hfGain = lBeams.cutoffHighFrequencyGain(i, dt);
+        // The stored coefficient is the authored one; the ceiling it is allowed to
+        // reach scales with 1 / hfGain because the filter attenuates it in practice.
+        dampingCeilings[i] = budget / hfGain;
+
+        return limiter.addThreeNode(
+                n1, g1x, g1y, g1z,
+                n2, g2x, g2y, g2z,
+                n3, g3x, g3y, g3z,
+                lBeams.spring[i], Math.min(lBeams.damp[i] * hfGain, budget));
+    }
+
+    private void allocateAxialBeams(BeamContainer beams, int[] ids,
+                                    DirectionalStabilityLimiter limiter, float invDt, float dt) {
+        for (int i = 0; i < beams.count; i++) {
+            DirectionalStabilityLimiter.CoefficientCeilings ceilings = limiter.ceilings(
+                    ids[i], beams.spring[i], beams.damp[i], axialDampingCeiling(beams, i, invDt, dt));
+            beams.spring[i] = Math.min(beams.spring[i], ceilings.maxStiffness());
+            beams.damp[i] = Math.min(beams.damp[i], ceilings.maxDamping());
+        }
+    }
+
+    /**
+     * Unfiltered damping budget the semi-implicit Euler step tolerates for this
+     * beam's reduced mass; independent of {@code dampCutoffHz}.
+     *
+     * <p>The factor stays below one on purpose. For a stiffness-free beam the
+     * semi-implicit update is {@code v *= 1 - c dt / mu}, which cancels the
+     * relative velocity within the sub-step exactly at {@code c dt / mu == 1} and
+     * starts <em>reversing</em> it past that point. A continuous linear damper
+     * decays as {@code v0 e^(-ct/mu)} and never crosses zero, so staying under one
+     * is what keeps the discrete damper from manufacturing a sign flip the
+     * physics cannot produce. It also leaves the hard stability edge
+     * ({@code c dt / mu == 2}) a 2.1x margin.
+     */
+    private float dampingBudget(BeamContainer beams, int i, float invDt) {
+        float m1 = nodes.mass[beams.node1[i]];
+        float m2 = nodes.mass[beams.node2[i]];
+        if (m1 <= KINDA_SMALL_NUMBER || m2 <= KINDA_SMALL_NUMBER) return 0.0f;
+        return Utility.reducedMass(m1, m2) * invDt * 1.95f;
+    }
+
+    /**
+     * Ceiling for the <em>authored</em> damping coefficient. With a cutoff the
+     * high-frequency share reaching the fastest mode is only {@code hfGain} of it,
+     * so authored suspension damping may be that much larger before the same
+     * stability budget is exhausted.
+     */
+    private float axialDampingCeiling(BeamContainer beams, int i, float invDt, float dt) {
+        return dampingBudget(beams, i, invDt) / beams.cutoffHighFrequencyGain(i, dt);
     }
 
     /**
@@ -441,11 +782,25 @@ public class SoftBodyVehicle {
      */
     public void reset() {
         triggeredBreakGroups.clear();
+        triggeredDeformGroups.clear();
+        electrics.resetValues();
         nodes.reset();
         normalBeams.reset();
+        couplers.reset();
+        hydros.reset(normalBeams);
         supportBeams.reset();
         boundedBeams.reset();
+        lBeams.reset();
+        anisotropicBeams.reset();
+        triangles.reset();
         torsionbars.reset();
+        torsionHydros.reset(torsionbars);
+        wheels.reset();
+        powertrain.reset();
+        // Matches the BeamNG controller's empty reset(): the selected damper mode
+        // stays selected and is re-derived from the authored values.
+        adaptiveDampers.reset();
+        resetMotionSample();
         System.out.println("Vehicle reset.");
     }
 
@@ -454,16 +809,28 @@ public class SoftBodyVehicle {
      */
     public void clear() {
         nodes.clear();
+        electrics.clear();
         normalBeams.clear();
+        couplers.clear();
+        hydros.clear();
         supportBeams.clear();
         boundedBeams.clear();
         lBeams.clear();
+        anisotropicBeams.clear();
         triangles.clear();
         torsionbars.clear();
+        torsionHydros.clear();
         slidenodes.clear();
         wheels.clear();
+        powertrain.clear();
+        adaptiveDampers.clear();
+        adaptiveDamperSpecs = List.of();
         flexbodies.clear();
+        cameras.clear();
+        renderTimeline.clear();
+        breakGroupMap.clear();
         triggeredBreakGroups.clear();
+        triggeredDeformGroups.clear();
         maxTrackedPartId = -1;
 
         System.out.println("Vehicle data cleared and reset");
@@ -571,65 +938,13 @@ public class SoftBodyVehicle {
         }
     }
 
-    /**
-     *
-     */
-    private void solveTirePressure() {
-        for (int w = 0; w < wheels.count; w++) {
-            if (wheels.isDeflated[w]) continue;
-
-            int start = wheels.tireTriangleIdxStart[w];
-            int end = wheels.tireTriangleIdxEnd[w];
-            if (start >= end || start == 0) continue;
-
-            double currentVolume = wheels.prevVolume[w];
-            if (currentVolume < KINDA_SMALL_NUMBER) continue;
-
-            double p0_Pa = wheels.pressurePSI[w] * 6894.76;
-            double absP0_Pa = p0_Pa + 101325.0;
-            double currentAbsPressurePa = absP0_Pa * (wheels.initialVolume[w] / currentVolume);
-            double pressureDiffPa = currentAbsPressurePa - 101325.0;
-
-            double forceMultiplier = (pressureDiffPa * wheels.normalSign[w]) / 6.0;
-
-            double nextVolumeSum = 0.0;
-
-            for (int i = start; i <= end; i++) {
-                int nA = triangles.node1[i];
-                int nB = triangles.node2[i];
-                int nC = triangles.node3[i];
-
-                double ax = nodes.posX[nA], ay = nodes.posY[nA], az = nodes.posZ[nA];
-                double bx = nodes.posX[nB], by = nodes.posY[nB], bz = nodes.posZ[nB];
-                double cx = nodes.posX[nC], cy = nodes.posY[nC], cz = nodes.posZ[nC];
-
-                double abx = bx - ax, aby = by - ay, abz = bz - az;
-                double acx = cx - ax, acy = cy - ay, acz = cz - az;
-
-                double nx = aby * acz - abz * acy;
-                double ny = abz * acx - abx * acz;
-                double nz = abx * acy - aby * acx;
-
-                double fx = nx * forceMultiplier;
-                double fy = ny * forceMultiplier;
-                double fz = nz * forceMultiplier;
-
-                nodes.forceX[nA] += fx; nodes.forceY[nA] += fy; nodes.forceZ[nA] += fz;
-                nodes.forceX[nB] += fx; nodes.forceY[nB] += fy; nodes.forceZ[nB] += fz;
-                nodes.forceX[nC] += fx; nodes.forceY[nC] += fy; nodes.forceZ[nC] += fz;
-
-                nextVolumeSum += (ax * nx + ay * ny + az * nz);
-            }
-
-            wheels.normalSign[w] = (nextVolumeSum < 0.0) ? -1.0f : 1.0f;
-            wheels.prevVolume[w] = (float) Math.abs(nextVolumeSum / 6.0);
-        }
-    }
-
     public void triggerBreakGroup(String groupName) {
         if (!triggeredBreakGroups.add(groupName)) {
             return;
         }
+
+        triangles.breakByGroup(groupName);
+        couplers.breakByGroup(groupName);
 
         List<BeamPointer> linkedBeams = breakGroupMap.get(groupName);
         if (linkedBeams == null) return;
@@ -639,8 +954,91 @@ public class SoftBodyVehicle {
         }
     }
 
-    private void breakBeamAt(BeamContainer container, int idx) {
+    /**
+     * Latches a BeamNG deform group until the vehicle is reset. Rendering and
+     * effects deliberately do not consume this state yet.
+     */
+    public void triggerDeformGroup(String groupName) {
+        if (groupName != null && !groupName.isEmpty()) {
+            triggeredDeformGroups.add(groupName);
+        }
+    }
+
+    public boolean isDeformGroupTriggered(String groupName) {
+        return groupName != null && triggeredDeformGroups.contains(groupName);
+    }
+
+    public Set<String> triggeredDeformGroups() {
+        return Set.copyOf(triggeredDeformGroups);
+    }
+
+    /** Evaluates only beams that declared a finite deformation trigger ratio. */
+    void updateDeformGroupTriggers() {
+        updateDeformGroupTriggers(normalBeams);
+        updateDeformGroupTriggers(supportBeams);
+        updateDeformGroupTriggers(boundedBeams);
+        updateDeformGroupTriggers(lBeams);
+        updateDeformGroupTriggers(anisotropicBeams);
+    }
+
+    private void updateDeformGroupTriggers(BeamContainer container) {
+        for (int trigger = 0; trigger < container.deformTriggerCount(); trigger++) {
+            int beam = container.deformTriggerIndex(trigger);
+            if (container.broken[beam] || container.deformGroupTriggered[beam]) continue;
+
+            float restLength = container.effectiveRestLength(beam);
+            if (!(restLength > KINDA_SMALL_NUMBER) || !Float.isFinite(restLength)) continue;
+
+            int n1 = container.node1[beam];
+            int n2 = container.node2[beam];
+            double dx = nodes.posX[n2] - nodes.posX[n1];
+            double dy = nodes.posY[n2] - nodes.posY[n1];
+            double dz = nodes.posZ[n2] - nodes.posZ[n1];
+            double currentLength = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            double strain = Math.abs(currentLength / restLength - 1.0);
+            if (strain <= container.deformationTriggerRatio[beam]) continue;
+
+            container.deformGroupTriggered[beam] = true;
+            triggerDeformGroups(container.assignedDeformGroups[beam]);
+        }
+    }
+
+    private void triggerDeformGroups(List<String> groups) {
+        if (groups == null) return;
+        for (String group : groups) {
+            triggerDeformGroup(group);
+        }
+    }
+
+    /**
+     * Applies direct beam failures detected during the force-accumulation phase.
+     * Keeping this as a separate commit phase prevents beam iteration order from
+     * deciding whether another member of the same break group contributes force.
+     */
+    void commitPendingBeamBreaks() {
+        commitPendingBeamBreaks(normalBeams);
+        commitPendingBeamBreaks(supportBeams);
+        commitPendingBeamBreaks(boundedBeams);
+        commitPendingBeamBreaks(lBeams);
+        commitPendingBeamBreaks(anisotropicBeams);
+    }
+
+    private void commitPendingBeamBreaks(BeamContainer container) {
+        int pendingCount = container.pendingBreakCount();
+        for (int i = 0; i < pendingCount; i++) {
+            breakBeamAt(container, container.pendingBreakIndex(i));
+        }
+        container.clearPendingBreaks();
+    }
+
+    void breakBeamAt(BeamContainer container, int idx) {
+        if (container.broken[idx]) return;
         container.broken[idx] = true;
+        container.deformGroupTriggered[idx] = true;
+        triggerDeformGroups(container.assignedDeformGroups[idx]);
+        if (!container.disableTriangleBreaking[idx]) {
+            triangles.breakByEdge(container.node1[idx], container.node2[idx]);
+        }
         if (container.breakGroupType[idx] == 0) {
             if (container.assignedBreakGroups != null && container.assignedBreakGroups[idx] != null) {
                 for (String bg : container.assignedBreakGroups[idx]) {
@@ -652,683 +1050,17 @@ public class SoftBodyVehicle {
         }
     }
 
-    private void solveNormalBeams(float dt, float invDt) {
-        for (int i = 0; i < normalBeams.count; i++) {
-            if (normalBeams.broken[i]) continue;
-
-            int n1 = normalBeams.node1[i];
-            int n2 = normalBeams.node2[i];
-
-            float dx = nodes.posX[n2] - nodes.posX[n1];
-            float dy = nodes.posY[n2] - nodes.posY[n1];
-            float dz = nodes.posZ[n2] - nodes.posZ[n1];
-            float distSq = dx*dx + dy*dy + dz*dz;
-            if (distSq < KINDA_SMALL_NUMBER) continue;
-            float dist = (float) Math.sqrt(distSq);
-            float invDist = 1.0f / dist;
-
-            float restL = normalBeams.restLength[i];
-            float activeSpring = normalBeams.spring[i];
-            float springForce = normalBeams.spring[i] * (dist - restL);
-
-            float vx = nodes.velX[n2] - nodes.velX[n1];
-            float vy = nodes.velY[n2] - nodes.velY[n1];
-            float vz = nodes.velZ[n2] - nodes.velZ[n1];
-            float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-
-            float activeDamp = normalBeams.damp[i];
-            float dampForce = activeDamp * relVel;
-
-            float totalForce = springForce + dampForce;
-            float absTotalForce = Math.abs(totalForce);
-
-            if (absTotalForce > normalBeams.strength[i]) {
-                breakBeamAt(normalBeams, i);
-                continue;
-            }
-
-            if (absTotalForce > normalBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                float overForce = absTotalForce - normalBeams.deform[i];
-                float deformAmount = ((overForce * overForce) / (normalBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
-                if (dist > restL) normalBeams.restLength[i] += deformAmount;
-                else normalBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
-            }
-
-            float fx = totalForce * dx * invDist;
-            float fy = totalForce * dy * invDist;
-            float fz = totalForce * dz * invDist;
-
-            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
-            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
-        }
-    }
-
-    private void solveSupportBeams(float dt, float invDt) {
-        for (int i = 0; i < supportBeams.count; i++) {
-            if (supportBeams.broken[i]) continue;
-
-            int n1 = supportBeams.node1[i];
-            int n2 = supportBeams.node2[i];
-
-            float dx = nodes.posX[n2] - nodes.posX[n1];
-            float dy = nodes.posY[n2] - nodes.posY[n1];
-            float dz = nodes.posZ[n2] - nodes.posZ[n1];
-            float distSq = dx*dx + dy*dy + dz*dz;
-            if (distSq < KINDA_SMALL_NUMBER) continue;
-            float dist = (float) Math.sqrt(distSq);
-            float invDist = 1.0f / dist;
-
-            float restL = supportBeams.restLength[i];
-
-            if (dist > restL) continue;
-
-            float activeSpring = supportBeams.spring[i];
-            float springForce = activeSpring * (dist - restL);
-
-            float vx = nodes.velX[n2] - nodes.velX[n1];
-            float vy = nodes.velY[n2] - nodes.velY[n1];
-            float vz = nodes.velZ[n2] - nodes.velZ[n1];
-            float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-
-            float activeDamp = supportBeams.damp[i];
-            float dampForce = activeDamp * relVel;
-
-            float totalForce = springForce + dampForce;
-            float absTotalForce = Math.abs(totalForce);
-
-            if (absTotalForce > supportBeams.strength[i]) {
-                breakBeamAt(supportBeams, i);
-                continue;
-            }
-
-            if (absTotalForce > supportBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                float overForce = absTotalForce - supportBeams.deform[i];
-                float deformAmount = ((overForce * overForce) / (supportBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
-                if (dist > restL) supportBeams.restLength[i] += deformAmount;
-                else supportBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
-            }
-
-            float fx = totalForce * dx * invDist;
-            float fy = totalForce * dy * invDist;
-            float fz = totalForce * dz * invDist;
-
-            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
-            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
-        }
-    }
-
-    private void solveBoundedBeams(float dt, float invDt) {
-        for (int i = 0; i < boundedBeams.count; i++) {
-            if (boundedBeams.broken[i]) continue;
-
-            int n1 = boundedBeams.node1[i];
-            int n2 = boundedBeams.node2[i];
-
-            float dx = nodes.posX[n2] - nodes.posX[n1];
-            float dy = nodes.posY[n2] - nodes.posY[n1];
-            float dz = nodes.posZ[n2] - nodes.posZ[n1];
-            float distSq = dx*dx + dy*dy + dz*dz;
-            if (distSq < KINDA_SMALL_NUMBER) continue;
-            float dist = (float) Math.sqrt(distSq);
-            float invDist = 1.0f / dist;
-
-            float restL = boundedBeams.restLength[i];
-            float activeSpring = boundedBeams.spring[i];
-            float springForce = activeSpring * (dist - restL);
-
-            float vx = nodes.velX[n2] - nodes.velX[n1];
-            float vy = nodes.velY[n2] - nodes.velY[n1];
-            float vz = nodes.velZ[n2] - nodes.velZ[n1];
-            float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-
-            float activeDamp = boundedBeams.damp[i];
-            float split = boundedBeams.dampVelocitySplit[i];
-            boolean isRebound = relVel > 0;
-            boolean isFast = Math.abs(relVel) > split;
-            if (isRebound) {
-                activeDamp = isFast ? boundedBeams.dampReboundFast[i] : boundedBeams.dampRebound[i];
-            } else {
-                if (isFast) activeDamp = boundedBeams.dampFast[i];
-            }
-
-            float shortBoundary, longBoundary;
-
-            if (boundedBeams.shortBoundRange[i] >= 0) {
-                shortBoundary = restL - boundedBeams.shortBoundRange[i];
-            } else {
-                shortBoundary = restL * (1.0f - boundedBeams.shortBound[i]);
-            }
-
-            if (boundedBeams.longBoundRange[i] >= 0) {
-                longBoundary = restL + boundedBeams.longBoundRange[i];
-            } else {
-                longBoundary = restL * (1.0f + boundedBeams.longBound[i]);
-            }
-
-            float limitSpring = boundedBeams.limitSpring[i];
-
-            if (dist < shortBoundary) {
-                springForce += limitSpring * (dist - shortBoundary);
-                activeDamp = boundedBeams.limitDamp[i];
-            } else if (dist > longBoundary) {
-                springForce += limitSpring * (dist - longBoundary);
-                activeDamp = boundedBeams.limitDamp[i];
-            }
-
-            float totalForce = springForce + (relVel * activeDamp);
-            float absTotalForce = Math.abs(totalForce);
-
-            if (absTotalForce > boundedBeams.strength[i]) {
-                breakBeamAt(boundedBeams, i);
-                continue;
-            }
-
-            if (absTotalForce > boundedBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                float overForce = absTotalForce - boundedBeams.deform[i];
-                float deformAmount = ((overForce * overForce) / (boundedBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
-                if (dist > restL) boundedBeams.restLength[i] += deformAmount;
-                else boundedBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
-            }
-
-            float fx = totalForce * dx * invDist;
-            float fy = totalForce * dy * invDist;
-            float fz = totalForce * dz * invDist;
-
-            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
-            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
-        }
-    }
-
-    private void solveLBeams(float dt, float invDt) {
-        for (int i = 0; i < lBeams.count; i++) {
-            if (lBeams.broken[i]) continue;
-
-            int n1 = lBeams.node1[i];
-            int n2 = lBeams.node2[i];
-            int n3 = lBeams.node3[i];
-
-            double x1 = nodes.posX[n1], y1 = nodes.posY[n1], z1 = nodes.posZ[n1];
-            double x2 = nodes.posX[n2], y2 = nodes.posY[n2], z2 = nodes.posZ[n2];
-            double x3 = nodes.posX[n3], y3 = nodes.posY[n3], z3 = nodes.posZ[n3];
-
-            double dx13 = x1 - x3, dy13 = y1 - y3, dz13 = z1 - z3;
-            double l1Sq = dx13*dx13 + dy13*dy13 + dz13*dz13;
-
-            double dx23 = x2 - x3, dy23 = y2 - y3, dz23 = z2 - z3;
-            double l2Sq = dx23*dx23 + dy23*dy23 + dz23*dz23;
-
-            double dx12 = x2 - x1, dy12 = y2 - y1, dz12 = z2 - z1;
-            double distSq = dx12*dx12 + dy12*dy12 + dz12*dz12;
-
-            if (l1Sq < KINDA_SMALL_NUMBER || l2Sq < KINDA_SMALL_NUMBER || distSq < KINDA_SMALL_NUMBER) continue;
-
-            double l1 = Math.sqrt(l1Sq);
-            double l2 = Math.sqrt(l2Sq);
-            double dist = Math.sqrt(distSq);
-
-            double invL1 = 1.0 / l1;
-            double invL2 = 1.0 / l2;
-            double invDist = 1.0 / dist;
-
-            double cosTheta0 = lBeams.restCosTheta[i];
-            double targetDistSq = l1Sq + l2Sq - 2.0 * l1 * l2 * cosTheta0;
-            if (targetDistSq < KINDA_SMALL_NUMBER) continue;
-            double targetDist = Math.sqrt(targetDistSq);
-            double invTargetDist = 1.0 / targetDist;
-
-            double g1 = (l1 - l2 * cosTheta0) * invTargetDist;
-            double g2 = (l2 - l1 * cosTheta0) * invTargetDist;
-
-            double vx1 = nodes.velX[n1], vy1 = nodes.velY[n1], vz1 = nodes.velZ[n1];
-            double vx2 = nodes.velX[n2], vy2 = nodes.velY[n2], vz2 = nodes.velZ[n2];
-            double vx3 = nodes.velX[n3], vy3 = nodes.velY[n3], vz3 = nodes.velZ[n3];
-
-            double v13x = vx1 - vx3, v13y = vy1 - vy3, v13z = vz1 - vz3;
-            double l1Dot = (v13x*dx13 + v13y*dy13 + v13z*dz13) * invL1;
-
-            double v23x = vx2 - vx3, v23y = vy2 - vy3, v23z = vz2 - vz3;
-            double l2Dot = (v23x*dx23 + v23y*dy23 + v23z*dz23) * invL2;
-
-            double targetDistDot = g1 * l1Dot + g2 * l2Dot;
-
-            double v12x = vx2 - vx1, v12y = vy2 - vy1, v12z = vz2 - vz1;
-            double distDot = (v12x*dx12 + v12y*dy12 + v12z*dz12) * invDist;
-
-            double dampVel = distDot - targetDistDot;
-
-            double activeSpring = lBeams.spring[i];
-            double springForce = activeSpring * (dist - targetDist);
-            double dampForce = lBeams.damp[i] * dampVel;
-            double totalForce = springForce + dampForce;
-
-            double absTotalForce = Math.abs(totalForce);
-            if (absTotalForce > lBeams.strength[i]) {
-                breakBeamAt(lBeams, i);
-                continue;
-            }
-
-            if (absTotalForce > lBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                double overForce = absTotalForce - lBeams.deform[i];
-                double deformAmount = ((overForce * overForce) / (lBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
-                double sign = Math.signum(dist - targetDist);
-                lBeams.restCosTheta[i] -= sign * deformAmount * invL1 * invL2;
-                if (lBeams.restCosTheta[i] > 1.0f) lBeams.restCosTheta[i] = 1.0f;
-                if (lBeams.restCosTheta[i] < -1.0f) lBeams.restCosTheta[i] = -1.0f;
-            }
-
-            double u13x = dx13 * invL1,   u13y = dy13 * invL1,   u13z = dz13 * invL1;
-            double u23x = dx23 * invL2,   u23y = dy23 * invL2,   u23z = dz23 * invL2;
-            double u12x = dx12 * invDist, u12y = dy12 * invDist, u12z = dz12 * invDist;
-
-            double f1x = totalForce * (u12x + g1 * u13x);
-            double f1y = totalForce * (u12y + g1 * u13y);
-            double f1z = totalForce * (u12z + g1 * u13z);
-
-            double f2x = totalForce * (-u12x + g2 * u23x);
-            double f2y = totalForce * (-u12y + g2 * u23y);
-            double f2z = totalForce * (-u12z + g2 * u23z);
-
-            double f3x = totalForce * (-g1 * u13x - g2 * u23x);
-            double f3y = totalForce * (-g1 * u13y - g2 * u23y);
-            double f3z = totalForce * (-g1 * u13z - g2 * u23z);
-
-            nodes.forceX[n1] += f1x; nodes.forceY[n1] += f1y; nodes.forceZ[n1] += f1z;
-            nodes.forceX[n2] += f2x; nodes.forceY[n2] += f2y; nodes.forceZ[n2] += f2z;
-            nodes.forceX[n3] += f3x; nodes.forceY[n3] += f3y; nodes.forceZ[n3] += f3z;
-        }
-    }
-
-    private void solveAnisotropicBeams(float dt, float invDt)  {
-        for (int i = 0; i < anisotropicBeams.count; i++) {
-            if (anisotropicBeams.broken[i]) continue;
-
-            int n1 = anisotropicBeams.node1[i];
-            int n2 = anisotropicBeams.node2[i];
-
-            float dx = nodes.posX[n2] - nodes.posX[n1];
-            float dy = nodes.posY[n2] - nodes.posY[n1];
-            float dz = nodes.posZ[n2] - nodes.posZ[n1];
-            float distSq = dx*dx + dy*dy + dz*dz;
-            if (distSq < KINDA_SMALL_NUMBER) continue;
-            float dist = (float) Math.sqrt(distSq);
-            float invDist = 1.0f / dist;
-
-            float restL = anisotropicBeams.restLength[i];
-
-            float activeSpring = anisotropicBeams.spring[i];
-            float activeDamp   = anisotropicBeams.damp[i];
-
-            if (dist > restL) {
-                float expSpring = anisotropicBeams.springExpansion[i];
-                float expDamp   = anisotropicBeams.dampExpansion[i];
-                float tZoneRatio = anisotropicBeams.transitionZone[i];
-
-                if (tZoneRatio > KINDA_SMALL_NUMBER) {
-                    float absoluteTZone = tZoneRatio * restL;
-                    float stretch = dist - restL;
-
-                    if (stretch >= absoluteTZone) {
-                        activeSpring = expSpring;
-                        activeDamp   = expDamp;
-                    } else {
-                        float factor = stretch / absoluteTZone;
-                        activeSpring += (expSpring - activeSpring) * factor;
-                        activeDamp   += (expDamp   - activeDamp)   * factor;
-                    }
-                } else {
-                    activeSpring = expSpring;
-                    activeDamp   = expDamp;
-                }
-            }
-
-            float springForce = activeSpring * (dist - restL);
-
-            float vx = nodes.velX[n2] - nodes.velX[n1];
-            float vy = nodes.velY[n2] - nodes.velY[n1];
-            float vz = nodes.velZ[n2] - nodes.velZ[n1];
-            float relVel = (vx*dx + vy*dy + vz*dz) * invDist;
-            float dampForce = activeDamp * relVel;
-
-            float totalForce = springForce + dampForce;
-            float absTotalForce = Math.abs(totalForce);
-
-            if (absTotalForce > anisotropicBeams.strength[i]) {
-                breakBeamAt(anisotropicBeams, i);
-                continue;
-            }
-
-            if (absTotalForce > anisotropicBeams.deform[i] && activeSpring > KINDA_SMALL_NUMBER) {
-                float overForce = absTotalForce - anisotropicBeams.deform[i];
-                float deformAmount = ((overForce * overForce) / (anisotropicBeams.deform[i] * activeSpring)) * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
-                if (dist > restL) anisotropicBeams.restLength[i] += deformAmount;
-                else anisotropicBeams.restLength[i] = Math.max(KINDA_SMALL_NUMBER, restL - deformAmount);
-            }
-
-            float fx = totalForce * dx * invDist;
-            float fy = totalForce * dy * invDist;
-            float fz = totalForce * dz * invDist;
-
-            nodes.forceX[n1] += fx; nodes.forceY[n1] += fy; nodes.forceZ[n1] += fz;
-            nodes.forceX[n2] -= fx; nodes.forceY[n2] -= fy; nodes.forceZ[n2] -= fz;
-        }
-    }
-
-    private void solveTorsionBars(float dt, float invDt) {
-        for (int i = 0; i < torsionbars.count; i++) {
-            if (torsionbars.broken[i]) continue;
-
-            int n1 = torsionbars.node1[i], n2 = torsionbars.node2[i], n3 = torsionbars.node3[i], n4 = torsionbars.node4[i];
-
-            if (nodes.mass[n1] < KINDA_SMALL_NUMBER ||
-                    nodes.mass[n2] < KINDA_SMALL_NUMBER ||
-                    nodes.mass[n3] < KINDA_SMALL_NUMBER ||
-                    nodes.mass[n4] < KINDA_SMALL_NUMBER) {
-                torsionbars.broken[i] = true;
-                continue;
-            }
-
-            double x1 = nodes.posX[n1], y1 = nodes.posY[n1], z1 = nodes.posZ[n1];
-            double x2 = nodes.posX[n2], y2 = nodes.posY[n2], z2 = nodes.posZ[n2];
-            double x3 = nodes.posX[n3], y3 = nodes.posY[n3], z3 = nodes.posZ[n3];
-            double x4 = nodes.posX[n4], y4 = nodes.posY[n4], z4 = nodes.posZ[n4];
-
-            double b1x = x2 - x1, b1y = y2 - y1, b1z = z2 - z1;
-            double b2x = x3 - x2, b2y = y3 - y2, b2z = z3 - z2;
-            double b3x = x4 - x3, b3y = y4 - y3, b3z = z4 - z3;
-
-            double c1x = b1y * b2z - b1z * b2y;
-            double c1y = b1z * b2x - b1x * b2z;
-            double c1z = b1x * b2y - b1y * b2x;
-
-            double c2x = b2y * b3z - b2z * b3y;
-            double c2y = b2z * b3x - b2x * b3z;
-            double c2z = b2x * b3y - b2y * b3x;
-
-            double c1_sq = c1x*c1x + c1y*c1y + c1z*c1z;
-            double c2_sq = c2x*c2x + c2y*c2y + c2z*c2z;
-            double b2_sq = b2x*b2x + b2y*b2y + b2z*b2z;
-
-            if (Double.isNaN(c1_sq) || Double.isNaN(c2_sq) ||  Double.isNaN(b2_sq)) {
-                torsionbars.broken[i] = true;
-                continue;
-            }
-
-            double b2_mag = Math.sqrt(b2_sq);
-
-            double c1Xc2_x = c1y * c2z - c1z * c2y;
-            double c1Xc2_y = c1z * c2x - c1x * c2z;
-            double c1Xc2_z = c1x * c2y - c1y * c2x;
-
-            double dot1 = (c1Xc2_x * b2x + c1Xc2_y * b2y + c1Xc2_z * b2z) / b2_mag;
-            double dot2 = c1x * c2x + c1y * c2y + c1z * c2z;
-            double currentAngle = Math.atan2(dot1, dot2);
-
-            double deltaAngle = currentAngle - torsionbars.restAngle[i];
-            while (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
-            while (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
-
-            double g1_factor = b2_mag / c1_sq;
-            double g4_factor = -b2_mag / c2_sq;
-
-            double g1x = g1_factor * c1x, g1y = g1_factor * c1y, g1z = g1_factor * c1z;
-            double g4x = g4_factor * c2x, g4y = g4_factor * c2y, g4z = g4_factor * c2z;
-
-            double b1_dot_b2_div_sq = (b1x*b2x + b1y*b2y + b1z*b2z) / b2_sq;
-            double b3_dot_b2_div_sq = (b3x*b2x + b3y*b2y + b3z*b2z) / b2_sq;
-
-            double g2x = -g1x * b1_dot_b2_div_sq + g4x * b3_dot_b2_div_sq - g1x;
-            double g2y = -g1y * b1_dot_b2_div_sq + g4y * b3_dot_b2_div_sq - g1y;
-            double g2z = -g1z * b1_dot_b2_div_sq + g4z * b3_dot_b2_div_sq - g1z;
-
-            double g3x = -g1x - g2x - g4x;
-            double g3y = -g1y - g2y - g4y;
-            double g3z = -g1z - g2z - g4z;
-
-            double g1_sq_val = g1x*g1x + g1y*g1y + g1z*g1z;
-            double g2_sq_val = g2x*g2x + g2y*g2y + g2z*g2z;
-            double g3_sq_val = g3x*g3x + g3y*g3y + g3z*g3z;
-            double g4_sq_val = g4x*g4x + g4y*g4y + g4z*g4z;
-
-            double invGenMass = (g1_sq_val / nodes.mass[n1]) + (g2_sq_val / nodes.mass[n2]) +
-                    (g3_sq_val / nodes.mass[n3]) + (g4_sq_val / nodes.mass[n4]);
-
-            double genMass = 1.0 / invGenMass;
-
-            double maxSafeSpring = genMass * invDt * invDt;
-            double maxSafeDamp = genMass * invDt;
-
-            double activeSpring = Math.min(torsionbars.spring[i], maxSafeSpring);
-            double activeDamp = Math.min(torsionbars.damp[i], maxSafeDamp);
-
-            double omega = (g1x*nodes.velX[n1] + g1y*nodes.velY[n1] + g1z*nodes.velZ[n1]) +
-                    (g2x*nodes.velX[n2] + g2y*nodes.velY[n2] + g2z*nodes.velZ[n2]) +
-                    (g3x*nodes.velX[n3] + g3y*nodes.velY[n3] + g3z*nodes.velZ[n3]) +
-                    (g4x*nodes.velX[n4] + g4y*nodes.velY[n4] + g4z*nodes.velZ[n4]);
-
-            double torque = (activeSpring * deltaAngle) - (activeDamp * omega);
-
-            double absTorque = Math.abs(torque);
-            if (Double.isNaN(torque) || absTorque > torsionbars.strength[i]) {
-                torsionbars.broken[i] = true;
-                continue;
-            }
-            if (absTorque > torsionbars.deform[i] && torsionbars.spring[i] > KINDA_SMALL_NUMBER) {
-                double overTorque = absTorque - torsionbars.deform[i];
-                double flowRate = (overTorque * overTorque) / (torsionbars.deform[i] * torsionbars.spring[i]);
-                double deformAmount = flowRate * PhysicsWorld.METAL_PLASTIC_FLOW_RATE * dt;
-
-                torsionbars.restAngle[i] += Math.signum(deltaAngle) * deformAmount;
-                while (torsionbars.restAngle[i] > Math.PI) torsionbars.restAngle[i] -= Math.PI * 2;
-                while (torsionbars.restAngle[i] < -Math.PI) torsionbars.restAngle[i] += Math.PI * 2;
-            }
-
-            nodes.forceX[n1] += torque * g1x; nodes.forceY[n1] += torque * g1y; nodes.forceZ[n1] += torque * g1z;
-            nodes.forceX[n2] += torque * g2x; nodes.forceY[n2] += torque * g2y; nodes.forceZ[n2] += torque * g2z;
-            nodes.forceX[n3] += torque * g3x; nodes.forceY[n3] += torque * g3y; nodes.forceZ[n3] += torque * g3z;
-            nodes.forceX[n4] += torque * g4x; nodes.forceY[n4] += torque * g4y; nodes.forceZ[n4] += torque * g4z;
-        }
-    }
-
-    private void solveSlideNodes(float dt, float invDt) {
-        for (int i = 0; i < slidenodes.count; i++) {
-            int nId = slidenodes.nodeId[i];
-            int aId = slidenodes.railA[i];
-            int bId = slidenodes.railB[i];
-
-            double nx = nodes.posX[nId], ny = nodes.posY[nId], nz = nodes.posZ[nId];
-            double ax = nodes.posX[aId], ay = nodes.posY[aId], az = nodes.posZ[aId];
-            double bx = nodes.posX[bId], by = nodes.posY[bId], bz = nodes.posZ[bId];
-
-            double abx = bx - ax, aby = by - ay, abz = bz - az;
-            double anx = nx - ax, any = ny - ay, anz = nz - az;
-
-            double ab_sq = abx*abx + aby*aby + abz*abz;
-            if (ab_sq < KINDA_SMALL_NUMBER) continue;
-
-            double t = (anx*abx + any*aby + anz*abz) / ab_sq;
-            if (t < 0.0) t = 0.0;
-            if (t > 1.0) t = 1.0;
-
-            double px = ax + t * abx;
-            double py = ay + t * aby;
-            double pz = az + t * abz;
-
-            double pnx = nx - px, pny = ny - py, pnz = nz - pz;
-            double dist = Math.sqrt(pnx*pnx + pny*pny + pnz*pnz);
-
-            // Anti zero-divide protection
-            if (dist < KINDA_SMALL_NUMBER) {
-                dist = KINDA_SMALL_NUMBER;
-            }
-
-            double invDist = 1.0 / dist;
-            double nDirX = pnx * invDist, nDirY = pny * invDist, nDirZ = pnz * invDist;
-
-            double mN = nodes.mass[nId];
-            double mRail = nodes.mass[aId] + nodes.mass[bId];
-            if (mN < KINDA_SMALL_NUMBER ||  mRail < KINDA_SMALL_NUMBER) continue;
-
-            double reducedMass = (mN * mRail) / (mN + mRail);
-            double maxSafeSpring = reducedMass * invDt * invDt;
-            double activeSpring = Math.min(slidenodes.spring[i], maxSafeSpring);
-
-            // Keep original rest offset, no forced snap
-            double springForce = activeSpring * (dist - slidenodes.restDist[i]);
-
-            // Rail point velocity interpolation
-            double vpx = nodes.velX[aId] * (1 - t) + nodes.velX[bId] * t;
-            double vpy = nodes.velY[aId] * (1 - t) + nodes.velY[bId] * t;
-            double vpz = nodes.velZ[aId] * (1 - t) + nodes.velZ[bId] * t;
-
-            double relVel = (nodes.velX[nId] - vpx) * nDirX + (nodes.velY[nId] - vpy) * nDirY + (nodes.velZ[nId] - vpz) * nDirZ;
-
-            double activeDamp = Math.min(slidenodes.damp[i], reducedMass * invDt);
-            double dampForce = activeDamp * relVel;
-
-            // Apply slide constraint force
-            double fx = (springForce + dampForce) * nDirX;
-            double fy = (springForce + dampForce) * nDirY;
-            double fz = (springForce + dampForce) * nDirZ;
-
-            nodes.forceX[nId] -= fx; nodes.forceY[nId] -= fy; nodes.forceZ[nId] -= fz;
-            nodes.forceX[aId] += fx * (1 - t); nodes.forceY[aId] += fy * (1 - t); nodes.forceZ[aId] += fz * (1 - t);
-            nodes.forceX[bId] += fx * t;       nodes.forceY[bId] += fy * t;       nodes.forceZ[bId] += fz * t;
-        }
-    }
-
-    public void solveInternalForces(float dt){
-        float invDt = 1.0f / dt;
-
-        for (int i = 0; i < nodes.count; i++) {
-            nodes.forceX[i] = 0.0f;
-            nodes.forceY[i] = 0.0f;
-            nodes.forceZ[i] = 0.0f;
-
-            nodes.prevPosX[i] = nodes.posX[i];
-            nodes.prevPosY[i] = nodes.posY[i];
-            nodes.prevPosZ[i] = nodes.posZ[i];
-        }
-
-        // ==========================================
-        // ==========================================
-        solveTirePressure();
-
-        // ==========================================
-        // ==========================================
-
-        solveNormalBeams(dt, invDt);
-
-        solveSupportBeams(dt, invDt);
-
-        solveBoundedBeams(dt, invDt);
-
-        // ========== 4. LBeams ==========
-        solveLBeams(dt, invDt);
-
-        solveAnisotropicBeams(dt, invDt);
-
-        // ==========================================
-        // ==========================================
-        solveTorsionBars(dt, invDt);
-
-        // ==========================================
-        // ==========================================
-        solveSlideNodes(dt, invDt);
-
-        // ==========================================
-        // ==========================================
-        for (int i = 0; i < nodes.count; i++) {
-
-            if (nodes.mass[i] < PhysicsWorld.KINDA_SMALL_NUMBER) continue;
-            nodes.forceY[i] += PhysicsWorld.GRAVITY * nodes.mass[i];
-
-            float invMass = 1.0f / nodes.mass[i];
-            nodes.velX[i] += (nodes.forceX[i] * invMass) * dt;
-            nodes.velY[i] += (nodes.forceY[i] * invMass) * dt;
-            nodes.velZ[i] += (nodes.forceZ[i] * invMass) * dt;
-
-            float speedSq = nodes.velX[i]*nodes.velX[i] + nodes.velY[i]*nodes.velY[i] + nodes.velZ[i]*nodes.velZ[i];
-
-            final float K_V4 = 1.2e-7f;
-            float v4 = speedSq * speedSq;
-            float factor = 1.0f / (1.0f + K_V4 * v4 * dt);
-            nodes.velX[i] *= factor;
-            nodes.velY[i] *= factor;
-            nodes.velZ[i] *= factor;
-
-            if (Float.isNaN(nodes.velX[i]) || Float.isNaN(nodes.velY[i]) || Float.isNaN(nodes.velZ[i])) {
-                nodes.velX[i] = 0.0f; nodes.velY[i] = 0.0f; nodes.velZ[i] = 0.0f;
-            }
-
-            nodes.posX[i] += nodes.velX[i] * dt;
-            nodes.posY[i] += nodes.velY[i] * dt;
-            nodes.posZ[i] += nodes.velZ[i] * dt;
-        }
-    }
-
     /**
-     *
-     *
-     *
-     *
+     * Public internal-force entry points. The per-vehicle sub-step implementation now
+     * lives in {@link VehicleInternalForceSolver}; these signatures and their call order
+     * are unchanged.
      */
-    public void generateCollisionCandidates(DynamicAxisSweep sap, SoftBodyCollisionManager manager, double dtPredict) {
-        double eX = entityX, eY = entityY, eZ = entityZ;
+    public void solveInternalForces(float dt, float plasticRelaxation){
+        solveInternalForces(dt, plasticRelaxation, electrics.snapshot());
+    }
 
-        double BASE_MARGIN = 0.01;
-
-        for (int i = 0; i < triangles.count; i++) {
-            if (!triangles.collision[i]) continue;
-
-            int nA = triangles.node1[i];
-            int nB = triangles.node2[i];
-            int nC = triangles.node3[i];
-
-            double ax = eX + nodes.posX[nA], ay = eY + nodes.posY[nA], az = eZ + nodes.posZ[nA];
-            double bx = eX + nodes.posX[nB], by = eY + nodes.posY[nB], bz = eZ + nodes.posZ[nB];
-            double cx = eX + nodes.posX[nC], cy = eY + nodes.posY[nC], cz = eZ + nodes.posZ[nC];
-
-            double minX = Math.min(ax, Math.min(bx, cx)) - BASE_MARGIN;
-            double maxX = Math.max(ax, Math.max(bx, cx)) + BASE_MARGIN;
-            double minY = Math.min(ay, Math.min(by, cy)) - BASE_MARGIN;
-            double maxY = Math.max(ay, Math.max(by, cy)) + BASE_MARGIN;
-            double minZ = Math.min(az, Math.min(bz, cz)) - BASE_MARGIN;
-            double maxZ = Math.max(az, Math.max(bz, cz)) + BASE_MARGIN;
-
-            double triVx = (nodes.velX[nA] + nodes.velX[nB] + nodes.velX[nC]) * 0.3333333333;
-            double triVy = (nodes.velY[nA] + nodes.velY[nB] + nodes.velY[nC]) * 0.3333333333;
-            double triVz = (nodes.velZ[nA] + nodes.velZ[nB] + nodes.velZ[nC]) * 0.3333333333;
-
-            double dx = triVx * dtPredict;
-            double dy = triVy * dtPredict;
-            double dz = triVz * dtPredict;
-
-            if (dx > 0) maxX += dx; else minX += dx;
-            if (dy > 0) maxY += dy; else minY += dy;
-            if (dz > 0) maxZ += dz; else minZ += dz;
-
-            sweepResultBuffer.clear();
-            sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, sweepResultBuffer);
-
-            for (int k = 0; k < sweepResultBuffer.count; k++) {
-                SoftBodyVehicle hitVeh = sweepResultBuffer.vehicles[k];
-                int hitNodeId = sweepResultBuffer.nodeIds[k];
-
-                if (hitVeh == this && !nodes.selfCollision[hitNodeId]) continue;
-                if (hitVeh == this && (hitNodeId == nA || hitNodeId == nB || hitNodeId == nC)) continue;
-
-                if (hitVeh == this) {
-                    int triPartId = triangles.partId[i];
-                    if (triPartId >= 0 && triPartId < matrixPartStride) {
-                        if (nodeInPartMatrix[hitNodeId * matrixPartStride + triPartId]) {
-                            continue;
-                        }
-                    }
-                }
-
-                manager.addContact(hitVeh, hitNodeId, this, nA, nB, nC);
-            }
-        }
+    public void solveInternalForces(float dt, float plasticRelaxation, ElectricSnapshot electricSnapshot){
+        internalForceSolver.solve(dt, plasticRelaxation, electricSnapshot);
     }
 
     public void applyPositionAndVelocityDeltaUnSafe(int nodeId, float dPx, float dPy, float dPz,
@@ -1341,178 +1073,4 @@ public class SoftBodyVehicle {
         nodes.velZ[nodeId] += dVz;
     }
 
-    public void solveEnvironmentCollisions(VoxelSnapshot snapshot, float dt) {
-        for (int i = 0; i < nodes.count; i++) {
-            if (!nodes.collision[i]) continue;
-
-            double worldX = entityX + nodes.posX[i];
-            double worldY = entityY + nodes.posY[i];
-            double worldZ = entityZ + nodes.posZ[i];
-
-            if (worldY < 320 && worldY > -70 && snapshot.isSolid(worldX, worldY, worldZ)) {
-
-                float oldLocalX = nodes.prevPosX[i];
-                float oldLocalY = nodes.prevPosY[i];
-                float oldLocalZ = nodes.prevPosZ[i];
-
-                double oldWorldX = entityX + oldLocalX;
-                double oldWorldY = entityY + oldLocalY;
-                double oldWorldZ = entityZ + oldLocalZ;
-
-                boolean hitX = snapshot.isSolid(worldX, oldWorldY, oldWorldZ);
-                boolean hitY = snapshot.isSolid(oldWorldX, worldY, oldWorldZ);
-                boolean hitZ = snapshot.isSolid(oldWorldX, oldWorldY, worldZ);
-
-                if (hitY || hitX || hitZ) {
-                    double invDt = 1.0 / dt;
-
-                    double reboundCoef = PhysicsWorld.BLOCK_REBOUND;
-                    double blockFriction = PhysicsWorld.BLOCK_FRICTION;
-
-                    double gravityImpulse = nodes.mass[i] * Math.abs(PhysicsWorld.GRAVITY) * dt;
-
-                    double pushX = hitX ? Math.abs(nodes.posX[i] - oldLocalX) : 0.0;
-                    double pushY = hitY ? Math.abs(nodes.posY[i] - oldLocalY) : 0.0;
-                    double pushZ = hitZ ? Math.abs(nodes.posZ[i] - oldLocalZ) : 0.0;
-
-                    double totalNormalPush = Math.sqrt(pushX*pushX + pushY*pushY + pushZ*pushZ);
-
-                    double equivalentLoadN = (nodes.mass[i] * totalNormalPush) * (invDt * invDt);
-                    double minGravityLoad = nodes.mass[i] * Math.abs(PhysicsWorld.GRAVITY);
-                    if (equivalentLoadN < minGravityLoad) equivalentLoadN = minGravityLoad;
-
-                    double mu_s = nodes.friction[i] * blockFriction;
-                    double mu_k = nodes.slidingFriction[i] * blockFriction;
-
-                    int wIdx = nodes.wheelId[i];
-                    if (0 <= wIdx && wIdx < wheels.count) {
-                        double staticBase  = wheels.frictionCoef[wIdx];
-                        double slidingBase = wheels.slidingFrictionCoef[wIdx];
-                        double noLoad      = wheels.noLoadCoef[wIdx];
-                        double fullLoad    = wheels.fullLoadCoef[wIdx];
-                        double slope       = wheels.loadSensitivitySlope[wIdx];
-                        double treadCoef   = wheels.treadCoef[wIdx];
-
-                        double loadFactor = noLoad - (slope * equivalentLoadN);
-                        if (loadFactor < fullLoad) loadFactor = fullLoad;
-
-                        double vx = nodes.velX[i], vy = nodes.velY[i], vz = nodes.velZ[i];
-                        double tVelSq = (hitX ? 0 : vx*vx) + (hitY ? 0 : vy*vy) + (hitZ ? 0 : vz*vz);
-                        double vtLen = Math.sqrt(tVelSq);
-
-                        double stribeckVel = wheels.stribeckVelMult[wIdx];
-                        double exponent    = wheels.stribeckExponent[wIdx];
-                        double speedFactor = 1.0;
-                        if (vtLen > 1e-4 && stribeckVel > 1e-4) {
-                            double velRatio = vtLen / stribeckVel;
-                            speedFactor = Math.exp(-Math.pow(velRatio, exponent));
-                        }
-
-                        double dynamicMuMultiplier = slidingBase + (staticBase - slidingBase) * speedFactor;
-                        mu_s = (staticBase * loadFactor * treadCoef)  * blockFriction;
-                        mu_k = (dynamicMuMultiplier * loadFactor * treadCoef) * blockFriction;
-                    }
-
-                    if (hitY) {
-                        // J = m * |v| * (1 + e) + m * |g| * dt
-                        double jn = nodes.mass[i] * Math.abs(nodes.velY[i]) * (1.0 + reboundCoef) + gravityImpulse;
-
-                        nodes.velY[i] *= -reboundCoef;
-                        nodes.posY[i] = oldLocalY;
-
-                        double vx = nodes.velX[i], vz = nodes.velZ[i];
-                        double vtLen = Math.sqrt(vx*vx + vz*vz);
-                        double jtReq = vtLen * nodes.mass[i];
-
-                        double velKeepRatio = 0.0;
-                        if (jtReq > 1e-8) {
-                            if (jtReq <= mu_s * jn) {
-                                nodes.velX[i] = 0.0f; nodes.velZ[i] = 0.0f;
-                            } else {
-                                double frictionImpulse = mu_k * jn;
-                                velKeepRatio = Math.max(0.0, 1.0 - (frictionImpulse / jtReq));
-                                nodes.velX[i] *= velKeepRatio;
-                                nodes.velZ[i] *= velKeepRatio;
-                            }
-                        }
-
-                        double creepX = nodes.posX[i] - oldLocalX, creepZ = nodes.posZ[i] - oldLocalZ;
-                        double creepLen = Math.sqrt(creepX*creepX + creepZ*creepZ);
-                        double posForceReq = (creepLen * nodes.mass[i]) * (invDt * invDt);
-
-                        if (posForceReq <= mu_s * (jn * invDt)) {
-                            nodes.posX[i] = oldLocalX; nodes.posZ[i] = oldLocalZ;
-                        } else {
-                            nodes.posX[i] = (float) (oldLocalX + creepX * velKeepRatio);
-                            nodes.posZ[i] = (float) (oldLocalZ + creepZ * velKeepRatio);
-                        }
-                    }
-
-                    if (hitX) {
-                        double jn = nodes.mass[i] * Math.abs(nodes.velX[i]) * (1.0 + reboundCoef) + gravityImpulse;
-                        nodes.velX[i] *= -reboundCoef;
-                        nodes.posX[i] = oldLocalX;
-
-                        double vy = nodes.velY[i], vz = nodes.velZ[i];
-                        double vtLen = Math.sqrt(vy*vy + vz*vz);
-                        double jtReq = vtLen * nodes.mass[i];
-
-                        double velKeepRatio = 0.0;
-                        if (jtReq > 1e-8) {
-                            if (jtReq <= mu_s * jn) {
-                                nodes.velY[i] = 0.0f; nodes.velZ[i] = 0.0f;
-                            } else {
-                                velKeepRatio = Math.max(0.0, 1.0 - ((mu_k * jn) / jtReq));
-                                nodes.velY[i] *= velKeepRatio;
-                                nodes.velZ[i] *= velKeepRatio;
-                            }
-                        }
-
-                        double creepY = nodes.posY[i] - oldLocalY, creepZ = nodes.posZ[i] - oldLocalZ;
-                        double creepLen = Math.sqrt(creepY*creepY + creepZ*creepZ);
-                        double posForceReq = (creepLen * nodes.mass[i]) * (invDt * invDt);
-
-                        if (posForceReq <= mu_s * (jn * invDt)) {
-                            nodes.posY[i] = oldLocalY; nodes.posZ[i] = oldLocalZ;
-                        } else {
-                            nodes.posY[i] = (float) (oldLocalY + creepY * velKeepRatio);
-                            nodes.posZ[i] = (float) (oldLocalZ + creepZ * velKeepRatio);
-                        }
-                    }
-
-                    if (hitZ) {
-                        double jn = nodes.mass[i] * Math.abs(nodes.velZ[i]) * (1.0 + reboundCoef) + gravityImpulse;
-                        nodes.velZ[i] *= -reboundCoef;
-                        nodes.posZ[i] = oldLocalZ;
-
-                        double vx = nodes.velX[i], vy = nodes.velY[i];
-                        double vtLen = Math.sqrt(vx*vx + vy*vy);
-                        double jtReq = vtLen * nodes.mass[i];
-
-                        double velKeepRatio = 0.0;
-                        if (jtReq > 1e-8) {
-                            if (jtReq <= mu_s * jn) {
-                                nodes.velX[i] = 0.0f; nodes.velY[i] = 0.0f;
-                            } else {
-                                velKeepRatio = Math.max(0.0, 1.0 - ((mu_k * jn) / jtReq));
-                                nodes.velX[i] *= velKeepRatio;
-                                nodes.velY[i] *= velKeepRatio;
-                            }
-                        }
-
-                        double creepX = nodes.posX[i] - oldLocalX, creepY = nodes.posY[i] - oldLocalY;
-                        double creepLen = Math.sqrt(creepX*creepX + creepY*creepY);
-                        double posForceReq = (creepLen * nodes.mass[i]) * (invDt * invDt);
-
-                        if (posForceReq <= mu_s * (jn * invDt)) {
-                            nodes.posX[i] = oldLocalX; nodes.posY[i] = oldLocalY;
-                        } else {
-                            nodes.posX[i] = (float) (oldLocalX + creepX * velKeepRatio);
-                            nodes.posY[i] = (float) (oldLocalY + creepY * velKeepRatio);
-                        }
-                    }
-                }
-            }
-        }
-    }
 }

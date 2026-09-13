@@ -1,11 +1,16 @@
 package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
-import me.mzy.beamcraft.client.model.DaeMeshLoader;
+import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.config.BeamCraftConfig;
+import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
+import me.mzy.beamcraft.client.input.VehicleInputHandler;
 import me.mzy.beamcraft.client.render.PhysicsVehicleRenderer;
 import me.mzy.beamcraft.client.render.VehicleTextureUploader;
+import me.mzy.beamcraft.client.physics.AsyncPhysicsScheduler;
 import me.mzy.beamcraft.client.physics.PhysicsWorld;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.VehicleCameraData;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -17,71 +22,102 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
-import org.lwjgl.glfw.GLFW;
 
 import java.io.File;
 
 public class BeamCraftClient implements ClientModInitializer {
 	private static final boolean DEBUG_DRAW = false;
 	private static final boolean DEBUG_SHOW_BEAMS = true;
-	// 记录上一帧 G 键有没有被按下
-	private static boolean gWasPressed = false;
+	private static long lastOverrunNoticeNanos = 0L;
+	private static boolean physicsFailureReported = false;
 	public static final double DELTA_TIME = 0.05;
 
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
+	public static final AsyncPhysicsScheduler PHYSICS_SCHEDULER = new AsyncPhysicsScheduler(PHYSICS_WORLD);
 	public static final File GAME_DIR = FabricLoader.getInstance().getGameDir().toFile();
-	public static final File VEHICLES_DIR = new File(GAME_DIR, "mods/beamcraft/vehicles");
 
 	// 记录物理和扫描耗时 (毫秒)
 	public static double lastPhysicsMs = 0.0;
+
+	/**
+	 * Scratch for the HUD's body-attitude readout, reused every frame so the render
+	 * path stays allocation-free.
+	 */
+	private static final float[] ATTITUDE_DEG = new float[2];
+	public static double lastPhysicsWaitMs = 0.0;
+	public static boolean lastPhysicsOverBudget = false;
 	public static double[] lastPhysicsMsDetail = new double[9];
 
 	@Override
 	public void onInitializeClient() {
 
-		// 确保目录存在
-		if (!VEHICLES_DIR.exists()) VEHICLES_DIR.mkdirs();
-
-		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			// 让管理器接管一切生命周期
-			ClientVehicleManager.update(client);
-		});
+		// 加载配置文件，确定资产根列表并确保目录存在
+		BeamCraftConfig config = BeamCraftConfigManager.initialize(
+				FabricLoader.getInstance().getConfigDir(), GAME_DIR);
+		VehicleInputHandler inputHandler = new VehicleInputHandler(config.input);
+		AssetScanner.INSTANCE.configure(config.policy());
+		for (File root : BeamCraftConfigManager.assetRoots()) {
+			if (!root.exists()) root.mkdirs();
+		}
 
 		ClientVehicleManager.initRenderHooks(); // 初始化渲染
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);
 
-		// Close render-thread GL-owned vehicle textures on client shutdown.
-		ClientLifecycleEvents.CLIENT_STOPPING.register(client ->
-				VehicleTextureUploader.INSTANCE.closeFromAnyThread());
+		// Stop CPU physics before closing render-thread-owned resources.
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			PHYSICS_SCHEDULER.close();
+			VehicleTextureUploader.INSTANCE.closeFromAnyThread();
+		});
 
-		// 1. 物理计算与控制循环 (每帧运行)
-		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			if (client.player == null || client.world == null) return;
+		// One game tick owns one fixed physics step. The preceding step is
+		// committed first; only an over-budget step blocks this tick boundary.
+		ClientTickEvents.START_CLIENT_TICK.register(client -> {
 			PhysicsWorld world = PHYSICS_WORLD;
+			AsyncPhysicsScheduler.Completion completion = PHYSICS_SCHEDULER.finishPreviousStep();
+			if (completion != null) {
+				lastPhysicsWaitMs = completion.waitMs();
+				lastPhysicsOverBudget = completion.overBudget();
+				if (completion.timings() != null) {
+					lastPhysicsMsDetail = completion.timings();
+					lastPhysicsMs = lastPhysicsMsDetail[0];
+				}
 
-			// 检测 G 键 (调试功能：瞬间重置所有现存车辆，并传送到玩家头顶)
-			boolean isG = InputUtil.isKeyPressed(client.getWindow().getHandle(), GLFW.GLFW_KEY_G);
-			if (isG && !gWasPressed) {
-				double HEIGHT_OFFSET = 1;
-				for (SoftBodyVehicle vehicle : world.vehicles) {
-					vehicle.reset();
-					// 把 MC 实体强行瞬移过来
-					vehicle.parentEntity.setPosition(client.player.getX(), client.player.getY() + HEIGHT_OFFSET, client.player.getZ());
-					vehicle.nodes.rotateNodes(client.player.getYaw(), 0, 0);
+				if (completion.failure() != null && !physicsFailureReported) {
+					physicsFailureReported = true;
+					BeamCraft.LOGGER.error("Asynchronous BeamCraft physics stopped after a worker failure",
+							completion.failure());
+					if (client.player != null) {
+						client.player.sendMessage(Text.literal(
+								"[BeamCraft] Physics worker failed; simulation stopped. Check latest.log."), false);
+					}
+				} else if (completion.overBudget()) {
+					long now = System.nanoTime();
+					if (now - lastOverrunNoticeNanos >= 5_000_000_000L) {
+						lastOverrunNoticeNanos = now;
+						BeamCraft.LOGGER.error("BeamCraft physics step exceeded the 50 ms tick budget: {} ms (tick waited {} ms)",
+								String.format("%.2f", lastPhysicsMs), String.format("%.2f", lastPhysicsWaitMs));
+						if (client.player != null) {
+							client.player.sendMessage(Text.literal(String.format(
+									"[BeamCraft] Physics overrun: %.2f ms (tick barrier %.2f ms)",
+									lastPhysicsMs, lastPhysicsWaitMs)), false);
+						}
+					}
 				}
 			}
-			gWasPressed = isG;
 
-			// 统一执行物理世界所有车辆的更新
+			// Vehicle creation/removal is safe only after the previous job joined.
+			ClientVehicleManager.update(client);
+			if (client.player == null || client.world == null || PHYSICS_SCHEDULER.failure() != null) return;
+
+			inputHandler.tick(client);
+
+			// World access happens synchronously in prepareStep; the 100 substeps
+			// then run independently until the next game-tick barrier.
 			if (!world.vehicles.isEmpty()) {
-				long t1 = System.nanoTime();
-				world.step(client.world, DELTA_TIME, lastPhysicsMsDetail);
-				long t2 = System.nanoTime();
-
-				lastPhysicsMs = (t2 - t1) / 1_000_000.0;
+				PHYSICS_SCHEDULER.startStep(client.world, DELTA_TIME);
 			}
 		});
 
@@ -91,7 +127,71 @@ public class BeamCraftClient implements ClientModInitializer {
 			if (client.options.hudHidden) return; // 如果按了 F1 隐藏界面，就不画
 
 			String physicsStepText = String.format("BeamCraft Physics: %.2f ms", lastPhysicsMs);
+			SoftBodyVehicle debugVehicle = PHYSICS_WORLD.vehicles.isEmpty() ? null : PHYSICS_WORLD.vehicles.getFirst();
+			String powertrainState = debugVehicle == null ? "no vehicle" : debugVehicle.powertrain.diagnostic();
+			float engineRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugEngineRPM();
+			float throttleInput = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugThrottle();
+			float actualThrottle = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugActualThrottle();
+			float clutchEngagement = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugClutchEngagement();
+			float clutchTorque = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugClutchTorque();
+			float combustionTorque = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugCombustionTorque();
+			float turboRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugTurboRPM();
+			float turboBoostPSI = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugTurboBoostPSI();
+			boolean turboExisting = debugVehicle != null && debugVehicle.powertrain.debugTurboExisting();
+			float superchargerRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugSuperchargerRPM();
+			float superchargerBoostPSI = debugVehicle == null ? 0.0f
+					: debugVehicle.powertrain.debugSuperchargerBoostPSI();
+			boolean superchargerExisting = debugVehicle != null
+					&& debugVehicle.powertrain.debugSuperchargerExisting();
+			int torqueCurvePoints = debugVehicle == null ? 0 : debugVehicle.powertrain.debugTorqueCurveCount();
+			boolean starterActive = debugVehicle != null && debugVehicle.powertrain.debugStarterActive();
+			boolean sparkEnabled = debugVehicle != null && debugVehicle.powertrain.debugSparkEnabled();
+			boolean fuelEnabled = debugVehicle != null && debugVehicle.powertrain.debugFuelEnabled();
+			boolean limiterActive = debugVehicle != null && debugVehicle.powertrain.debugLimiterActive();
+			float limiterTime = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugLimiterCutRemaining();
+			String gearName = debugVehicle == null ? "?" : debugVehicle.powertrain.debugCurrentGearName();
+			float gearRatio = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugActiveRatio();
+			float shiftTime = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugShiftRemaining();
+			String rangeMode = debugVehicle == null ? "-" : debugVehicle.powertrain.debugRangeBoxMode();
+			float rangeRatio = debugVehicle == null ? 1.0f : debugVehicle.powertrain.debugRangeBoxRatio();
+
+			// Body attitude, measured from the vehicle's authored refNodes triple the way
+			// BeamNG builds its body frame, so the numbers can be lined up against
+			// BeamNG's own pitch/roll readout instead of judged by eye.
+			boolean hasAttitude = debugVehicle != null && debugVehicle.bodyAttitudeDeg(ATTITUDE_DEG);
+			VehicleCameraData.RefNodes refNodes = debugVehicle == null ? null : debugVehicle.cameras.refNodes();
+			String refLabel = debugVehicle == null || refNodes == null
+					? "none"
+					: debugVehicle.nodes.names[refNodes.ref()] + "->" + debugVehicle.nodes.names[refNodes.back()]
+							+ "/" + debugVehicle.nodes.names[refNodes.left()];
+
 			String[] lines = {
+					hasAttitude
+							? String.format("pitch: %+.2f deg (nose up +) | roll: %+.2f deg (left up +) | refNodes: %s",
+									ATTITUDE_DEG[0], ATTITUDE_DEG[1], refLabel)
+							: "pitch/roll: refNodes unavailable",
+					debugVehicle == null
+							? "accel: n/a"
+							: String.format("accel: %+.3f g longitudinal", debugVehicle.longitudinalAccelG),
+					"powertrain: " + powertrainState,
+					String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
+							throttleInput * 100.0f, actualThrottle * 100.0f),
+					String.format("combustion: %.1f Nm | curve: %d | starter: %s", combustionTorque,
+							torqueCurvePoints, starterActive ? "on" : "off"),
+					turboExisting
+							? String.format("turbo: %.0f rpm | boost: %.1f psi", turboRPM, turboBoostPSI)
+							: "turbo: off",
+					superchargerExisting
+							? String.format("supercharger: %.0f rpm | boost: %.1f psi",
+									superchargerRPM, superchargerBoostPSI)
+							: "supercharger: off",
+					String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
+							sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
+							limiterActive ? "cut" : "ready", limiterTime),
+					String.format("gear: %s | ratio: %.3f | shift: %.3fs | range: %s %.3f",
+							gearName, gearRatio, shiftTime, rangeMode, rangeRatio),
+					String.format("clutch engagement: %.0f%% | torque: %.1f Nm", clutchEngagement * 100.0f, clutchTorque),
+					String.format("tickBarrierWait: %.2f ms", lastPhysicsWaitMs),
 					String.format("mcWorldScan: %.2f ms", lastPhysicsMsDetail[1]),
 					String.format("internalForce: %.2f ms", lastPhysicsMsDetail[2]),
 					String.format("globalSAP: %.2f ms", lastPhysicsMsDetail[3]),
@@ -102,7 +202,9 @@ public class BeamCraftClient implements ClientModInitializer {
 					String.format("moveEntity: %.2f ms", lastPhysicsMsDetail[8])
 			};
 
-			int color = (lastPhysicsMs > 10.0) ? 0xFF0000 : 0x00FF00;
+			int color = (lastPhysicsOverBudget || PHYSICS_SCHEDULER.failure() != null)
+					? 0xFF0000
+					: (lastPhysicsMs > 10.0 ? 0xFFFF00 : 0x00FF00);
 
 			// 标题
 			drawContext.drawTextWithShadow(

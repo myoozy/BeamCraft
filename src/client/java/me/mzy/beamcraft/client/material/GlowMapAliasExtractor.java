@@ -51,7 +51,9 @@ public final class GlowMapAliasExtractor {
     /**
      * Cleans and parses one relaxed-JSON JBeam file and appends its {@code
      * glowMap} {@code off} aliases into {@code out}. Never throws; a malformed
-     * file contributes nothing.
+     * file contributes nothing. Content without the substring {@code glowMap} is
+     * skipped without parsing, which is exactly equivalent to parsing it and
+     * finding nothing (see {@link #collect}).
      *
      * @param relaxedContent the raw file bytes as UTF-8 text (JBeam relaxed JSON)
      * @param out            target alias map, mutated in place (key and value
@@ -59,6 +61,14 @@ public final class GlowMapAliasExtractor {
      */
     public static void collectFromJBeam(String relaxedContent, Map<String, String> out) {
         if (relaxedContent == null || out == null) {
+            return;
+        }
+        // A file whose text never spells "glowMap" cannot contribute: {@link #collect}
+        // looks the key up case-sensitively on each part, so no other spelling would
+        // have matched either. This is worth checking because cleaning and parsing the
+        // file is the whole cost — only 28 of the 862 shared JBeam files carry a
+        // glowMap section, and the other 834 were parsed for nothing.
+        if (!relaxedContent.contains("glowMap")) {
             return;
         }
         JsonObject root;

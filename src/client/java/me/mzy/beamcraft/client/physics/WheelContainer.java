@@ -1,7 +1,17 @@
+/*
+ * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
+ * If a copy of the bCDDL was not distributed with this file, see
+ * LICENSES/bCDDL-1.1.txt.
+ *
+ * Wheel construction is adapted from BeamNG.drive
+ * lua/common/jbeam/sections/wheels.lua. Java adaptation and modifications
+ * contributed by M1AO and BeamCraft contributors.
+ */
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.utility.Utility;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +27,7 @@ public class WheelContainer {
     public String[] name = new String[INIT_WHEEL_CAP];
     public int[] node1 = new int[INIT_WHEEL_CAP];
     public int[] node2 = new int[INIT_WHEEL_CAP];
+    public int[] wheelDir = new int[INIT_WHEEL_CAP];
     public int[] numRays = new int[INIT_WHEEL_CAP];
 
     // 物理参数
@@ -24,6 +35,17 @@ public class WheelContainer {
     public float[] tireRadius = new float[INIT_WHEEL_CAP];
     public float[] tireWidth = new float[INIT_WHEEL_CAP];
     public float[] pressurePSI = new float[INIT_WHEEL_CAP];
+
+    // Service-brake configuration and per-wheel pressure state.
+    public float[] brakeTorque = new float[INIT_WHEEL_CAP];
+    public float[] parkingTorque = new float[INIT_WHEEL_CAP];
+    public float[] brakeSpring = new float[INIT_WHEEL_CAP];
+    public float[] brakeInputSplit = new float[INIT_WHEEL_CAP];
+    public float[] brakeSplitCoef = new float[INIT_WHEEL_CAP];
+    public float[] brakePressureInDelay = new float[INIT_WHEEL_CAP];
+    public float[] brakePressureOutDelay = new float[INIT_WHEEL_CAP];
+    public float[] serviceBrakeTorque = new float[INIT_WHEEL_CAP];
+    public float[] brakeAngle = new float[INIT_WHEEL_CAP];
 
     // 轮胎节点摩擦参数
     public float[] frictionCoef         = new float[INIT_WHEEL_CAP];
@@ -36,7 +58,7 @@ public class WheelContainer {
     public float[] fullLoadCoef         = new float[INIT_WHEEL_CAP];
     public float[] softnessCoef         = new float[INIT_WHEEL_CAP];
 
-    // 🚀 一维展平数组：内存地址 100% 连续
+    // 一维展平数组，内存连续
     // 寻址方式： index = (wheelIndex * MAX_RAYS) + rayIndex
     public int[] hubInnerNodes = new int[INIT_WHEEL_CAP * MAX_RAYS];
     public int[] hubOuterNodes = new int[INIT_WHEEL_CAP * MAX_RAYS];
@@ -53,6 +75,27 @@ public class WheelContainer {
     public float[] normalSign = new float[INIT_WHEEL_CAP];
 
     public boolean[] isDeflated = new boolean[INIT_WHEEL_CAP];
+
+    // ================================================================
+    // BeamNG pressure-wheel counter-torque nodes (node indices; -1 = not defined).
+    // A wheel torque is applied to the hub ring by applyDriveTorque(); its equal-and-
+    // opposite counter-torque is distributed over these nodes so the axle / suspension /
+    // body receives the reaction without producing a net force. BeamNG semantics:
+    //   * torqueCoupling + torqueArm + torqueArm2 receive the drivetrain counter-torque.
+    //     No drivetrain reaction is generated unless both torqueCoupling and torqueArm are
+    //     defined; an undefined torqueArm2 falls back to the inner axle node.
+    //   * nodeArm (header column) + nodeCoupling receive the braking counter-torque. An
+    //     undefined nodeCoupling falls back to the inner axle node; an undefined nodeArm
+    //     means no explicit braking reaction (the load is carried structurally).
+    // ================================================================
+    public int[] torqueCouplingNode = newReactionNodeArray();
+    public int[] torqueArmNode = newReactionNodeArray();
+    public int[] torqueArm2Node = newReactionNodeArray();
+    public int[] nodeCouplingNode = newReactionNodeArray();
+    public int[] nodeArmNode = newReactionNodeArray();
+
+    // Scratch buffer used to assemble reaction node sets without per-call allocation.
+    private final int[] reactionScratch = new int[3];
 
     private final SoftBodyVehicle vehicle;
 
@@ -87,6 +130,8 @@ public class WheelContainer {
         double hubPeriphDamp = spec.hubPeriphDamp();
         double hubSideSpring = spec.hubSideSpring();
         double hubSideDamp = spec.hubSideDamp();
+        double hubReinfSpring = spec.hubReinfSpring();
+        double hubReinfDamp = spec.hubReinfDamp();
         String hubGroup = spec.hubGroup();
         ensureWheelCapacity();
         int wIdx = count;
@@ -95,9 +140,19 @@ public class WheelContainer {
         name[wIdx] = wheelName;
         node1[wIdx] = n1;
         node2[wIdx] = n2;
+        this.wheelDir[wIdx] = wheelDir >= 0 ? 1 : -1;
         numRays[wIdx] = rays > 0 ? Math.min(rays, MAX_RAYS) : MAX_RAYS;
         hubRadius[wIdx] = (float) radius;
         this.isDeflated[wIdx] = false;
+
+        // Default every pressure-wheel reaction to "undefined"; the parser fills the
+        // drivetrain nodes via setReactionNodes() when the wheel defines them. The nodeArm
+        // header column is the braking lever arm and arrives through the hub spec.
+        torqueCouplingNode[wIdx] = -1;
+        torqueArmNode[wIdx] = -1;
+        torqueArm2Node[wIdx] = -1;
+        nodeCouplingNode[wIdx] = -1;
+        nodeArmNode[wIdx] = spec.nodeArm() != null ? spec.nodeArm() : -1;
 
         int partId = vehicle.nodes.partId[n1];
         int baseOffset = wIdx * MAX_RAYS;
@@ -108,34 +163,41 @@ public class WheelContainer {
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
-        // 🚀 1. 算出 n1 和 n2 的物理中点
+        // 1. 算出 n1 和 n2 的物理中点
         double midX = (vehicle.nodes.posX[n1] + vehicle.nodes.posX[n2]) * 0.5;
         double midY = (vehicle.nodes.posY[n1] + vehicle.nodes.posY[n2]) * 0.5;
         double midZ = (vehicle.nodes.posZ[n1] + vehicle.nodes.posZ[n2]) * 0.5;
 
-        // 🚀 2. 基于中点施加 Offset 偏距 (减号保持不变，因为 axisX 指向外侧，减去负 offset 刚好向外拓展)
+        // 2. 基于中点施加 Offset 偏距 (减号保持不变：axisX 指向外侧，减去 offset 即向外)
         double centerX = midX - axisX[0] * offset;
         double centerY = midY - axisY[0] * offset;
         double centerZ = midZ - axisZ[0] * offset;
 
         // 2. 生成 Hub 节点
+        //
+        // The two rings are offset by half a ray, matching addPressureWheel: it
+        // advances its ray vector by 2*pi/(numRays*2) between the two nodes of each
+        // iteration, so the node2-side ring sits on the ray angles and the
+        // node1-side ring sits half a step ahead. Aligning the rings instead changes
+        // the length and direction of every across-width beam.
+        double hubStep = (2.0 * Math.PI) / rays;
+        double hubHalfStep = hubStep * 0.5;
         for (int i = 0; i < rays; i++) {
-            double angle = (2.0 * Math.PI * i) / rays;
-            double cosA = Math.cos(angle);
-            double sinA = Math.sin(angle);
+            double inAngle = i * hubStep;
+            double outAngle = inAngle + hubHalfStep;
+            double inCos = Math.cos(inAngle);
+            double inSin = Math.sin(inAngle);
+            double outCos = Math.cos(outAngle);
+            double outSin = Math.sin(outAngle);
 
-            double rayX = uX[0] * cosA + vX[0] * sinA;
-            double rayY = uY[0] * cosA + vY[0] * sinA;
-            double rayZ = uZ[0] * cosA + vZ[0] * sinA;
+            // 内外圈各占 width 的一半。in = n2 侧（角度未偏移），out = n1 侧（偏移半格）
+            double inX = centerX + (uX[0] * inCos + vX[0] * inSin) * radius - axisX[0] * (width * 0.5);
+            double inY = centerY + (uY[0] * inCos + vY[0] * inSin) * radius - axisY[0] * (width * 0.5);
+            double inZ = centerZ + (uZ[0] * inCos + vZ[0] * inSin) * radius - axisZ[0] * (width * 0.5);
 
-            // 内外圈各占 width 的一半
-            double inX = centerX + rayX * radius - axisX[0] * (width * 0.5);
-            double inY = centerY + rayY * radius - axisY[0] * (width * 0.5);
-            double inZ = centerZ + rayZ * radius - axisZ[0] * (width * 0.5);
-
-            double outX = centerX + rayX * radius + axisX[0] * (width * 0.5);
-            double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
-            double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
+            double outX = centerX + (uX[0] * outCos + vX[0] * outSin) * radius + axisX[0] * (width * 0.5);
+            double outY = centerY + (uY[0] * outCos + vY[0] * outSin) * radius + axisY[0] * (width * 0.5);
+            double outZ = centerZ + (uZ[0] * outCos + vZ[0] * outSin) * radius + axisZ[0] * (width * 0.5);
 
             // 生成物理节点
             hubInnerNodes[baseOffset + i] = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
@@ -150,37 +212,43 @@ public class WheelContainer {
         }
 
         // 3. 生成物理拓扑 (Beams)
+        //
+        // Family layout follows addPressureWheel, translated into this naming where
+        // hubInner is the n2 side and hubOuter the n1 side:
+        //   hubTread      : hubInner_i->hubOuter_i and hubOuter_i->hubInner_{i+1}
+        //   hubPeriphery  : the two rings
+        //   hubSide       : each ring to its own axle node
+        //   hubReinf      : each ring to the opposite axle node
+        //   hubStabilizer : hubInner_i -> nodeS (node2 side only, when present)
         for (int i = 0; i < rays; i++) {
             int next = (i + 1) % rays;
             int hInCur = hubInnerNodes[baseOffset + i], hInNext = hubInnerNodes[baseOffset + next];
             int hOutCur = hubOuterNodes[baseOffset + i], hOutNext = hubOuterNodes[baseOffset + next];
 
-            // ================= 1. 轮辋蒙皮 =================
-            // 周长支撑 (Tread)
-            int treadInIdx = addFastBeam(hInCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
-            int treadOutIdx = addFastBeam(hOutCur, hOutNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
-            vehicle.normalBeams.bindToTire(treadInIdx, wIdx);
-            vehicle.normalBeams.bindToTire(treadOutIdx, wIdx);
+            // ================= 1. 轮辋胎面 (Tread) =================
+            // 同射线的跨宽度支撑，加一格斜撑，两者构成 BeamNG 的胎面
+            addFastBeam(hInCur, hOutCur, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
+            addFastBeam(hOutCur, hInNext, hubTreadSpring, hubTreadDamp, hubBeamDeform, hubBeamStrength);
 
-            // 横向支撑与 X 型交叉防扭曲 (Periphery)
-            //addFastBeam(hInCur, hOutCur, hubPeriS, hubPeriD, deform, hubBeamStrength); // 直连  <--直连和交叉只能二选一，不然会不稳定，根据观察，BeamNG只有交叉梁
-            addFastBeam(hInCur, hOutNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength); // 交叉 1
-            addFastBeam(hOutCur, hInNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength); // 交叉 2
+            // ================= 2. 圆周环 (Periphery) =================
+            int periInIdx = addFastBeam(hInCur, hInNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength);
+            int periOutIdx = addFastBeam(hOutCur, hOutNext, hubPeriphSpring, hubPeriphDamp, hubBeamDeform, hubBeamStrength);
+            vehicle.normalBeams.bindToTire(periInIdx, wIdx);
+            vehicle.normalBeams.bindToTire(periOutIdx, wIdx);
 
-            // ================= 2. 自行车交叉辐条 (Spokes) =================
-            // a) 直连辐条 (内圈连内侧轴，外圈连外侧轴)
-            addFastBeam(hOutCur, n1, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
+            // ================= 3. 辐条 (Spokes) =================
+            // 直连辐条：每圈连自己那一侧的轴节点
             addFastBeam(hInCur, n2, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
+            addFastBeam(hOutCur, n1, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
 
-            // b) 交叉辐条 (内圈连外侧轴，外圈连内侧轴)
-            addFastBeam(hOutCur, n2, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
-            addFastBeam(hInCur, n1, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
+            // 交叉辐条：每圈连对侧的轴节点
+            addFastBeam(hInCur, n1, hubReinfSpring, hubReinfDamp, hubBeamDeform, hubBeamStrength);
+            addFastBeam(hOutCur, n2, hubReinfSpring, hubReinfDamp, hubBeamDeform, hubBeamStrength);
 
-            // ================= 3. 稳定节点支撑 (nodeS) =================
-            // 将轮毂内外圈所有节点都与 nodeS 相连，分摊 n2 的受力
+            // ================= 4. 稳定节点支撑 (nodeS) =================
+            // BeamNG 只把 node2 侧那一圈连到稳定节点
             if (nodeS != null) {
                 addFastBeam(hInCur, nodeS, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
-                addFastBeam(hOutCur, nodeS, hubSideSpring, hubSideDamp, hubBeamDeform, hubBeamStrength);
             }
         }
 
@@ -271,39 +339,54 @@ public class WheelContainer {
         this.loadSensitivitySlope[wIdx] = (float) loadSensitivitySlope;
         this.fullLoadCoef[wIdx] = (float) fullLoadCoef;
         this.softnessCoef[wIdx] = (float) softnessCoef;
+        this.brakeTorque[wIdx] = Math.max(0.0f, (float) spec.brakeTorque());
+        this.parkingTorque[wIdx] = Math.max(0.0f, (float) spec.parkingTorque());
+        this.brakeSpring[wIdx] = Math.max(0.0f, (float) spec.brakeSpring());
+        this.brakeInputSplit[wIdx] = Math.clamp((float) spec.brakeInputSplit(), 0.0f, 1.0f);
+        this.brakeSplitCoef[wIdx] = Math.clamp((float) spec.brakeSplitCoef(), 0.0f, 1.0f);
+        this.brakePressureInDelay[wIdx] = Math.max(0.0f, (float) spec.brakePressureInDelay());
+        this.brakePressureOutDelay[wIdx] = Math.max(0.0f, (float) spec.brakePressureOutDelay());
+        this.serviceBrakeTorque[wIdx] = 0.0f;
+        this.brakeAngle[wIdx] = 0.0f;
 
         double[] uX = {0}, uY = {0}, uZ = {0};
         double[] vX = {0}, vY = {0}, vZ = {0};
         double[] axisX = {0}, axisY = {0}, axisZ = {0};
         calculateWheelBasis(n1, n2, wheelDir, axisX, axisY, axisZ, uX, uY, uZ, vX, vY, vZ);
 
-        // 🚀 1. 算出 n1 和 n2 的物理中点
+        // 1. 算出 n1 和 n2 的物理中点
         double midX = (vehicle.nodes.posX[n1] + vehicle.nodes.posX[n2]) * 0.5;
         double midY = (vehicle.nodes.posY[n1] + vehicle.nodes.posY[n2]) * 0.5;
         double midZ = (vehicle.nodes.posZ[n1] + vehicle.nodes.posZ[n2]) * 0.5;
 
-        // 🚀 2. 基于中点施加 Offset 偏距 (减号保持不变，因为 axisX 指向外侧，减去负 offset 刚好向外拓展)
+        // 2. 基于中点施加 Offset 偏距 (减号保持不变：axisX 指向外侧，减去 offset 即向外)
         double centerX = midX - axisX[0] * offset;
         double centerY = midY - axisY[0] * offset;
         double centerZ = midZ - axisZ[0] * offset;
 
         // 1. 生成轮胎外圈节点
+        //
+        // Same half-ray offset as the hub, matching addPressureWheel. Note the
+        // parity is opposite to the hub: here the n1-side ring sits on the ray angles
+        // and the n2-side ring is half a step ahead, which is what makes the tread
+        // and sidewall diagonals fold the way BeamNG's do.
+        double tireStep = (2.0 * Math.PI) / rays;
+        double tireHalfStep = tireStep * 0.5;
         for (int i = 0; i < rays; i++) {
-            double angle = (2.0 * Math.PI * i) / rays;
-            double cosA = Math.cos(angle);
-            double sinA = Math.sin(angle);
+            double inAngle = i * tireStep + tireHalfStep;
+            double outAngle = i * tireStep;
+            double inCos = Math.cos(inAngle);
+            double inSin = Math.sin(inAngle);
+            double outCos = Math.cos(outAngle);
+            double outSin = Math.sin(outAngle);
 
-            double rayX = uX[0] * cosA + vX[0] * sinA;
-            double rayY = uY[0] * cosA + vY[0] * sinA;
-            double rayZ = uZ[0] * cosA + vZ[0] * sinA;
+            double inX = centerX + (uX[0] * inCos + vX[0] * inSin) * radius - axisX[0] * (width * 0.5);
+            double inY = centerY + (uY[0] * inCos + vY[0] * inSin) * radius - axisY[0] * (width * 0.5);
+            double inZ = centerZ + (uZ[0] * inCos + vZ[0] * inSin) * radius - axisZ[0] * (width * 0.5);
 
-            double inX = centerX + rayX * radius - axisX[0] * (width * 0.5);
-            double inY = centerY + rayY * radius - axisY[0] * (width * 0.5);
-            double inZ = centerZ + rayZ * radius - axisZ[0] * (width * 0.5);
-
-            double outX = centerX + rayX * radius + axisX[0] * (width * 0.5);
-            double outY = centerY + rayY * radius + axisY[0] * (width * 0.5);
-            double outZ = centerZ + rayZ * radius + axisZ[0] * (width * 0.5);
+            double outX = centerX + (uX[0] * outCos + vX[0] * outSin) * radius + axisX[0] * (width * 0.5);
+            double outY = centerY + (uY[0] * outCos + vY[0] * outSin) * radius + axisY[0] * (width * 0.5);
+            double outZ = centerZ + (uZ[0] * outCos + vZ[0] * outSin) * radius + axisZ[0] * (width * 0.5);
 
             int idxIn = vehicle.nodes.addNode(new PhysicsSpecs.NodeSpec(
                     wheelName + "_tire_in_" + i, (float) inX, (float) inY, (float) inZ, (float) nodeWeight,
@@ -333,8 +416,11 @@ public class WheelContainer {
             int tOutCur = tireOuterNodes[baseOffset + i], tOutNext = tireOuterNodes[baseOffset + next];
 
             // 侧壁面：内侧环带 (Hub Inner -> Tire Inner)
-            addTriangle(hInCur, hInNext, tInNext, partId, COLLISION);
-            addTriangle(hInCur, tInNext, tInCur, partId, COLLISION);
+            // Keep BeamNG's tIn_i -> hIn_{i+1} diagonal. After the two rings were
+            // staggered by half a ray, the old opposite diagonal no longer had a
+            // matching sidewall beam and let pressure shear the tread cyclically.
+            addTriangle(tInCur, hInCur, hInNext, partId, COLLISION);
+            addTriangle(tInCur, hInNext, tInNext, partId, COLLISION);
 
             // 侧壁面：外侧环带 (Hub Outer -> Tire Outer)
             addTriangle(hOutCur, tOutCur, tOutNext, partId, COLLISION);
@@ -344,9 +430,11 @@ public class WheelContainer {
             addTriangle(tInCur, tInNext, tOutNext, partId, COLLISION);
             addTriangle(tInCur, tOutNext, tOutCur, partId, COLLISION);
 
-            // 轮胎与轮辋接触面（纯粹用于闭合散度体积，绝对关闭碰撞）
-            addTriangle(hInCur, hOutNext, hInNext, partId, false);
-            addTriangle(hInCur, hOutCur, hOutNext, partId, false);
+            // 轮胎与轮辋接触面（仅用于闭合散度体积，关闭碰撞）
+            // Use the same hOut_i -> hIn_{i+1} diagonal as hubTread. The former
+            // triangulation was left over from the aligned-ring topology.
+            addTriangle(hOutCur, hInNext, hInCur, partId, false);
+            addTriangle(hOutCur, hOutNext, hInNext, partId, false);
 
             // 胎面 加强筋 (i 连 i+2)
             int next2 = (i + 2) % rays;
@@ -370,51 +458,62 @@ public class WheelContainer {
             // ========================================================
             // 2. 胎面横向梁 (Tread Beams) —— 跨宽度，主导过弯侧向支撑
             // ========================================================
-            // 普通胎面横向支撑 (1根直连 + 2根交叉)
-            addFastBeam(tInCur,  tOutCur,  treadSpring, treadDamp, treadDeform, treadStrength);
+            // BeamNG keeps exactly two per ray: the within-ray cross-width beam and one
+            // half-step-folded diagonal. The previous third beam (tOut_c->tIn_next) is
+            // BeamNG's tread-reinforcement beam, so it moved into that family below.
+            addFastBeam(tOutCur, tInCur,  treadSpring, treadDamp, treadDeform, treadStrength);
             addFastBeam(tInCur,  tOutNext, treadSpring, treadDamp, treadDeform, treadStrength);
-            addFastBeam(tOutCur, tInNext,  treadSpring, treadDamp, treadDeform, treadStrength);
 
             // 胎面加强筋 (跨宽度 且 跨圆周的大交叉，文档中的 across +-2 nodes)
             if (enableTreadReinfBeams) {
+                addFastBeam(tOutCur, tInNext,  treadReinfSpring, treadReinfDamp, treadDeform, treadStrength);
                 addFastBeam(tInCur,  tOutNext2, treadReinfSpring, treadReinfDamp, treadDeform, treadStrength);
-                addFastBeam(tOutCur, tInNext2,  treadReinfSpring, treadReinfDamp, treadDeform, treadStrength);
             }
 
             // ========================================================
             // 3. 侧壁梁 (Sidewall Beams) —— 连 Hub 和 Tire，由气压主导
             // ========================================================
-            // 普通侧壁支撑 (沿半径直连)
-            int sideInIdx = addFastAnisotropicBeam(hInCur,  tInCur,  sideSpring, sideDamp, sideDeform, sideStrength,
+            // BeamNG braces each sidewall band with a V per ray: hub ring i to tire ring
+            // i, and tire ring i to hub ring i+1. Two straight radial beams per side (the
+            // previous layout) is half the bracing.
+            int sideOutA = addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
                     sideSpringExp, sideDampExp, sideTransZone);
-            int sideOutIdx = addFastAnisotropicBeam(hOutCur, tOutCur, sideSpring, sideDamp, sideDeform, sideStrength,
+            int sideOutB = addFastAnisotropicBeam(hOutCur, tOutNext, sideSpring, sideDamp, sideDeform, sideStrength,
                     sideSpringExp, sideDampExp, sideTransZone);
-            vehicle.anisotropicBeams.bindToTire(sideInIdx, wIdx);
-            vehicle.anisotropicBeams.bindToTire(sideOutIdx, wIdx);
+            vehicle.anisotropicBeams.bindToTire(sideOutA, wIdx);
+            vehicle.anisotropicBeams.bindToTire(sideOutB, wIdx);
+            addFastAnisotropicBeam(hInCur, tInCur, sideSpring, sideDamp, sideDeform, sideStrength,
+                    sideSpringExp, sideDampExp, sideTransZone);
+            addFastAnisotropicBeam(tInCur, hInNext, sideSpring, sideDamp, sideDeform, sideStrength,
+                    sideSpringExp, sideDampExp, sideTransZone);
 
-            // 侧壁加强筋 (侧壁交叉防扭曲，连目标环带的 i+2，文档中的 sidewall +-2 nodes)
+            // 侧壁加强筋 (同侧长斜撑，跨 i+1 与 i+2)
             if (enableTireSideReinfBeams) {
-                addFastAnisotropicBeam(hInCur,  tInNext2,  sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
+                addFastAnisotropicBeam(hInCur,  tInNext,  sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
                         sideReinfSpringExp, sideReinfDampExp, sideTransZone);
-                addFastAnisotropicBeam(hOutCur, tOutNext2, sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
+                addFastAnisotropicBeam(tInCur,  hubInnerNodes[baseOffset + next2], sideReinfSpring, sideReinfDamp,
+                        sideDeform, sideStrength, sideReinfSpringExp, sideReinfDampExp, sideTransZone);
+                addFastAnisotropicBeam(tOutCur, hOutNext, sideReinfSpring, sideReinfDamp, sideDeform, sideStrength,
                         sideReinfSpringExp, sideReinfDampExp, sideTransZone);
+                addFastAnisotropicBeam(hOutCur, tireOuterNodes[baseOffset + next2], sideReinfSpring, sideReinfDamp,
+                        sideDeform, sideStrength, sideReinfSpringExp, sideReinfDampExp, sideTransZone);
             }
 
             // ========================================================
-            // 4. 内部截面大支撑 (wheelReinfBeam)
+            // 4. 内部截面大支撑 (wheelReinfBeam / L-Beam)
             // ========================================================
-            // 穿过空气腔，连接内侧 Hub 和 外侧 Tire，防止轮胎截面横向塌陷
+            // 穿过空气腔，连接内侧 Hub 和 外侧 Tire，防止轮胎截面横向塌陷。
+            // BeamNG picks exactly one of the two forms; L-beams are the default and the
+            // straight beams are only used when reinforcement beams are explicitly on.
             if (enableTireReinfBeams) {
-                addFastBeam(hInCur,  tOutNext, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
-                addFastBeam(hOutCur, tInNext, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
-            }
+                addFastBeam(tOutCur, hInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
+                addFastBeam(hOutCur, tInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
+            } else if (enableTireLBeams) {
+                // 交叉对角线 1：连接 tOut 和 hIn，以对侧轮辋节点 hOut 为支点
+                addFastLBeam(tOutCur, hInCur, hOutCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
 
-            if (enableTireLBeams) {
-                // 交叉对角线 1：共享点 tIn，连接 hIn 和 tOut
-                addFastLBeam(hInCur, tOutCur, tInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
-
-                // 交叉对角线 2：共享点 tOut，连接 hOut 和 tIn
-                addFastLBeam(hOutCur, tInCur, tOutCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
+                // 交叉对角线 2：连接 hOut 和 tIn，以对侧轮辋节点 hIn 为支点
+                addFastLBeam(hOutCur, tInCur, hInCur, reinfSpring, reinfDamp, reinfDeform, reinfStrength);
             }
 
             // ========================================================
@@ -422,14 +521,14 @@ public class WheelContainer {
             // ========================================================
             if (enableTireSupportBeams) {
                 // TODO: 优先级不高
-                // 这里的梁应当存入 supportBeams 容器，并且设置 beamPrecompression（如 0.85）
-                // 使得它们平时处于松弛状态，只有当轮胎快要彻底压死碰壁时才提供极强的推力
+                // 这里的梁应当存入 supportBeams 容器，并设置 beamPrecompression（如 0.85），
+                // 使其平时处于松弛状态，只在轮胎接近压死时提供较大的推力
                 // vehicle.supportBeams.addBeam(...);
             }
         }
         tireTriangleIdxEnd[wIdx] = vehicle.triangles.count - 1;
 
-        // 废弃圆柱公式，使用离散网格精准求积，保证初始内外压强比绝对为 1.0
+        // 用离散网格积分求体积，不用圆柱公式，这样初始内外压强比恰为 1.0
         double volSum = 0.0;
         for (int i = tireTriangleIdxStart[wIdx]; i <= tireTriangleIdxEnd[wIdx]; i++) {
             int nA = vehicle.triangles.node1[i];
@@ -446,10 +545,10 @@ public class WheelContainer {
 
             volSum += (ax * crossX + ay * crossY + az * crossZ);
         }
-        // 记录绝对静止体积
+        // 记录静止体积
         initialVolume[wIdx] = (float) Math.abs(volSum / 6.0);
 
-        // 不要忘记初始化！！！
+        // 初始化 prevVolume 与 normalSign
         prevVolume[wIdx] = initialVolume[wIdx];
         normalSign[wIdx] = (volSum < 0.0) ? -1.0f : 1.0f;
     }
@@ -507,25 +606,31 @@ public class WheelContainer {
                                            double springExpansion, double dampExpansion, double transitionZone) {
         return new PhysicsSpecs.BeamSpec(
                 type, null, null, null,
-                null, 0,
-                (float) spring, (float) damp, (float) deform, (float) strength,
-                1.0f, 0.0f, 0.0f,
+                List.of(), Float.POSITIVE_INFINITY,
+                null, 0, false,
+                (float) spring, (float) damp, -1.0f, (float) deform, (float) strength,
+                1.0f, 0.0f, false, 0.0f,
                 1.0f, 1.0f, -1.0f, -1.0f,
-                (float) spring, (float) damp,
-                -1.0f, -1.0f, -1.0f, -1.0f,
-                (float) springExpansion, (float) dampExpansion, (float) transitionZone
+                1.0f,
+                (float) spring, (float) damp, -1.0f,
+                -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                (float) springExpansion, (float) dampExpansion, (float) transitionZone,
+                PhysicsWorld.KINDA_BIG_NUMBER,
+                null
         );
     }
 
     private void addTriangle(int n1, int n2, int n3, int partId, boolean collision) {
-        vehicle.triangles.addTriangle(new PhysicsSpecs.TriangleSpec(null, null, null, partId, collision), n1, n2, n3);
+        vehicle.triangles.addTriangle(
+                new PhysicsSpecs.TriangleSpec(null, null, null, List.of(), partId, collision),
+                n1, n2, n3);
     }
 
     private void calculateWheelBasis(int n1, int n2, int wheelDir, double[] ax, double[] ay, double[] az, double[] ux, double[] uy, double[] uz, double[] vx, double[] vy, double[] vz) {
         double n1x = vehicle.nodes.posX[n1], n1y = vehicle.nodes.posY[n1], n1z = vehicle.nodes.posZ[n1];
         double n2x = vehicle.nodes.posX[n2], n2y = vehicle.nodes.posY[n2], n2z = vehicle.nodes.posZ[n2];
 
-        // n1 永远是外侧，n2 是内侧。因此 n1 - n2 永远指向车外
+        // n1 是外侧，n2 是内侧，因此 n1 - n2 指向车外
         ax[0] = n1x - n2x; ay[0] = n1y - n2y; az[0] = n1z - n2z;
         double len = Math.sqrt(ax[0]*ax[0] + ay[0]*ay[0] + az[0]*az[0]);
         if (len > 0) { ax[0]/=len; ay[0]/=len; az[0]/=len; }
@@ -551,11 +656,27 @@ public class WheelContainer {
             name = Utility.expand(name, newSize);
             node1 = Utility.expand(node1, newSize);
             node2 = Utility.expand(node2, newSize);
+            wheelDir = Utility.expand(wheelDir, newSize);
             numRays = Utility.expand(numRays, newSize);
             hubRadius = Utility.expand(hubRadius, newSize);
             tireRadius = Utility.expand(tireRadius, newSize);
             tireWidth = Utility.expand(tireWidth, newSize);
             pressurePSI = Utility.expand(pressurePSI, newSize);
+            brakeTorque = Utility.expand(brakeTorque, newSize);
+            parkingTorque = Utility.expand(parkingTorque, newSize);
+            brakeSpring = Utility.expand(brakeSpring, newSize);
+            brakeInputSplit = Utility.expand(brakeInputSplit, newSize);
+            brakeSplitCoef = Utility.expand(brakeSplitCoef, newSize);
+            brakePressureInDelay = Utility.expand(brakePressureInDelay, newSize);
+            brakePressureOutDelay = Utility.expand(brakePressureOutDelay, newSize);
+            serviceBrakeTorque = Utility.expand(serviceBrakeTorque, newSize);
+            brakeAngle = Utility.expand(brakeAngle, newSize);
+
+            torqueCouplingNode = expandReactionArray(torqueCouplingNode, newSize);
+            torqueArmNode = expandReactionArray(torqueArmNode, newSize);
+            torqueArm2Node = expandReactionArray(torqueArm2Node, newSize);
+            nodeCouplingNode = expandReactionArray(nodeCouplingNode, newSize);
+            nodeArmNode = expandReactionArray(nodeArmNode, newSize);
 
             frictionCoef = Utility.expand(frictionCoef, newSize);
             slidingFrictionCoef = Utility.expand(slidingFrictionCoef, newSize);
@@ -587,9 +708,410 @@ public class WheelContainer {
         }
     }
 
+    private static int[] newReactionNodeArray() {
+        int[] array = new int[INIT_WHEEL_CAP];
+        Arrays.fill(array, -1);
+        return array;
+    }
+
+    private static int[] expandReactionArray(int[] array, int newSize) {
+        int oldSize = array.length;
+        int[] expanded = Utility.expand(array, newSize);
+        Arrays.fill(expanded, oldSize, newSize, -1);
+        return expanded;
+    }
+
+    /**
+     * Configures the BeamNG drivetrain counter-torque nodes for one wheel. Pass {@code -1}
+     * for any node that is not defined; a drivetrain reaction only occurs at apply time when
+     * both {@code torqueCoupling} and {@code torqueArm} are defined ({@code torqueArm2}
+     * falls back to the inner axle node).
+     */
+    public void setReactionNodes(int wheelIdx, int torqueCoupling, int torqueArm, int torqueArm2) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        torqueCouplingNode[wheelIdx] = torqueCoupling;
+        torqueArmNode[wheelIdx] = torqueArm;
+        torqueArm2Node[wheelIdx] = torqueArm2;
+    }
+
+    /** Overrides the braking coupling node; pass {@code -1} to restore the inner-axle default. */
+    public void setBrakeCouplingNode(int wheelIdx, int nodeCoupling) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        nodeCouplingNode[wheelIdx] = nodeCoupling;
+    }
+
     public void deflateWheel(int idx) {
         if (idx >= 0 && idx < count) {
             if (!isDeflated[idx])isDeflated[idx] = true;
+        }
+    }
+
+    /**
+     * Returns the angular velocity of the soft-body wheel hub about its current
+     * axle.  The sign is normalized with the JBeam wheelDir value, so wheels on
+     * opposite sides of the vehicle report the same sign while rolling forward.
+     */
+    public float getAngularVelocity(int wheelIdx) {
+        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
+
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return 0.0f;
+
+        // Expose the same forward-positive convention as the powertrain. The old
+        // node1-node2 axis made a forward-rolling wheel report a negative AV.
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return 0.0f;
+        double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
+        ax = ax * direction / axisLength;
+        ay = ay * direction / axisLength;
+        az = az * direction / axisLength;
+
+        double totalMass = 0.0;
+        double cx = 0.0, cy = 0.0, cz = 0.0;
+        double cvx = 0.0, cvy = 0.0, cvz = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            double innerMass = Math.max(0.0, nodes.mass[inner]);
+            double outerMass = Math.max(0.0, nodes.mass[outer]);
+            totalMass += innerMass + outerMass;
+            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
+            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
+            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
+            cvx += nodes.velX[inner] * innerMass + nodes.velX[outer] * outerMass;
+            cvy += nodes.velY[inner] * innerMass + nodes.velY[outer] * outerMass;
+            cvz += nodes.velZ[inner] * innerMass + nodes.velZ[outer] * outerMass;
+        }
+        if (totalMass < 1e-9) return 0.0f;
+        cx /= totalMass; cy /= totalMass; cz /= totalMass;
+        cvx /= totalMass; cvy /= totalMass; cvz /= totalMass;
+
+        double angularMomentum = 0.0;
+        double inertia = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            angularMomentum += angularMomentum(nodes, inner, cx, cy, cz, cvx, cvy, cvz, ax, ay, az);
+            angularMomentum += angularMomentum(nodes, outer, cx, cy, cz, cvx, cvy, cvz, ax, ay, az);
+            inertia += polarInertia(nodes, inner, cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, outer, cx, cy, cz, ax, ay, az);
+        }
+        return inertia > 1e-9 ? (float) (angularMomentum / inertia) : 0.0f;
+    }
+
+    /** Returns the hub and tire nodes' instantaneous polar inertia. */
+    public float getRotationalInertia(int wheelIdx) {
+        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return 0.0f;
+
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return 0.0f;
+        ax /= axisLength; ay /= axisLength; az /= axisLength;
+
+        double cx = (nodes.posX[node1[wheelIdx]] + nodes.posX[node2[wheelIdx]]) * 0.5;
+        double cy = (nodes.posY[node1[wheelIdx]] + nodes.posY[node2[wheelIdx]]) * 0.5;
+        double cz = (nodes.posZ[node1[wheelIdx]] + nodes.posZ[node2[wheelIdx]]) * 0.5;
+        double inertia = 0.0;
+        boolean hasTire = tireRadius[wheelIdx] > 0.0f;
+        for (int ray = 0; ray < rays; ray++) {
+            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+            if (hasTire) {
+                inertia += polarInertia(nodes, tireInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+                inertia += polarInertia(nodes, tireOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+            }
+        }
+        return (float) inertia;
+    }
+
+    /**
+     * Applies a pure axle torque to the hub ring without adding net force. This applies
+     * the wheel torque <em>only</em> — it never touches the pressure-wheel counter-torque
+     * nodes. Braking reuses this method, so the drivetrain reaction must be requested
+     * explicitly through {@link #applyDriveReaction} / {@link #applyBrakeReaction}.
+     */
+    public void applyDriveTorque(int wheelIdx, float torque) {
+        if (wheelIdx < 0 || wheelIdx >= count || Math.abs(torque) < 1e-8f) return;
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return;
+
+        // Keep applied torque and reported AV on the same forward-positive axis.
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return;
+        double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
+        ax = ax * direction / axisLength;
+        ay = ay * direction / axisLength;
+        az = az * direction / axisLength;
+
+        double totalMass = 0.0, cx = 0.0, cy = 0.0, cz = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            double innerMass = Math.max(0.0, nodes.mass[inner]);
+            double outerMass = Math.max(0.0, nodes.mass[outer]);
+            totalMass += innerMass + outerMass;
+            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
+            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
+            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
+        }
+        if (totalMass < 1e-9) return;
+        cx /= totalMass; cy /= totalMass; cz /= totalMass;
+
+        double inertia = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+        }
+        if (inertia < 1e-9) return;
+        double angularAcceleration = torque / inertia;
+        for (int ray = 0; ray < rays; ray++) {
+            applyAngularForce(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az, angularAcceleration);
+            applyAngularForce(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az, angularAcceleration);
+        }
+    }
+
+    /**
+     * Applies a wheel torque together with the BeamNG pressure-wheel drivetrain
+     * counter-torque: the hub receives {@code torque} and an equal-and-opposite torque is
+     * distributed over the wheel's torqueCoupling/torqueArm/torqueArm2 nodes. {@code torque}
+     * is forward-positive. When the wheel defines no torque coupling nodes this is exactly
+     * {@link #applyDriveTorque}.
+     */
+    public void applyDriveTorqueAndReaction(int wheelIdx, float torque) {
+        applyDriveTorque(wheelIdx, torque);
+        applyDriveReaction(wheelIdx, torque);
+    }
+
+    /**
+     * Applies only the drivetrain counter-torque for a wheel torque that the caller has
+     * already applied. The reaction is generated only when the wheel defines both
+     * {@code torqueCoupling} and {@code torqueArm} (BeamNG semantics); an undefined
+     * {@code torqueArm2} falls back to the inner axle node. No reaction implies no wheel
+     * torque was applied (e.g. neutral), so nothing is generated here either.
+     */
+    public void applyDriveReaction(int wheelIdx, float torque) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        int torqueCoupling = torqueCouplingNode[wheelIdx];
+        int torqueArm = torqueArmNode[wheelIdx];
+        if (torqueCoupling < 0 || torqueArm < 0) return;
+        int torqueArm2 = torqueArm2Node[wheelIdx];
+        if (torqueArm2 < 0) torqueArm2 = node2[wheelIdx];
+        applyTorqueReaction(wheelIdx, torque, torqueCoupling, torqueArm, torqueArm2);
+    }
+
+    /**
+     * Applies the BeamNG braking counter-torque for a brake torque the caller already
+     * applied to the wheel. The reaction is distributed over nodeArm (the header brake
+     * lever node) and nodeCoupling (defaulting to the inner axle node). A wheel without a
+     * nodeArm has no explicit braking reaction: the counter-torque is carried structurally
+     * through the hub/suspension beams, exactly as before this feature existed.
+     */
+    public void applyBrakeReaction(int wheelIdx, float appliedWheelTorque) {
+        if (wheelIdx < 0 || wheelIdx >= count) return;
+        int nodeArm = nodeArmNode[wheelIdx];
+        if (nodeArm < 0) return;
+        int nodeCoupling = nodeCouplingNode[wheelIdx];
+        if (nodeCoupling < 0) nodeCoupling = node2[wheelIdx];
+        applyTorqueReaction(wheelIdx, appliedWheelTorque, nodeCoupling, nodeArm, -1);
+    }
+
+    /**
+     * Distributes the equal-and-opposite counter-torque for {@code wheelTorque} over the
+     * given reaction nodes as a zero-net-force pure torque about the wheel's forward-positive
+     * axle. {@code nodeC} may be -1. Degenerate or invalid geometry simply produces no forces.
+     */
+    private void applyTorqueReaction(int wheelIdx, float wheelTorque, int nodeA, int nodeB, int nodeC) {
+        if (wheelIdx < 0 || wheelIdx >= count || Math.abs(wheelTorque) < 1e-8f) return;
+        NodeContainer nodes = vehicle.nodes;
+
+        // The reaction uses the same forward-positive axle axis as applyDriveTorque() so the
+        // counter-torque is exactly equal and opposite to the torque applied to the wheel.
+        double ax = nodes.posX[node2[wheelIdx]] - nodes.posX[node1[wheelIdx]];
+        double ay = nodes.posY[node2[wheelIdx]] - nodes.posY[node1[wheelIdx]];
+        double az = nodes.posZ[node2[wheelIdx]] - nodes.posZ[node1[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return;
+        double direction = wheelDir[wheelIdx] >= 0 ? 1.0 : -1.0;
+        ax = ax * direction / axisLength;
+        ay = ay * direction / axisLength;
+        az = az * direction / axisLength;
+
+        // Collect the valid, unique reaction nodes into the scratch buffer (which is
+        // reused across wheels, so no per-call allocation). At least two are needed to
+        // carry a torque.
+        reactionScratch[0] = nodeA;
+        reactionScratch[1] = nodeB;
+        reactionScratch[2] = nodeC;
+        int valid = 0;
+        for (int i = 0; i < 3; i++) {
+            int candidate = reactionScratch[i];
+            if (candidate < 0 || candidate >= nodes.count) continue;
+            if (nodes.mass[candidate] <= 0.0f) continue;
+            boolean duplicate = false;
+            for (int j = 0; j < valid; j++) {
+                if (reactionScratch[j] == candidate) { duplicate = true; break; }
+            }
+            if (!duplicate) reactionScratch[valid++] = candidate;
+        }
+        if (valid < 2) return;
+
+        // Counter-torque = -(wheel torque) about the forward-positive axle.
+        TorqueReactionSolver.apply(nodes, reactionScratch, 0, valid,
+                (float) (-wheelTorque * ax),
+                (float) (-wheelTorque * ay),
+                (float) (-wheelTorque * az));
+    }
+
+    /** Applies the JBeam service brake curve and pressure delays to every wheel. */
+    public void applyServiceBrakes(float brakeInput, float dt) {
+        applyBrakes(brakeInput, 0.0f, dt);
+    }
+
+    /** Applies service and parking-brake inputs; parking input is intentionally unbound for now. */
+    public void applyBrakes(float brakeInput, float parkingBrakeInput, float dt) {
+        if (dt <= 0.0f) return;
+        float input = Math.clamp(brakeInput, 0.0f, 1.0f);
+        float parkingInput = Math.clamp(parkingBrakeInput, 0.0f, 1.0f);
+        for (int wheel = 0; wheel < count; wheel++) {
+            float maximum = brakeTorque[wheel];
+            float target = calculateServiceBrakeTorque(maximum, input,
+                    brakeInputSplit[wheel], brakeSplitCoef[wheel]);
+            float delay = target > serviceBrakeTorque[wheel]
+                    ? brakePressureInDelay[wheel] : brakePressureOutDelay[wheel];
+            float rate = delay > 1.0e-6f ? maximum / delay : Float.POSITIVE_INFINITY;
+            serviceBrakeTorque[wheel] = moveTowards(serviceBrakeTorque[wheel], target, rate * dt);
+
+            float capacity = Math.max(serviceBrakeTorque[wheel], parkingTorque[wheel] * parkingInput);
+            float stiffness = Math.max(Math.max(brakeTorque[wheel], parkingTorque[wheel]), 1.0f)
+                    * brakeSpring[wheel];
+            if (capacity <= 1.0e-8f || stiffness <= 1.0e-8f) {
+                brakeAngle[wheel] = 0.0f;
+                continue;
+            }
+
+            float angularVelocity = getAngularVelocity(wheel);
+            if (brakeAngle[wheel] * angularVelocity < 0.0f) {
+                brakeAngle[wheel] = 0.0f;
+            }
+            float angleLimit = capacity / stiffness;
+            brakeAngle[wheel] = Math.clamp(
+                    brakeAngle[wheel] + angularVelocity * dt,
+                    -angleLimit,
+                    angleLimit);
+
+            float compliantTorque = Math.abs(brakeAngle[wheel]) * stiffness;
+            float stoppingTorque = Math.abs(angularVelocity) * getHubRotationalInertia(wheel) / dt;
+            float appliedTorque = Math.min(compliantTorque, stoppingTorque);
+            float wheelTorque = -Math.copySign(appliedTorque, angularVelocity);
+            applyDriveTorque(wheel, wheelTorque);
+            // The pressure-wheel braking counter-torque is the exact opposite of the wheel
+            // torque, distributed over nodeArm/nodeCoupling (no-op without a nodeArm).
+            applyBrakeReaction(wheel, wheelTorque);
+        }
+    }
+
+    static float calculateServiceBrakeTorque(float maximum, float input, float split, float splitCoef) {
+        float clampedInput = Math.clamp(input, 0.0f, 1.0f);
+        float clampedSplit = Math.clamp(split, 0.0f, 1.0f);
+        float clampedCoef = Math.clamp(splitCoef, 0.0f, 1.0f);
+        return Math.max(0.0f, maximum) * (Math.min(clampedInput, clampedSplit)
+                + Math.max(clampedInput - clampedSplit, 0.0f) * clampedCoef);
+    }
+
+    private float getHubRotationalInertia(int wheelIdx) {
+        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
+        NodeContainer nodes = vehicle.nodes;
+        int base = wheelIdx * MAX_RAYS;
+        int rays = numRays[wheelIdx];
+        if (rays <= 0) return 0.0f;
+
+        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
+        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
+        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
+        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (axisLength < 1e-9) return 0.0f;
+        ax /= axisLength;
+        ay /= axisLength;
+        az /= axisLength;
+
+        double totalMass = 0.0;
+        double cx = 0.0, cy = 0.0, cz = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            int inner = hubInnerNodes[base + ray];
+            int outer = hubOuterNodes[base + ray];
+            double innerMass = Math.max(0.0, nodes.mass[inner]);
+            double outerMass = Math.max(0.0, nodes.mass[outer]);
+            totalMass += innerMass + outerMass;
+            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
+            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
+            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
+        }
+        if (totalMass < 1e-9) return 0.0f;
+        cx /= totalMass;
+        cy /= totalMass;
+        cz /= totalMass;
+        double inertia = 0.0;
+        for (int ray = 0; ray < rays; ray++) {
+            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
+            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
+        }
+        return (float) inertia;
+    }
+
+    private static float moveTowards(float current, float target, float maximumDelta) {
+        if (maximumDelta == Float.POSITIVE_INFINITY) return target;
+        if (current < target) return Math.min(current + maximumDelta, target);
+        return Math.max(current - maximumDelta, target);
+    }
+
+    private static double angularMomentum(NodeContainer nodes, int node, double cx, double cy, double cz,
+                                          double cvx, double cvy, double cvz,
+                                          double ax, double ay, double az) {
+        double rx = nodes.posX[node] - cx, ry = nodes.posY[node] - cy, rz = nodes.posZ[node] - cz;
+        double vx = nodes.velX[node] - cvx, vy = nodes.velY[node] - cvy, vz = nodes.velZ[node] - cvz;
+        double mass = Math.max(0.0, nodes.mass[node]);
+        return mass * (ax * (ry * vz - rz * vy)
+                + ay * (rz * vx - rx * vz) + az * (rx * vy - ry * vx));
+    }
+
+    private static double polarInertia(NodeContainer nodes, int node, double cx, double cy, double cz,
+                                       double ax, double ay, double az) {
+        double rx = nodes.posX[node] - cx, ry = nodes.posY[node] - cy, rz = nodes.posZ[node] - cz;
+        double axial = rx * ax + ry * ay + rz * az;
+        return Math.max(0.0, nodes.mass[node])
+                * Math.max(0.0, rx * rx + ry * ry + rz * rz - axial * axial);
+    }
+
+    private static void applyAngularForce(NodeContainer nodes, int node, double cx, double cy, double cz,
+                                          double ax, double ay, double az, double angularAcceleration) {
+        double rx = nodes.posX[node] - cx, ry = nodes.posY[node] - cy, rz = nodes.posZ[node] - cz;
+        double scale = angularAcceleration * Math.max(0.0, nodes.mass[node]);
+        nodes.forceX[node] += (float) ((ay * rz - az * ry) * scale);
+        nodes.forceY[node] += (float) ((az * rx - ax * rz) * scale);
+        nodes.forceZ[node] += (float) ((ax * ry - ay * rx) * scale);
+    }
+
+    public void reset() {
+        for (int i = 0; i < count; i++) {
+            isDeflated[i] = false;
+            serviceBrakeTorque[i] = 0.0f;
+            brakeAngle[i] = 0.0f;
         }
     }
 

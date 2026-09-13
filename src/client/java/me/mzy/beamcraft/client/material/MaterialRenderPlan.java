@@ -97,10 +97,28 @@ public final class MaterialRenderPlan {
     }
 
     /**
+     * Cutout plan for a material whose colour is a flat factor rather than a texture:
+     * BeamNG writes the stock grille materials as a {@code baseColorFactor} plus an
+     * {@code opacityMap} and no {@code baseColorMap} at all.
+     *
+     * <p>There is no diffuse to sample, so {@link #hasTexture()} is false and the
+     * sampler binds the mask composed over white instead of the plain white fallback;
+     * the colour rides on the factor. That composition is what gives the cutout shader
+     * an alpha to test — without it the part draws as an unbroken panel.
+     */
+    public static MaterialRenderPlan cutoutMaskOnly(String opacityPath, RgbaColor factor, float alphaRef) {
+        String mask = normalizedOpacity(opacityPath);
+        if (mask == null) {
+            return colorOnly(factor);
+        }
+        return new MaterialRenderPlan(RenderMode.CUTOUT, false, null, mask, factor, alphaRef, null);
+    }
+
+    /**
      * Translucent plan: blended in the translucent pass. {@code opacityPath} is
      * optional — without one the diffuse's own baked alpha (and the factor's
      * alpha) drives blending. {@code blendOp} is the BeamNG
-     * {@code translucentBlendOp} ("None" or "Additive"); null/unknown values
+     * {@code translucentBlendOp} ("None", "PreMulAlpha" or "Additive"); null/unknown
      * fall back to normal alpha blending.
      */
     public static MaterialRenderPlan translucent(String diffusePath, String opacityPath, RgbaColor factor,
@@ -151,7 +169,7 @@ public final class MaterialRenderPlan {
         return alphaRef;
     }
 
-    /** The BeamNG {@code translucentBlendOp} string ("None", "Additive"), or null. */
+    /** The BeamNG {@code translucentBlendOp} string ("None", "PreMulAlpha", "Additive"), or null. */
     public String blendOp() {
         return blendOp;
     }

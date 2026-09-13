@@ -18,7 +18,7 @@ public class VoxelSnapshot {
         }
     }
 
-    // 核心替换：使用无装箱的高性能基本类型 Map
+    // 使用无装箱的基本类型 Map
     private final Long2ObjectMap<VoxelCell> cache = new Long2ObjectOpenHashMap<>();
 
     private static final VoxelCell CELL_AIR = new VoxelCell(TYPE_AIR, null);
@@ -49,7 +49,7 @@ public class VoxelSnapshot {
 
         long posLong = asLong(bx, by, bz);
 
-        // Fastutil 的 get 方法，时间复杂度极低的 O(1) 且无垃圾产生
+        // Fastutil 的 get 为 O(1)
         VoxelCell cell = cache.get(posLong);
 
         if (cell == null || cell.type == TYPE_AIR) return false;

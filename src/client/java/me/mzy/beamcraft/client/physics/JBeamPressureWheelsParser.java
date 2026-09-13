@@ -1,3 +1,12 @@
+/*
+ * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
+ * If a copy of the bCDDL was not distributed with this file, see
+ * LICENSES/bCDDL-1.1.txt.
+ *
+ * Pressure-wheel parsing and construction semantics are adapted from
+ * BeamNG.drive lua/common/jbeam/sections/wheels.lua. Java adaptation and
+ * modifications contributed by M1AO and BeamCraft contributors.
+ */
 package me.mzy.beamcraft.client.physics;
 
 import com.google.gson.JsonArray;
@@ -83,8 +92,11 @@ public class JBeamPressureWheelsParser {
                 double hubPeripheryBeamDamp = getVal(activeConfig, "hubPeripheryBeamDamp", 6, entry.variables);
                 double hubSideBeamSpring = getVal(activeConfig, "hubSideBeamSpring", 1351000, entry.variables);
                 double hubSideBeamDamp = getVal(activeConfig, "hubSideBeamDamp", 6, entry.variables);
-                double hubReinfBeamSpring = getVal(activeConfig, "hubReinfBeamSpring", 0, entry.variables);
-                double hubReinfBeamDamp = getVal(activeConfig, "hubReinfBeamDamp", 0, entry.variables);
+                // BeamNG builds hubReinfOptions as a deepcopy of hubSideOptions, so an
+                // unauthored hubReinfBeam{Spring,Damp} falls back to the side values
+                // rather than to zero.
+                double hubReinfBeamSpring = getVal(activeConfig, "hubReinfBeamSpring", hubSideBeamSpring, entry.variables);
+                double hubReinfBeamDamp = getVal(activeConfig, "hubReinfBeamDamp", hubSideBeamDamp, entry.variables);
 
                 // ----- 轮胎参数 -----
                 double tireNodeWeight = getFirstVal(activeConfig, "nodeWeight", "tireWeight", 0.15, entry.variables);
@@ -138,11 +150,16 @@ public class JBeamPressureWheelsParser {
                 double wheelPeripheryBeamStrength = getVal(activeConfig, "wheelPeripheryBeamStrength", 40000, entry.variables);
                 double wheelPeripheryReinfBeamSpring = getVal(activeConfig, "wheelPeripheryReinfBeamSpring", 95000, entry.variables);
                 double wheelPeripheryReinfBeamDamp = getVal(activeConfig, "wheelPeripheryReinfBeamDamp", 23, entry.variables);
+                // Gate defaults follow addPressureWheel, where every one of these is an
+                // `if wheel.enableX then` test: unauthored means nil, i.e. OFF. Only
+                // enableTireLbeams has a gate that reads as on-by-default in practice,
+                // because BeamNG's own tire data authors it. Note the key spelling is
+                // lowercase "Lbeams" in the jbeam data.
                 boolean enableTireReinfBeams = getBool(activeConfig, "enableTireReinfBeams", false);
-                boolean enableTireLBeams = getBool(activeConfig, "enableTireLBeams", true);
-                boolean enableTireSideReinfBeams = getBool(activeConfig, "enableTireSideReinfBeams", true);
-                boolean enableTreadReinfBeams = getBool(activeConfig, "enableTreadReinfBeams", true);
-                boolean enableTirePeripheryReinfBeams = getBool(activeConfig, "enableTirePeripheryReinfBeams", true);
+                boolean enableTireLBeams = getBool(activeConfig, "enableTireLbeams", true);
+                boolean enableTireSideReinfBeams = getBool(activeConfig, "enableTireSideReinfBeams", false);
+                boolean enableTreadReinfBeams = getBool(activeConfig, "enableTreadReinfBeams", false);
+                boolean enableTirePeripheryReinfBeams = getBool(activeConfig, "enableTirePeripheryReinfBeams", false);
                 boolean enableTireSupportBeams = getBool(activeConfig, "enableTireSupportBeams", false);
                 double tireSupportBeamSpring = getVal(activeConfig, "tireSupportBeamSpring", 0, entry.variables);
                 double tireSupportBeamDamp = getVal(activeConfig, "tireSupportBeamDamp", 0, entry.variables);
@@ -166,8 +183,8 @@ public class JBeamPressureWheelsParser {
                 boolean enableABS = getBool(activeConfig, "enableABS", false);
                 double absSlipRatioTarget = getVal(activeConfig, "absSlipRatioTarget", 0.18, entry.variables);
                 double absHz = getVal(activeConfig, "absHz", 100, entry.variables);
-                double brakePressureInDelay = getVal(activeConfig, "brakePressureInDelay", 0.05, entry.variables);
-                double brakePressureOutDelay = getVal(activeConfig, "brakePressureOutDelay", 0.1, entry.variables);
+                double brakePressureInDelay = getVal(activeConfig, "brakePressureInDelay", 0.04, entry.variables);
+                double brakePressureOutDelay = getVal(activeConfig, "brakePressureOutDelay", 0.04, entry.variables);
 
                 // ----- 轮毂盖参数 -----
                 boolean enableHubcaps = getBool(activeConfig, "enableHubcaps", false);
@@ -197,9 +214,14 @@ public class JBeamPressureWheelsParser {
                 // ----- 转向/传动高级节点 -----
                 String steerAxisUp = getStr(activeConfig, "steerAxisUp", null);
                 String steerAxisDown = getStr(activeConfig, "steerAxisDown", null);
-                String torqueCoupling = getStr(activeConfig, "torqueCoupling", null);
-                String torqueArm = getStr(activeConfig, "torqueArm", null);
-                String torqueArm2 = getStr(activeConfig, "torqueArm2", null);
+                // Drivetrain counter-torque is scoped per wheel row (usually inline in BeamNG
+                // data), so reaction fields are read from the row's own object literals first,
+                // falling back to the accumulated wheel state. Reading supports BeamNG's
+                // trailing-colon key spelling ("torqueCoupling:").
+                String torqueCoupling = getRowReactionName(activeConfig, row, "torqueCoupling", null);
+                String torqueArm = getRowReactionName(activeConfig, row, "torqueArm", null);
+                String torqueArm2 = getRowReactionName(activeConfig, row, "torqueArm2", null);
+                String nodeCoupling = getRowReactionName(activeConfig, row, "nodeCoupling", null);
                 String torqueJointNode1 = getStr(activeConfig, "torqueJointNode1", null);
                 String torqueJointNode2 = getStr(activeConfig, "torqueJointNode2", null);
 
@@ -226,6 +248,23 @@ public class JBeamPressureWheelsParser {
                         hubcapNodeWeight, hubcapCenterNodeWeight, hubcapNodeMaterial, hubcapFrictionCoef,
                         hubRadiusSimple
                 ));
+
+                // Store the BeamNG pressure-wheel counter-torque nodes on the slot this hub
+                // just occupied. The reaction fires only at apply time and only when both
+                // torqueCoupling and torqueArm are present (per the BeamNG documentation);
+                // torqueArm2 falls back to the inner axle node, nodeCoupling to the inner
+                // axle node too. Unresolved / absent names resolve to -1 and stay inert.
+                Integer wheelIndex = vehicle.wheels.nameToIndex.get(wheelName);
+                if (wheelIndex != null) {
+                    vehicle.wheels.setReactionNodes(
+                            wheelIndex,
+                            resolveNodeIndex(vehicle, torqueCoupling),
+                            resolveNodeIndex(vehicle, torqueArm),
+                            resolveNodeIndex(vehicle, torqueArm2));
+                    vehicle.wheels.setBrakeCouplingNode(
+                            wheelIndex,
+                            resolveNodeIndex(vehicle, nodeCoupling));
+                }
 
                 if (hasTire) {
                     vehicle.wheels.generateTire(new PhysicsSpecs.WheelTireSpec(
@@ -270,23 +309,44 @@ public class JBeamPressureWheelsParser {
     }
 
     private static String getStr(JsonObject config, String key, String def) {
-        if (!config.has(key)) return def;
-        JsonElement el = config.get(key);
-        if (el.isJsonNull()) return def;
-        return el.getAsString();
+        return JBeamParser.getStringSafe(config, key, def);
     }
 
     private static double getFirstVal(JsonObject config, String key1, String key2, double def, Map<String, Double> vars) {
-        if (config.has(key1)) return JBeamParser.getDoubleSafe(config, key1, def, vars);
-        if (config.has(key2)) return JBeamParser.getDoubleSafe(config, key2, def, vars);
-        return def;
+        return JBeamParser.getFirstDoubleSafe(config, key1, key2, def, vars);
     }
 
     private static boolean getBool(JsonObject config, String key, boolean def) {
-        if (!config.has(key)) return def;
-        JsonElement el = config.get(key);
-        if (el.isJsonNull()) return def;
-        String val = el.getAsString().toLowerCase();
-        return val.equals("true") || val.equals("1");
+        return JBeamParser.getBooleanSafe(config, key, def);
+    }
+
+    /**
+     * Reads a per-wheel node-name reaction field (torqueCoupling/torqueArm/torqueArm2/
+     * nodeCoupling). BeamNG scopes these to the wheel row, typically as an object literal
+     * appended to that row, so row-scoped values take precedence over the accumulated wheel
+     * state. Both plain keys and BeamNG's trailing-colon spellings ("torqueCoupling:") are
+     * honoured.
+     */
+    private static String getRowReactionName(JsonObject activeConfig, JsonArray row, String key, String def) {
+        for (int i = 8; i < row.size(); i++) {
+            if (!row.get(i).isJsonObject()) continue;
+            JsonObject rowModifier = row.get(i).getAsJsonObject();
+            JsonElement value = rowModifier.get(key);
+            if (value == null) value = rowModifier.get(key + ":");
+            if (value != null && !value.isJsonNull()) {
+                try { return value.getAsString(); } catch (Exception ignored) { return def; }
+            }
+        }
+        JsonElement value = activeConfig.get(key);
+        if (value == null) value = activeConfig.get(key + ":");
+        if (value == null || value.isJsonNull()) return def;
+        try { return value.getAsString(); } catch (Exception ignored) { return def; }
+    }
+
+    /** Resolves a node name to its NodeContainer index, or -1 when absent/invalid. */
+    private static int resolveNodeIndex(SoftBodyVehicle vehicle, String nodeName) {
+        if (nodeName == null || nodeName.isEmpty()) return -1;
+        Integer index = vehicle.nodes.nameToIndex.get(nodeName);
+        return index != null ? index : -1;
     }
 }

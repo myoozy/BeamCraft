@@ -1,5 +1,8 @@
 package me.mzy.beamcraft.texture;
 
+import java.util.Arrays;
+import java.util.stream.IntStream;
+
 /**
  * Pure-Java DDS (DirectDraw Surface) decoder that expands a surface to RGBA8
  * {@link DecodedImage}. It has no dependencies on OpenGL, Vulkan, Minecraft
@@ -396,27 +399,81 @@ public final class DdsDecoder {
         return rowBytes;
     }
 
+    /**
+     * Working buffers for one decode pass, reused across every block.
+     *
+     * <p>A block decoder runs once per 4×4 block, and a 4096×4096 surface is a
+     * million of them. Allocating the working arrays inside that loop cost about
+     * eight objects per block — several million short-lived arrays per texture —
+     * and dominated the decode time; reusing them is what makes a large surface
+     * decode in tens of milliseconds instead of hundreds.
+     *
+     * <p>Buffers the decoders fill completely before reading need no clearing
+     * ({@link #indices}, {@link #alpha}); {@link #endpoints} is only partly written
+     * per mode, so it is zeroed each block to match the fresh-array behaviour it
+     * replaces.
+     */
+    private static final class BlockScratch {
+        final int[][] endpoints = new int[6][4];
+        final int[] indices = new int[16];
+        final int[] alpha = new int[8];
+        final BitStream bitStream = new BitStream();
+
+        void clearEndpoints() {
+            for (int[] row : endpoints) {
+                Arrays.fill(row, 0);
+            }
+        }
+    }
+
+    /** Block count from which splitting the rows across threads pays for itself. */
+    private static final int PARALLEL_BLOCK_THRESHOLD = 4096;
+
     private static void decodeBlocks(DdsFormat format, byte[] src, int start, byte[] out,
                                      int width, int height) throws DdsDecodeException {
         int blocksX = format.blocksX(width);
         int blocksY = format.blocksY(height);
-        int offset = start;
         int bytesPerBlock = format.bytesPerBlock;
-        for (int by = 0; by < blocksY; by++) {
-            for (int bx = 0; bx < blocksX; bx++) {
-                if (offset + bytesPerBlock > src.length) {
-                    throw new DdsDecodeException("DDS surface truncated inside block data");
-                }
-                switch (format) {
-                    case BC1 -> decodeBC1Block(src, offset, out, width, height, bx * 4, by * 4);
-                    case BC2 -> decodeBC2Block(src, offset, out, width, height, bx * 4, by * 4);
-                    case BC3 -> decodeBC3Block(src, offset, out, width, height, bx * 4, by * 4);
-                    case BC4 -> decodeBC4Block(src, offset, out, width, height, bx * 4, by * 4);
-                    case BC7 -> decodeBC7Block(src, offset, out, width, height, bx * 4, by * 4);
-                    default -> throw new AssertionError(format);
-                }
-                offset += bytesPerBlock;
+
+        // Checked once up front instead of per block: the first block whose bytes are
+        // missing is always the last one, so this is the same condition the per-block
+        // check expressed, and it lets the parallel path report it without smuggling an
+        // exception out of a lambda.
+        if ((long) start + (long) blocksX * blocksY * bytesPerBlock > src.length) {
+            throw new DdsDecodeException("DDS surface truncated inside block data");
+        }
+
+        if ((long) blocksX * blocksY >= PARALLEL_BLOCK_THRESHOLD) {
+            IntStream.range(0, blocksY).parallel().forEach(by -> decodeBlockRow(
+                    format, src, start, out, width, height, blocksX, bytesPerBlock, by,
+                    new BlockScratch()));
+        } else {
+            BlockScratch scratch = new BlockScratch();
+            for (int by = 0; by < blocksY; by++) {
+                decodeBlockRow(format, src, start, out, width, height, blocksX, bytesPerBlock, by, scratch);
             }
+        }
+    }
+
+    /**
+     * Decodes one row of blocks. Rows write disjoint regions of {@code out}, which is
+     * what makes the parallel split above safe; each row carries its own
+     * {@link BlockScratch} because those buffers are mutable working state.
+     */
+    private static void decodeBlockRow(DdsFormat format, byte[] src, int start, byte[] out, int width,
+                                       int height, int blocksX, int bytesPerBlock, int by,
+                                       BlockScratch scratch) {
+        int offset = start + (int) ((long) by * blocksX * bytesPerBlock);
+        for (int bx = 0; bx < blocksX; bx++) {
+            switch (format) {
+                case BC1 -> decodeBC1Block(src, offset, out, width, height, bx * 4, by * 4);
+                case BC2 -> decodeBC2Block(src, offset, out, width, height, bx * 4, by * 4);
+                case BC3 -> decodeBC3Block(src, offset, out, width, height, bx * 4, by * 4, scratch);
+                case BC4 -> decodeBC4Block(src, offset, out, width, height, bx * 4, by * 4, scratch);
+                case BC7 -> decodeBC7Block(src, offset, out, width, height, bx * 4, by * 4, scratch);
+                default -> throw new AssertionError(format);
+            }
+            offset += bytesPerBlock;
         }
     }
 
@@ -569,9 +626,10 @@ public final class DdsDecoder {
     }
 
     private static void decodeBC3Block(byte[] src, int off, byte[] out, int width, int height,
-                                       int baseX, int baseY) {
+                                       int baseX, int baseY, BlockScratch scratch) {
         decodeBC1ColorBlock(src, off + 8, out, width, height, baseX, baseY, true);
-        int[] alpha = alphaPalette(src[off] & 0xFF, src[off + 1] & 0xFF);
+        int[] alpha = scratch.alpha;
+        alphaPalette(src[off] & 0xFF, src[off + 1] & 0xFF, alpha);
         long indices = readLongLE6(src, off + 2);
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
@@ -586,8 +644,9 @@ public final class DdsDecoder {
     }
 
     private static void decodeBC4Block(byte[] src, int off, byte[] out, int width, int height,
-                                       int baseX, int baseY) {
-        int[] values = alphaPalette(src[off] & 0xFF, src[off + 1] & 0xFF);
+                                       int baseX, int baseY, BlockScratch scratch) {
+        int[] values = scratch.alpha;
+        alphaPalette(src[off] & 0xFF, src[off + 1] & 0xFF, values);
         long indices = readLongLE6(src, off + 2);
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
@@ -611,26 +670,24 @@ public final class DdsDecoder {
      * round-to-nearest fixed-point weights. When {@code v0 <= v1} the palette
      * is 6 interpolated values plus the two special 0 and 255 entries.
      */
-    private static int[] alphaPalette(int v0, int v1) {
-        int[] a = new int[8];
-        a[0] = v0;
-        a[1] = v1;
+    private static void alphaPalette(int v0, int v1, int[] out) {
+        out[0] = v0;
+        out[1] = v1;
         if (v0 > v1) {
-            a[2] = (W6[5] * v0 + W6[0] * v1 + 32768) >>> 16;
-            a[3] = (W6[4] * v0 + W6[1] * v1 + 32768) >>> 16;
-            a[4] = (W6[3] * v0 + W6[2] * v1 + 32768) >>> 16;
-            a[5] = (W6[2] * v0 + W6[3] * v1 + 32768) >>> 16;
-            a[6] = (W6[1] * v0 + W6[4] * v1 + 32768) >>> 16;
-            a[7] = (W6[0] * v0 + W6[5] * v1 + 32768) >>> 16;
+            out[2] = (W6[5] * v0 + W6[0] * v1 + 32768) >>> 16;
+            out[3] = (W6[4] * v0 + W6[1] * v1 + 32768) >>> 16;
+            out[4] = (W6[3] * v0 + W6[2] * v1 + 32768) >>> 16;
+            out[5] = (W6[2] * v0 + W6[3] * v1 + 32768) >>> 16;
+            out[6] = (W6[1] * v0 + W6[4] * v1 + 32768) >>> 16;
+            out[7] = (W6[0] * v0 + W6[5] * v1 + 32768) >>> 16;
         } else {
-            a[2] = (W4[3] * v0 + W4[0] * v1 + 32768) >>> 16;
-            a[3] = (W4[2] * v0 + W4[1] * v1 + 32768) >>> 16;
-            a[4] = (W4[1] * v0 + W4[2] * v1 + 32768) >>> 16;
-            a[5] = (W4[0] * v0 + W4[3] * v1 + 32768) >>> 16;
-            a[6] = 0;
-            a[7] = 255;
+            out[2] = (W4[3] * v0 + W4[0] * v1 + 32768) >>> 16;
+            out[3] = (W4[2] * v0 + W4[1] * v1 + 32768) >>> 16;
+            out[4] = (W4[1] * v0 + W4[2] * v1 + 32768) >>> 16;
+            out[5] = (W4[0] * v0 + W4[3] * v1 + 32768) >>> 16;
+            out[6] = 0;
+            out[7] = 255;
         }
-        return a;
     }
 
     private static final int[] W6 = {9363, 18724, 28086, 37450, 46812, 56173};
@@ -655,7 +712,7 @@ public final class DdsDecoder {
         private long low;
         private long high;
 
-        BitStream(long low, long high) {
+        void reset(long low, long high) {
             this.low = low;
             this.high = high;
         }
@@ -679,8 +736,9 @@ public final class DdsDecoder {
     }
 
     private static void decodeBC7Block(byte[] src, int off, byte[] out, int width, int height,
-                                       int baseX, int baseY) {
-        BitStream bs = new BitStream(readLongLE(src, off), readLongLE(src, off + 8));
+                                       int baseX, int baseY, BlockScratch scratch) {
+        BitStream bs = scratch.bitStream;
+        bs.reset(readLongLE(src, off), readLongLE(src, off + 8));
 
         int mode = 0;
         while (mode < 8 && bs.readBit() == 0) {
@@ -708,7 +766,8 @@ public final class DdsDecoder {
             }
         }
 
-        int[][] endpoints = new int[6][4];
+        scratch.clearEndpoints();
+        int[][] endpoints = scratch.endpoints;
         for (int channel = 0; channel < 3; channel++) {
             for (int e = 0; e < numEndpoints; e++) {
                 endpoints[e][channel] = bs.readBits(BC7_RGB_PREC[mode]);
@@ -772,7 +831,7 @@ public final class DdsDecoder {
         int[][][] partitionTable = numPartitions == 1 ? null : partitions;
 
         // Pass 1: primary colour indices (fix-up index has one fewer bit).
-        int[] indices = new int[16];
+        int[] indices = scratch.indices;
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
                 int ps = numPartitions == 1 ? ((x | y) != 0 ? 0 : 128)

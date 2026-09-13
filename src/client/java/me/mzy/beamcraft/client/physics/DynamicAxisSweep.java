@@ -4,14 +4,14 @@ import java.util.Arrays;
 
 /**
  * 动态 1D 扫掠与裁剪加速结构 (Dynamic Sweep and Prune)
- * 实时计算方差最大的轴进行扫掠，彻底免疫单轴拥挤
+ * 每次选取跨度最大的轴作为排序轴，避免单轴拥挤
  */
 public class DynamicAxisSweep {
     private static final int MAX_NODES = 16384;
 
     private final long[] sortKeys = new long[MAX_NODES];
 
-    // 为了统一坐标判断，现在缓存 X, Y, Z 三个坐标
+    // 缓存 X, Y, Z 三个坐标，统一坐标判断
     private final double[] cacheX = new double[MAX_NODES];
     private final double[] cacheY = new double[MAX_NODES];
     private final double[] cacheZ = new double[MAX_NODES];
@@ -47,8 +47,6 @@ public class DynamicAxisSweep {
         double minZ = cacheZ[0], maxZ = cacheZ[0];
 
         for (int i = 0; i < count; i++) {
-            // 更新坐标 (这里你可以加入车辆实体位移更新的逻辑)
-            // ...
             double x = cacheX[i], y = cacheY[i], z = cacheZ[i];
             if (x < minX) minX = x; if (x > maxX) maxX = x;
             if (y < minY) minY = y; if (y > maxY) maxY = y;
@@ -70,20 +68,18 @@ public class DynamicAxisSweep {
             long intVal = Double.doubleToRawLongBits(val);
             if (intVal < 0) intVal = Long.MIN_VALUE - intVal;
 
-            long origIdx = sortKeys[i] & 0xFFFFFFFFL;
-            // 如果是初次插入，origIdx 可能是错的，所以这里简单处理直接取当前索引 i
-            // 也可以每帧从头排序，Arrays.sort 的 Dual-Pivot 对基本类型极快
+            // 高 32 位是排序键，低 32 位存放节点索引 (queryNodesInAABB 取回为 origIdx)
             sortKeys[i] = (intVal & 0xFFFFFFFF00000000L) | (i & 0xFFFFFFFFL);
         }
 
-        // 3. 排序 (由于轴可能切换，这里用原生的 Arrays.sort 最稳妥)
+        // 3. 排序 (主轴可能切换，每次重新排序)
         Arrays.sort(sortKeys, 0, count);
     }
 
     public void queryNodesInAABB(double minX, double minY, double minZ, double maxX, double maxY, double maxZ, SweepResultBuffer result) {
         if (count == 0) return;
 
-        // 获取当前主轴的目标范围
+        // 当前主轴的目标范围
         double targetMin = (activeAxis == 0) ? minX : ((activeAxis == 1) ? minY : minZ);
         double targetMax = (activeAxis == 0) ? maxX : ((activeAxis == 1) ? maxY : maxZ);
 
@@ -108,11 +104,11 @@ public class DynamicAxisSweep {
 
         for (int i = startIdx; i < count; i++) {
             long key = sortKeys[i];
-            if (key > maxKeyLimit) break; // 超过当前轴最大值，直接 Prune 裁剪
+            if (key > maxKeyLimit) break; // 超过当前轴最大值，提前结束
 
             int origIdx = (int) (key & 0xFFFFFFFFL);
 
-            // 统一的精细 AABB 裁剪
+            // 精细 AABB 裁剪
             double x = cacheX[origIdx], y = cacheY[origIdx], z = cacheZ[origIdx];
             if (x < minX || x > maxX || y < minY || y > maxY || z < minZ || z > maxZ) continue;
 

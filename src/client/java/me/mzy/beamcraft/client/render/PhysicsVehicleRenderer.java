@@ -116,7 +116,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             Matrix4f projection = RenderSystem.getProjectionMatrix();
 
             if (!flex.skinningPipeline.getSubMeshRanges().isEmpty()) {
-                renderSubMeshes(flex, modelView, projection, packedLight);
+                renderSubMeshes(vehicle, flex, modelView, projection, packedLight);
             } else {
                 // No per-material ranges computed: draw the whole mesh against the
                 // shared white fallback texture, which is always a valid Sampler0.
@@ -167,12 +167,12 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * {@code entity_cutout} shader and depth-write state; only their textures
      * differ (cutout materials carry an alpha map composed into the diffuse).
      */
-    private void renderSubMeshes(FlexbodyContainer flex, Matrix4f modelView,
+    private void renderSubMeshes(SoftBodyVehicle vehicle, FlexbodyContainer flex, Matrix4f modelView,
                                  Matrix4f projection, int packedLight) {
         List<RangeDraw> opaqueCutout = new ArrayList<>();
         List<RangeDraw> translucent = new ArrayList<>();
         for (SubMeshRange range : flex.skinningPipeline.getSubMeshRanges()) {
-            MaterialDefinition material = resolveMaterial(flex, range);
+            MaterialDefinition material = resolveMaterial(vehicle, flex, range);
             MaterialRenderPlan plan = MaterialRenderPlanner.plan(material);
             if (plan.mode() == MaterialRenderPlan.RenderMode.TRANSLUCENT) {
                 translucent.add(new RangeDraw(range, plan, material));
@@ -181,8 +181,18 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             }
         }
 
+        // The pass enabled culling for everything; a declared double-sided shell has to
+        // relax it for its own range, or a grille is invisible from one side.
+        Set<String> meshMaterialNames = collectMeshMaterialNames(flex);
         for (RangeDraw draw : opaqueCutout) {
+            boolean doubleSided = isDoubleSided(draw.range().materialName, meshMaterialNames, draw.material());
+            if (doubleSided) {
+                RenderSystem.disableCull();
+            }
             drawRangeWithPlan(flex, draw, modelView, projection, packedLight);
+            if (doubleSided) {
+                RenderSystem.enableCull();
+            }
         }
         if (!translucent.isEmpty()) {
             drawTranslucentRanges(flex, translucent, modelView, projection, packedLight);
@@ -251,7 +261,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
                     continue;
                 }
                 MaterialDefinition material = materialByRange.get(range);
-                boolean doubleSided = isDoubleSidedTranslucentGlass(
+                boolean doubleSided = isDoubleSided(
                         range.materialName, meshMaterialNames, material);
                 if (doubleSided) {
                     RenderSystem.disableCull();
@@ -330,22 +340,24 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // conditionally assigned above).
         final TextureResource capturedDiffuse = diffuse;
         final TextureResource capturedOpacity = opacity;
-        boolean composedAvailable = diffuse != null && opacity != null;
+        boolean composedAvailable = composedAvailable(plan, diffuse != null, opacity != null);
         return resolveSampler0Texture(
                 plan,
                 diffuse != null,
                 composedAvailable,
-                () -> VehicleTextureUploader.INSTANCE.getOrUploadComposed(capturedDiffuse, capturedOpacity, namespace),
+                () -> VehicleTextureUploader.INSTANCE.getOrUploadComposed(capturedDiffuse, capturedOpacity,
+                        namespace, isPremultipliedBlend(plan.blendOp())),
                 () -> VehicleTextureUploader.INSTANCE.getOrUpload(capturedDiffuse, namespace),
                 VehicleTextureUploader.INSTANCE::getWhiteTexture);
     }
 
     /**
      * Pure per-sub-mesh decision for which GL texture to bind as vanilla
-     * {@code Sampler0}. An opacity-carrying plan whose diffuse <em>and</em>
-     * opacity both resolved binds the composed texture; otherwise the decision
-     * degrades to {@link #resolveDiffuseTexture} (diffuse when it resolved,
-     * white otherwise). This pins the Iris-fix contract: the renderer never
+     * {@code Sampler0}. An opacity-carrying plan whose mask resolved binds the
+     * composed texture — over the diffuse when there is one, over white when the
+     * material is a flat colour; otherwise the decision degrades to
+     * {@link #resolveDiffuseTexture} (diffuse when it resolved, white otherwise).
+     * This pins the Iris-fix contract: the renderer never
      * binds a missing/unregistered texture for any sub-mesh, and a missing
      * opacity map can never take a whole vehicle down.
      */
@@ -365,6 +377,18 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * renderer never binds a missing/unregistered texture (the removed
      * {@code vehicle_default} placeholder) for any sub-mesh.
      */
+    /**
+     * Whether the composed diffuse+opacity texture can be built for this sub-mesh.
+     *
+     * <p>A plan with no colour map needs only the mask: it composes over white, which
+     * is how a flat-colour grille material gets an alpha for the cutout shader to test.
+     * A textured plan needs both halves — a missing diffuse must keep falling back to
+     * white rather than let the mask stand in for colour.
+     */
+    static boolean composedAvailable(MaterialRenderPlan plan, boolean diffuseResolved, boolean opacityResolved) {
+        return opacityResolved && (!plan.hasTexture() || diffuseResolved);
+    }
+
     static int resolveDiffuseTexture(MaterialRenderPlan plan, boolean resolved,
                                      IntSupplier upload, IntSupplier white) {
         if (plan.hasTexture() && resolved) {
@@ -375,16 +399,45 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
     /**
      * Pure, unit-tested blend pair for a BeamNG {@code translucentBlendOp}.
-     * Only "Additive" is handled specially (src = SRC_ALPHA, dst = ONE); every
-     * other value — "None", null, anything unknown — falls back to normal alpha
-     * blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA). No other BeamNG blend mode is
-     * guessed.
+     * "Additive" (src = SRC_ALPHA, dst = ONE) and "PreMulAlpha" (src = ONE,
+     * dst = ONE_MINUS_SRC_ALPHA) are handled; every other value — "None", null,
+     * anything unknown — falls back to normal alpha blending (SRC_ALPHA,
+     * ONE_MINUS_SRC_ALPHA). Other BeamNG ops in the stock library ("Add", "Sub",
+     * "AddAlpha", four materials between them) are deliberately not guessed.
      */
     static int[] blendFuncFor(String blendOp) {
         if (blendOp != null && blendOp.trim().equalsIgnoreCase("Additive")) {
             return new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE};
         }
+        if (isPremultipliedBlend(blendOp)) {
+            return new int[]{GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA};
+        }
         return new int[]{GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA};
+    }
+
+    /**
+     * True when the material's blend op expects premultiplied colour. This has to agree
+     * with how the mask is composed, which is why the composition takes the same answer:
+     * premultiplied blending reads the source rgb as already scaled by its alpha, so a
+     * mask applied to alpha alone would leave its soft edges glowing.
+     */
+    static boolean isPremultipliedBlend(String blendOp) {
+        return MaterialDefinition.isPremultipliedBlend(blendOp);
+    }
+
+    /**
+     * Whether a range is drawn without back-face culling. The asset's own
+     * {@code doubleSided} flag is honoured first — 64 materials in the stock library
+     * declare it, and the ones that matter are thin shells like a grille or a vent that
+     * are single surfaces seen from both sides — with the glass-provenance heuristic
+     * kept as the fallback for materials that do not declare it.
+     */
+    static boolean isDoubleSided(String rawMaterialName, Set<String> meshMaterialNames,
+                                 MaterialDefinition resolvedMaterial) {
+        if (resolvedMaterial != null && resolvedMaterial.doubleSided) {
+            return true;
+        }
+        return isDoubleSidedTranslucentGlass(rawMaterialName, meshMaterialNames, resolvedMaterial);
     }
 
     /**
@@ -594,13 +647,70 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * the namespace's static glowMap aliases, then the common library). Returns
      * null when nothing resolves, after a one-time warning.
      */
-    private MaterialDefinition resolveMaterial(FlexbodyContainer flex, SubMeshRange range) {
+    private MaterialDefinition resolveMaterial(SoftBodyVehicle vehicle, FlexbodyContainer flex,
+                                               SubMeshRange range) {
         String namespace = flex.vehicleNamespace;
-        MaterialDefinition material = MaterialLibrary.getMaterial(namespace, range.materialName);
-        if (material == null) {
+        MaterialDefinition baseMaterial = MaterialLibrary.getMaterial(namespace, range.materialName);
+        String selectedName = range.materialName;
+        if (0 <= range.meshIndex && range.meshIndex < flex.meshCount) {
+            String group = flex.deformGroup[range.meshIndex];
+            selectedName = selectDeformMaterialName(
+                    flex, range.meshIndex, range.materialName, baseMaterial,
+                    vehicle.isDeformGroupTriggered(group));
+        }
+
+        if (!java.util.Objects.equals(selectedName, range.materialName)) {
+            if (shouldKeepInvisibleGlassFallback(selectedName, baseMaterial)) {
+                return baseMaterial;
+            }
+            MaterialDefinition damagedMaterial = MaterialLibrary.getMaterial(namespace, selectedName);
+            if (damagedMaterial != null) {
+                return damagedMaterial;
+            }
+            warnOnceMissingDamagedMaterial(namespace, selectedName, range.materialName);
+        }
+
+        if (baseMaterial == null) {
             warnOnceMissingMaterial(namespace, range.materialName);
         }
-        return material;
+        return baseMaterial;
+    }
+
+    static String selectDeformMaterialName(FlexbodyContainer flex, int meshIndex,
+                                           String rawMaterialName, MaterialDefinition resolvedMaterial,
+                                           boolean deformGroupTriggered) {
+        if (!deformGroupTriggered || flex == null || rawMaterialName == null
+                || meshIndex < 0 || meshIndex >= flex.meshCount) {
+            return rawMaterialName;
+        }
+        String base = flex.deformMaterialBase[meshIndex];
+        String damaged = flex.deformMaterialDamaged[meshIndex];
+        if (base == null || base.isEmpty() || damaged == null || damaged.isEmpty()) {
+            return rawMaterialName;
+        }
+        if (base.equalsIgnoreCase(rawMaterialName)
+                || resolvedMaterial != null && (base.equalsIgnoreCase(resolvedMaterial.name)
+                || base.equalsIgnoreCase(resolvedMaterial.mapTo))) {
+            return damaged;
+        }
+        return rawMaterialName;
+    }
+
+    /**
+     * BeamNG uses {@code glass_mirror} as a dynamic-cubemap-only material on
+     * separate crack geometry (notably BX's {@code *_windshield_dmg} mesh).
+     * Without cubemap support it degrades to an opaque white sheet, so keep the
+     * mesh's intact invisible material and let the primary pane's damaged
+     * texture carry the visible cracks.
+     */
+    static boolean shouldKeepInvisibleGlassFallback(String damagedMaterialName,
+                                                     MaterialDefinition intactMaterial) {
+        if (damagedMaterialName == null || intactMaterial == null
+                || !damagedMaterialName.equalsIgnoreCase("glass_mirror")) {
+            return false;
+        }
+        return "glass_invisible".equalsIgnoreCase(intactMaterial.name)
+                || "glass_invisible".equalsIgnoreCase(intactMaterial.mapTo);
     }
 
     private static void warnOnceMissingMaterial(String namespace, String materialName) {
@@ -609,6 +719,17 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
             BeamCraft.LOGGER.warn(
                     "BeamCraft: no material found for DAE submesh '{}' (namespace '{}'); rendering colour-only",
                     materialName, namespace);
+        }
+    }
+
+    private static void warnOnceMissingDamagedMaterial(String namespace, String damagedMaterial,
+                                                       String originalMaterial) {
+        String key = namespace + ":deform:" + damagedMaterial;
+        if (WARNED_MISSING_MATERIALS.add(key)) {
+            BeamCraft.LOGGER.warn(
+                    "BeamCraft: damaged material '{}' (namespace '{}') for DAE submesh '{}' was not found; "
+                            + "keeping its intact material",
+                    damagedMaterial, namespace, originalMaterial);
         }
     }
 

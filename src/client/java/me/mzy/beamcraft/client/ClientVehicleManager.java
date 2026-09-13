@@ -1,5 +1,7 @@
 package me.mzy.beamcraft.client;
 
+import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
+import me.mzy.beamcraft.client.debug.LoadTiming;
 import me.mzy.beamcraft.client.material.MaterialLibrary;
 import me.mzy.beamcraft.client.model.DaeMeshLoader;
 import me.mzy.beamcraft.client.model.FlexbodyBindingUtil;
@@ -14,13 +16,24 @@ import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 
+import java.io.File;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public final class ClientVehicleManager {
 
+    private static final double ROBUST_BOUNDS_MIN_RADIUS = 4.0;
+    private static final double ROBUST_BOUNDS_RADIUS_PADDING = 2.0;
+    private static final double ROBUST_BOUNDS_BOX_PADDING = 1.0;
+    private static float[] boundsScratch = new float[NodeContainer.INIT_NODE_CAP];
+
     private static final Map<Integer, SoftBodyVehicle> VEHICLE_MAP = new HashMap<>();
+    private static final VehicleLoadFailureCache LOAD_FAILURES = new VehicleLoadFailureCache();
 
     // Reused for every vehicle because each upload is completed before the next
     // vehicle overwrites these interpolation arrays.
@@ -44,10 +57,15 @@ public final class ClientVehicleManager {
 
             int entityId = vehicleEntity.getId();
             SoftBodyVehicle existing = VEHICLE_MAP.get(entityId);
-            if (existing == null) {
-                createVehicle(client, vehicleEntity);
-            } else {
+            LOAD_FAILURES.removeStale(entityId, vehicleEntity.getUuid());
+            if (existing != null) {
                 updateEntityBounds(existing);
+            } else if (LOAD_FAILURES.shouldAttempt(
+                    entityId,
+                    vehicleEntity.getUuid(),
+                    vehicleEntity.getRootPartName(),
+                    vehicleEntity.getPcFileName())) {
+                createVehicle(client, vehicleEntity);
             }
         }
 
@@ -71,16 +89,35 @@ public final class ClientVehicleManager {
         SoftBodyVehicle softBody = new SoftBodyVehicle(vehicleEntity);
         Map<String, com.google.gson.JsonObject> localRegistry = new HashMap<>();
         Map<String, String> localConfig = new HashMap<>();
-        JBeamLoader.loadVehicle(
-                BeamCraftClient.VEHICLES_DIR,
+        List<File> assetRoots = BeamCraftConfigManager.assetRoots();
+
+        long totalStart = LoadTiming.start();
+        long phaseStart = LoadTiming.start();
+        if (!JBeamLoader.loadVehicle(
+                assetRoots,
                 rootPart,
                 vehicleEntity.getPcFileName(),
                 localRegistry,
                 localConfig
-        );
+        )) {
+            // The named .pc could not be resolved. Stopping here is the point: an
+            // empty userConfig assembles every slot from its default part, so
+            // carrying on would produce a vehicle other than the one that was asked
+            // for, with nothing reported.
+            LOAD_FAILURES.recordFailure(
+                    vehicleEntity.getId(),
+                    vehicleEntity.getUuid(),
+                    rootPart,
+                    vehicleEntity.getPcFileName());
+            System.err.println("Vehicle load failed for entity " + vehicleEntity.getId());
+            return;
+        }
+        LoadTiming.log("[load 1/4] JBeam scan + parse", phaseStart);
 
-        DaeMeshLoader.requireVehicleModels(BeamCraftClient.VEHICLES_DIR, rootPart);
-        MaterialLibrary.requireMaterials(BeamCraftClient.VEHICLES_DIR, rootPart);
+        // Assembly comes before the mesh import because the flexbody table it builds
+        // is what names the meshes this vehicle needs. Importing by name is what keeps
+        // the load off the ~615 MB of common assets the vehicle never touches.
+        phaseStart = LoadTiming.start();
         boolean assembled = new JBeamAssembler().assembleVehicle(
                 rootPart,
                 localConfig,
@@ -88,16 +125,43 @@ public final class ClientVehicleManager {
                 softBody
         );
         if (!assembled) {
-            DaeMeshLoader.releaseVehicleModels(rootPart);
-            MaterialLibrary.releaseMaterials(rootPart);
+            // Nothing has been acquired yet here, so there is nothing to release —
+            // releasing would unbalance a live sibling instance's ref count.
+            LOAD_FAILURES.recordFailure(
+                    vehicleEntity.getId(),
+                    vehicleEntity.getUuid(),
+                    rootPart,
+                    vehicleEntity.getPcFileName());
             System.err.println("Vehicle assembly failed for entity " + vehicleEntity.getId());
             return;
         }
+        LoadTiming.log("[load 2/4] assembly", phaseStart);
+
+        phaseStart = LoadTiming.start();
+        MaterialLibrary.requireMaterials(assetRoots, rootPart);
+        LoadTiming.log("[load 3/4] material index", phaseStart);
+
+        phaseStart = LoadTiming.start();
+        DaeMeshLoader.requireMeshes(assetRoots, rootPart, flexbodyMeshNames(softBody));
+        LoadTiming.log("[load 4/4] mesh import", phaseStart);
+
+        LoadTiming.log("[load total] vehicle load (" + rootPart + ")", totalStart);
 
         float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
         softBody.nodes.rotateNodes(playerYaw, 0, 0);
         BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
         VEHICLE_MAP.put(vehicleEntity.getId(), softBody);
+        LOAD_FAILURES.recordSuccess(vehicleEntity.getId());
+    }
+
+    /** The mesh names the assembled vehicle's flexbodies resolve against. */
+    private static List<String> flexbodyMeshNames(SoftBodyVehicle vehicle) {
+        FlexbodyContainer flex = vehicle.flexbodies;
+        List<String> names = new ArrayList<>(flex.meshCount);
+        for (int mesh = 0; mesh < flex.meshCount; mesh++) {
+            names.add(flex.meshName[mesh]);
+        }
+        return names;
     }
 
     private static void updateEntityBounds(SoftBodyVehicle vehicle) {
@@ -106,17 +170,77 @@ public final class ClientVehicleManager {
             return;
         }
 
+        double entityX = vehicle.parentEntity.getX();
+        double entityY = vehicle.parentEntity.getY();
+        double entityZ = vehicle.parentEntity.getZ();
+        Box localBounds = computeRobustLocalBounds(nodes);
+        vehicle.parentEntity.setBoundingBox(localBounds.offset(entityX, entityY, entityZ));
+    }
+
+    /**
+     * Builds a render/interaction envelope around the main vehicle body without
+     * allowing a detached node to expand the Minecraft entity AABB indefinitely.
+     * The coordinate-wise median follows the majority of the nodes and is not
+     * displaced by a small detached group. The undeformed vehicle diagonal
+     * supplies a vehicle-specific acceptance radius, so this also works for
+     * vehicles much larger than a passenger car.
+     */
+    static Box computeRobustLocalBounds(NodeContainer nodes) {
+        ensureBoundsScratchCapacity(nodes.count);
+        float centerX = NodeContainer.medianOfFinite(nodes.renderSnapCurrX, nodes.count, boundsScratch);
+        float centerY = NodeContainer.medianOfFinite(nodes.renderSnapCurrY, nodes.count, boundsScratch);
+        float centerZ = NodeContainer.medianOfFinite(nodes.renderSnapCurrZ, nodes.count, boundsScratch);
+
+        double baseMinX = Double.POSITIVE_INFINITY;
+        double baseMinY = Double.POSITIVE_INFINITY;
+        double baseMinZ = Double.POSITIVE_INFINITY;
+        double baseMaxX = Double.NEGATIVE_INFINITY;
+        double baseMaxY = Double.NEGATIVE_INFINITY;
+        double baseMaxZ = Double.NEGATIVE_INFINITY;
+        for (int node = 0; node < nodes.count; node++) {
+            double x = nodes.baseX[node];
+            double y = nodes.baseY[node];
+            double z = nodes.baseZ[node];
+            if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
+                continue;
+            }
+            baseMinX = Math.min(baseMinX, x);
+            baseMinY = Math.min(baseMinY, y);
+            baseMinZ = Math.min(baseMinZ, z);
+            baseMaxX = Math.max(baseMaxX, x);
+            baseMaxY = Math.max(baseMaxY, y);
+            baseMaxZ = Math.max(baseMaxZ, z);
+        }
+
+        double baseDiagonal = 0.0;
+        if (Double.isFinite(baseMinX)) {
+            baseDiagonal = Math.sqrt(
+                    square(baseMaxX - baseMinX)
+                            + square(baseMaxY - baseMinY)
+                            + square(baseMaxZ - baseMinZ)
+            );
+        }
+        double radius = Math.max(ROBUST_BOUNDS_MIN_RADIUS,
+                baseDiagonal + ROBUST_BOUNDS_RADIUS_PADDING);
+        double radiusSquared = radius * radius;
+
         double minX = Double.POSITIVE_INFINITY;
         double minY = Double.POSITIVE_INFINITY;
         double minZ = Double.POSITIVE_INFINITY;
         double maxX = Double.NEGATIVE_INFINITY;
         double maxY = Double.NEGATIVE_INFINITY;
         double maxZ = Double.NEGATIVE_INFINITY;
-
         for (int node = 0; node < nodes.count; node++) {
             double x = nodes.renderSnapCurrX[node];
             double y = nodes.renderSnapCurrY[node];
             double z = nodes.renderSnapCurrZ[node];
+            if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
+                continue;
+            }
+            double distanceSquared = square(x - centerX) + square(y - centerY) + square(z - centerZ);
+            if (distanceSquared > radiusSquared) {
+                continue;
+            }
             minX = Math.min(minX, x);
             minY = Math.min(minY, y);
             minZ = Math.min(minZ, z);
@@ -125,20 +249,33 @@ public final class ClientVehicleManager {
             maxZ = Math.max(maxZ, z);
         }
 
-        double entityX = vehicle.parentEntity.getX();
-        double entityY = vehicle.parentEntity.getY();
-        double entityZ = vehicle.parentEntity.getZ();
-        vehicle.parentEntity.setBoundingBox(new Box(
-                minX + entityX,
-                minY + entityY,
-                minZ + entityZ,
-                maxX + entityX,
-                maxY + entityY,
-                maxZ + entityZ
-        ));
+        if (!Double.isFinite(minX)) {
+            minX = maxX = centerX;
+            minY = maxY = centerY;
+            minZ = maxZ = centerZ;
+        }
+        return new Box(
+                minX - ROBUST_BOUNDS_BOX_PADDING,
+                minY - ROBUST_BOUNDS_BOX_PADDING,
+                minZ - ROBUST_BOUNDS_BOX_PADDING,
+                maxX + ROBUST_BOUNDS_BOX_PADDING,
+                maxY + ROBUST_BOUNDS_BOX_PADDING,
+                maxZ + ROBUST_BOUNDS_BOX_PADDING
+        );
+    }
+
+    private static void ensureBoundsScratchCapacity(int nodeCount) {
+        if (boundsScratch.length < nodeCount) {
+            boundsScratch = new float[Math.max(nodeCount, boundsScratch.length * 2)];
+        }
+    }
+
+    private static double square(double value) {
+        return value * value;
     }
 
     private static void clearVehicles() {
+        LOAD_FAILURES.clear();
         if (VEHICLE_MAP.isEmpty()) {
             return;
         }
@@ -162,7 +299,10 @@ public final class ClientVehicleManager {
     }
 
     public static void initRenderHooks() {
-        WorldRenderEvents.BEFORE_ENTITIES.register(context -> {
+        // Iris renders its shadow map when vanilla enters renderSky(), before
+        // Fabric's BEFORE_ENTITIES event. Prepare skinning at START so shadow
+        // and main entity passes consume the same frame's node positions.
+        WorldRenderEvents.START.register(context -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.world == null || VEHICLE_MAP.isEmpty()) {
                 return;
@@ -188,21 +328,42 @@ public final class ClientVehicleManager {
                 }
 
                 ensureInterpolationCapacity(nodes.count);
-                for (int node = 0; node < nodes.count; node++) {
-                    sharedInterpX[node] = interpolate(
-                            nodes.renderSnapPrevX[node],
-                            nodes.renderSnapCurrX[node],
-                            tickDelta
-                    );
-                    sharedInterpY[node] = interpolate(
-                            nodes.renderSnapPrevY[node],
-                            nodes.renderSnapCurrY[node],
-                            tickDelta
-                    );
-                    sharedInterpZ[node] = interpolate(
-                            nodes.renderSnapPrevZ[node],
-                            nodes.renderSnapCurrZ[node],
-                            tickDelta
+                Vec3d renderedEntityOrigin = getRenderedEntityOrigin(vehicle.parentEntity, tickDelta);
+                boolean sampledTimeline = vehicle.renderTimeline.sampleAtTickDeltaRelativeTo(
+                        tickDelta,
+                        renderedEntityOrigin.x,
+                        renderedEntityOrigin.y,
+                        renderedEntityOrigin.z,
+                        sharedInterpX,
+                        sharedInterpY,
+                        sharedInterpZ,
+                        nodes.count
+                );
+                if (!sampledTimeline) {
+                    for (int node = 0; node < nodes.count; node++) {
+                        sharedInterpX[node] = interpolate(
+                                nodes.renderSnapPrevX[node],
+                                nodes.renderSnapCurrX[node],
+                                tickDelta
+                        );
+                        sharedInterpY[node] = interpolate(
+                                nodes.renderSnapPrevY[node],
+                                nodes.renderSnapCurrY[node],
+                                tickDelta
+                        );
+                        sharedInterpZ[node] = interpolate(
+                                nodes.renderSnapPrevZ[node],
+                                nodes.renderSnapCurrZ[node],
+                                tickDelta
+                        );
+                    }
+                    offsetNodesFromCurrentToRenderedOrigin(
+                            vehicle.parentEntity.getPos(),
+                            renderedEntityOrigin,
+                            sharedInterpX,
+                            sharedInterpY,
+                            sharedInterpZ,
+                            nodes.count
                     );
                 }
 
@@ -219,6 +380,36 @@ public final class ClientVehicleManager {
 
     private static float interpolate(double previous, double current, float tickDelta) {
         return (float) (previous + (current - previous) * tickDelta);
+    }
+
+    /**
+     * Matches WorldRenderer.renderEntity exactly. Entity#getLerpedPos uses the
+     * prevX/Y/Z fields instead, which are not the origin of the entity matrix.
+     */
+    static Vec3d getRenderedEntityOrigin(Entity entity, float tickDelta) {
+        return new Vec3d(
+                MathHelper.lerp((double) tickDelta, entity.lastRenderX, entity.getX()),
+                MathHelper.lerp((double) tickDelta, entity.lastRenderY, entity.getY()),
+                MathHelper.lerp((double) tickDelta, entity.lastRenderZ, entity.getZ())
+        );
+    }
+
+    private static void offsetNodesFromCurrentToRenderedOrigin(
+            Vec3d currentOrigin,
+            Vec3d renderedOrigin,
+            float[] x,
+            float[] y,
+            float[] z,
+            int count
+    ) {
+        float offsetX = (float) (currentOrigin.x - renderedOrigin.x);
+        float offsetY = (float) (currentOrigin.y - renderedOrigin.y);
+        float offsetZ = (float) (currentOrigin.z - renderedOrigin.z);
+        for (int node = 0; node < count; node++) {
+            x[node] += offsetX;
+            y[node] += offsetY;
+            z[node] += offsetZ;
+        }
     }
 
     private static void ensureInterpolationCapacity(int nodeCount) {

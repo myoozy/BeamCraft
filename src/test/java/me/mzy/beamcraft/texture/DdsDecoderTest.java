@@ -475,4 +475,42 @@ class DdsDecoderTest {
             fail("BC7 smoke test failed: " + t);
         }
     }
+
+    /**
+     * A surface past the parallel threshold decodes its block rows on worker threads.
+     * The small fixtures elsewhere never reach that path, and it is exactly where a
+     * row's byte offset or its working buffers could go wrong, so the row mapping is
+     * pinned here: every block row is a flat colour, alternating white and black, and a
+     * row written to the wrong offset — or sharing another row's buffers — cannot come
+     * out uniform.
+     */
+    @Test
+    void decodesLargeSurfaceAcrossParallelBlockRows() throws Exception {
+        int width = 512;
+        int height = 256; // 128 x 64 blocks, well above the parallel threshold
+        byte[] whiteBlock = DdsFixtures.bc1Block(0xFFFF, 0x0000, 0); // all index 0 -> c0
+        byte[] blackBlock = DdsFixtures.bc1Block(0x0000, 0xFFFF, 0);
+        byte[] surface = new byte[(width / 4) * (height / 4) * 8];
+        int at = 0;
+        for (int by = 0; by < height / 4; by++) {
+            byte[] block = (by % 2 == 0) ? whiteBlock : blackBlock;
+            for (int bx = 0; bx < width / 4; bx++) {
+                System.arraycopy(block, 0, surface, at, 8);
+                at += 8;
+            }
+        }
+
+        DecodedImage img = DdsDecoder.decode(
+                DdsFixtures.legacyDds(width, height, "DXT1", DDPF_FOURCC, 0, 0, 0, 0, 0, surface));
+
+        assertEquals(width, img.width());
+        assertEquals(height, img.height());
+        for (int y = 0; y < height; y++) {
+            int expected = (y / 4) % 2 == 0 ? 0xFFFFFFFF : 0xFF000000;
+            for (int x : new int[] {0, width / 2, width - 1}) {
+                assertEquals(expected, img.getPixelRgba(x, y),
+                        "pixel (" + x + "," + y + ") must match its own block row");
+            }
+        }
+    }
 }

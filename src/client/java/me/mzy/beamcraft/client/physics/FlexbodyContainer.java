@@ -22,6 +22,9 @@ public class FlexbodyContainer {
     public String[] meshName = new String[INIT_FLEX_CAP];
     // 存储每个 mesh 绑定的目标 Group 名称列表
     public List<String>[] targetGroups = new List[INIT_FLEX_CAP];
+    public String[] deformGroup = new String[INIT_FLEX_CAP];
+    public String[] deformMaterialBase = new String[INIT_FLEX_CAP];
+    public String[] deformMaterialDamaged = new String[INIT_FLEX_CAP];
     // 基础变换矩阵参数
     public double[] posX = new double[INIT_FLEX_CAP], posY = new double[INIT_FLEX_CAP], posZ = new double[INIT_FLEX_CAP];
     public double[] rotX = new double[INIT_FLEX_CAP], rotY = new double[INIT_FLEX_CAP], rotZ = new double[INIT_FLEX_CAP];
@@ -55,7 +58,7 @@ public class FlexbodyContainer {
     public float[] vNormWeightZ = new float[INIT_FLEX_CAP];
     public boolean[] vUseCrossZ; // 当找不到正交 Vz 时设为 true，靠叉乘推导
 
-    // CPU 蒙皮实时计算输出缓冲 (供 VBO 极速拉取)
+    // CPU 蒙皮计算输出缓冲 (供 VBO 上传)
     public float[] skinnedPosX = new float[INIT_FLEX_CAP];
     public float[] skinnedPosY = new float[INIT_FLEX_CAP];
     public float[] skinnedPosZ = new float[INIT_FLEX_CAP];
@@ -75,6 +78,9 @@ public class FlexbodyContainer {
             // ==========================
             meshName = Utility.expand(meshName, newSize);
             targetGroups = java.util.Arrays.copyOf(targetGroups, newSize);
+            deformGroup = Utility.expand(deformGroup, newSize);
+            deformMaterialBase = Utility.expand(deformMaterialBase, newSize);
+            deformMaterialDamaged = Utility.expand(deformMaterialDamaged, newSize);
 
             posX = Utility.expand(posX, newSize);
             posY = Utility.expand(posY, newSize);
@@ -151,6 +157,7 @@ public class FlexbodyContainer {
      * @return
      */
     public int registerFlexbody(String name, String namespace, List<String> groups,
+                                String damageGroup, String baseMaterial, String damagedMaterial,
                                 double px, double py, double pz,
                                 double rx, double ry, double rz,
                                 double sx, double sy, double sz,
@@ -160,6 +167,9 @@ public class FlexbodyContainer {
         int idx = meshCount;
         meshName[idx] = name;
         targetGroups[idx] = groups;
+        deformGroup[idx] = damageGroup;
+        deformMaterialBase[idx] = baseMaterial;
+        deformMaterialDamaged[idx] = damagedMaterial;
         // 保持存入原始未转换的 JSON 参数
         posX[idx] = px; posY[idx] = py; posZ[idx] = pz;
         rotX[idx] = rx; rotY[idx] = ry; rotZ[idx] = rz;
@@ -173,7 +183,7 @@ public class FlexbodyContainer {
     }
 
     /**
-     * 在车辆 Setup 阶段调用，将离散的 Assigned Groups 编译为绝对连续的 CSR 寻址表
+     * 在车辆 Setup 阶段调用，将离散的 Assigned Groups 编译为连续的 CSR 寻址表
      */
     public void compileGroupsCSR(NodeContainer nodes) {
         // 不需要单独的 gCounter 变量
@@ -184,8 +194,8 @@ public class FlexbodyContainer {
             if (groups == null) continue;
 
             for (String gName : groups) {
-                // 🚀 直接用 groupNameToId.size()。每次放新 Key 时，size 都会加 1
-                // 这样既避开了 Lambda 闭包限制，逻辑也更简洁。
+                // 直接用 groupNameToId.size()：每放入一个新 Key，size 自增 1，
+                // 这样可避开 Lambda 闭包限制。
                 Integer gId = groupNameToId.get(gName);
                 if (gId == null) {
                     gId = groupNameToId.size();
@@ -219,7 +229,7 @@ public class FlexbodyContainer {
     }
 
     /**
-     * 由客户端 Binder 在计算出总顶点数后调用，一次性精准分配热数据缓冲
+     * 由客户端 Binder 在算出总顶点数后调用，一次性分配蒙皮数据缓冲
      */
     public void allocateSkinningBuffers(int totalVerts) {
         this.totalVertexCount = totalVerts;
