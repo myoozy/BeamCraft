@@ -278,6 +278,57 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
+    void premultipliedInvisibleShellScalesRgbToNothing() {
+        // glass_invisible: the shattered-windshield shell hides itself with opacityFactor 0
+        // under PreMulAlpha. A premultiplied blend weights the rgb by nothing, so the factor
+        // must zero rgb as well — scaling alpha alone left the shell adding full white, which
+        // is what made the damaged windshield mesh appear.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "glass_invisible",
+                  "translucent": true,
+                  "translucentBlendOp": "PreMulAlpha",
+                  "Stages": [ { "opacityFactor": 0 } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT, plan.mode());
+        assertEquals(new RgbaColor(0f, 0f, 0f, 0f), plan.colorFactor());
+    }
+
+    @Test
+    void aNormalBlendKeepsRgbWhenOnlyTheAlphaFades() {
+        // The same fade without PreMulAlpha scales alpha alone, because normal alpha
+        // blending applies that alpha to the rgb itself.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "tinted",
+                  "translucent": true,
+                  "Stages": [ { "baseColorFactor": [0.8, 0.4, 0.2, 1], "opacityFactor": 0.5 } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(0.5f, plan.colorFactor().a(), 1e-6f);
+        assertEquals(0.8f, plan.colorFactor().r(), 1e-6f);
+    }
+
+    @Test
+    void opacityFactorScalesRgbOnlyForPremultipliedBlending() {
+        assertEquals(new RgbaColor(1f, 1f, 1f, 0.5f),
+                MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, 0.5f, false));
+        assertEquals(new RgbaColor(0.5f, 0.5f, 0.5f, 0.5f),
+                MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, 0.5f, true));
+        assertEquals(new RgbaColor(0f, 0f, 0f, 0f),
+                MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, 0f, true));
+        // No factor at all leaves the colour untouched, premultiplied or not.
+        assertEquals(RgbaColor.WHITE, MaterialRenderPlanner.applyOpacityFactor(RgbaColor.WHITE, null, true));
+    }
+
+    @Test
     void undeclaredCoverageMaskUsesTheConfiguredThreshold() {
         MaterialDefinition def = def("""
                 {

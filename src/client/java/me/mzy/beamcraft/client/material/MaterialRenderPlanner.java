@@ -183,7 +183,8 @@ public final class MaterialRenderPlanner {
             // translucent flags still honour it; see honorOpacityFactor().
             opacityFactor = null;
         }
-        RgbaColor factor = applyOpacityFactor(baseFactor, opacityFactor);
+        RgbaColor factor = applyOpacityFactor(baseFactor, opacityFactor,
+                MaterialDefinition.isPremultipliedBlend(material.translucentBlendOp));
         return classify(material, diffusePath, opacityPath, factor, defaultCutoutAlphaRef);
     }
 
@@ -332,13 +333,22 @@ public final class MaterialRenderPlanner {
      * [0,1]), keeping RGB unchanged. Null factor or colour passes through
      * unchanged, so materials without an opacity factor are never altered.
      */
-    static RgbaColor applyOpacityFactor(RgbaColor color, Float opacityFactor) {
+    static RgbaColor applyOpacityFactor(RgbaColor color, Float opacityFactor, boolean premultiplied) {
         if (color == null || opacityFactor == null) {
             return color;
         }
         float clampedFactor = Math.max(0f, Math.min(1f, opacityFactor));
         float alpha = Math.max(0f, Math.min(1f, color.a() * clampedFactor));
-        return new RgbaColor(color.r(), color.g(), color.b(), alpha);
+        if (!premultiplied) {
+            // Normal alpha blending weights the rgb by this alpha itself.
+            return new RgbaColor(color.r(), color.g(), color.b(), alpha);
+        }
+        // A premultiplied blend weights the rgb by nothing, so the factor has to scale rgb
+        // too: for premultiplied output rgb must equal colour x alpha, which is why the
+        // channels move together. Without this, BeamNG's invisible shells — an
+        // opacityFactor of 0 with PreMulAlpha, e.g. glass_invisible on the shattered
+        // windshield mesh — contribute their full rgb and stop being invisible.
+        return new RgbaColor(color.r() * alpha, color.g() * alpha, color.b() * alpha, alpha);
     }
 
     /**

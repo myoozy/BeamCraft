@@ -80,6 +80,19 @@ public final class MaterialDefinition {
     /** {@code translucentBlendOp} (e.g. "None", "PreMulAlpha", "Additive"); may be null. */
     public final String translucentBlendOp;
 
+    /** The blend op that reads the source rgb as already scaled by its alpha. */
+    public static final String PREMULTIPLIED_BLEND_OP = "PreMulAlpha";
+
+    /**
+     * True when {@code blendOp} asks for premultiplied-alpha blending, which weights the
+     * source rgb by nothing. One definition, because three places have to agree on it:
+     * the blend function, the mask composition, and how the colour factor is scaled —
+     * a premultiplied fragment whose rgb was not scaled by its alpha adds full colour.
+     */
+    public static boolean isPremultipliedBlend(String blendOp) {
+        return blendOp != null && blendOp.trim().equalsIgnoreCase(PREMULTIPLIED_BLEND_OP);
+    }
+
     /** {@code version} of the material JSON; 0 when absent. */
     public final float version;
 

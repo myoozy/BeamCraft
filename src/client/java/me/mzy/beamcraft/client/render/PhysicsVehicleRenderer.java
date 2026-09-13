@@ -424,7 +424,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * mask applied to alpha alone would leave its soft edges glowing.
      */
     static boolean isPremultipliedBlend(String blendOp) {
-        return blendOp != null && blendOp.trim().equalsIgnoreCase("PreMulAlpha");
+        return MaterialDefinition.isPremultipliedBlend(blendOp);
     }
 
     /**
