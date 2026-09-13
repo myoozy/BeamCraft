@@ -7,7 +7,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.mzy.beamcraft.client.assets.ConflictPolicy;
 import me.mzy.beamcraft.client.assets.ConflictStrategy;
-import me.mzy.beamcraft.client.material.MaterialRenderPlanner;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -27,7 +26,6 @@ public final class BeamCraftConfig {
 
     public Conflict conflict = new Conflict();
     public Input input = new Input();
-    public Materials materials = new Materials();
 
     public static final class Conflict {
         public boolean notify = false;
@@ -70,28 +68,6 @@ public final class BeamCraftConfig {
             defaults.shiftDown = new KeyBinding("key.keyboard.z");
             defaults.rangeBoxToggle = new KeyBinding("key.keyboard.b");
             defaults.resetVehicle = new KeyBinding("key.keyboard.g");
-            return defaults;
-        }
-    }
-
-    /**
-     * Material rendering overrides. A null field keeps the runtime default, which is
-     * deliberately not written into a new config file (same convention as {@link Input}).
-     */
-    public static final class Materials {
-        /**
-         * Threshold assumed for a coverage mask whose material declares no
-         * {@code alphaRef}. A BeamNG opacity map on a material that is not
-         * {@code translucent} is coverage — a grille's holes — so it selects the cutout
-         * pass; this value is what the plan reports for it. The clip itself is the
-         * vanilla cutout shader's own alpha test, so tuning this changes mode selection
-         * and diagnostics, not the rendered cutoff.
-         */
-        public Double cutoutAlphaRef;
-
-        public static Materials defaults() {
-            Materials defaults = new Materials();
-            defaults.cutoutAlphaRef = (double) MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF;
             return defaults;
         }
     }
@@ -193,9 +169,6 @@ public final class BeamCraftConfig {
         }
         if (input == null) {
             input = new Input();
-        }
-        if (materials == null) {
-            materials = new Materials();
         }
         return this;
     }

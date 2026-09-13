@@ -212,22 +212,40 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
-    void undeclaredCoverageMaskBecomesCutout() {
-        // The shape a stock grille material has (etk800_grille): a colour map and an
-        // opacity map, no translucent flag and no alphaRef. Ignoring the opacity map
-        // here is what painted mesh-style parts as solid panels.
+    void undeclaredCoverageMaskStaysOpaque() {
+        // A colour map and an opacity map with no translucent flag and no alphaRef. The
+        // mask is deliberately NOT treated as coverage: BeamNG does not declare it as
+        // such, and the same _o.data slot holds maps that are not coverage at all. The
+        // Sunburst2 body's mask is 25% zero / 47% low / 28% full with no clean
+        // separation, so reading it as alpha hid three quarters of the body.
         MaterialDefinition def = def("""
                 {
-                  "mapTo": "etk800_grille",
-                  "Stages": [ { "baseColorMap": "/vehicles/etk800/etk800_grille_b.color.png",
-                                "opacityMap": "/vehicles/etk800/etk800_grille_o.data.png" } ]
+                  "mapTo": "sunburst2_main",
+                  "Stages": [ { "baseColorMap": "/vehicles/sunburst2/sunburst2_main_b.color.png",
+                                "opacityMap": "/vehicles/sunburst2/sunburst2_main_o.data.png" } ]
                 }
                 """);
         MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
-        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
-        assertTrue(plan.hasOpacity());
-        assertEquals("/vehicles/etk800/etk800_grille_o.data.png", plan.opacityPath());
-        assertEquals(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF, plan.alphaRef());
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertTrue(plan.hasTexture());
+        assertFalse(plan.hasOpacity(), "an undeclared mask is left out of the plan");
+    }
+
+    @Test
+    void anUndeclaredMaskWithoutAColourMapIsLeftAloneToo() {
+        // The same rule from the other side: no colour map either, so there is nothing to
+        // clip and nothing to tint. Only a declared cutout (alphaRef) reaches the mask-only
+        // path, which is how the hood vents are fixed.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mask_only",
+                  "Stages": [ { "opacityMap": "mask_o.png" } ]
+                }
+                """);
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertFalse(plan.hasTexture());
+        assertFalse(plan.hasOpacity());
     }
 
     @Test
@@ -329,18 +347,7 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
-    void undeclaredCoverageMaskUsesTheConfiguredThreshold() {
-        MaterialDefinition def = def("""
-                {
-                  "mapTo": "grille",
-                  "Stages": [ { "baseColorMap": "grille_d.png", "opacityMap": "grille_o.png" } ]
-                }
-                """);
-        assertEquals(0.3f, MaterialRenderPlanner.plan(def, 0.3f).alphaRef());
-    }
-
-    @Test
-    void declaredAlphaRefStillWinsOverTheConfiguredThreshold() {
+    void aDeclaredAlphaRefIsTheThreshold() {
         MaterialDefinition def = def("""
                 {
                   "mapTo": "window",
@@ -348,48 +355,7 @@ class MaterialRenderPlannerTest {
                   "Stages": [ { "baseColorMap": "window_d.png", "opacityMap": "window_o.png" } ]
                 }
                 """);
-        assertEquals(0.25f, MaterialRenderPlanner.plan(def, 0.5f).alphaRef());
-    }
-
-    @Test
-    void translucentMaskIsNotStolenByTheCutoutRule() {
-        // The rule only applies to a material that is not translucent; a see-through
-        // material keeps blending even though it also carries an opacity map.
-        MaterialDefinition def = def("""
-                {
-                  "mapTo": "glass",
-                  "translucent": true,
-                  "Stages": [ { "baseColorMap": "glass_d.png", "opacityMap": "glass_o.png" } ]
-                }
-                """);
-        assertEquals(MaterialRenderPlan.RenderMode.TRANSLUCENT,
-                MaterialRenderPlanner.plan(def, 0.5f).mode());
-    }
-
-    @Test
-    void coverageMaskWithoutADiffuseIsCutOverWhite() {
-        // No colour map to sample, so the mask is composed over white and the flat factor
-        // tints it. This used to assert colorOnly — the behaviour that painted
-        // grille-style parts as solid panels.
-        MaterialDefinition def = def("""
-                {
-                  "mapTo": "mask_only",
-                  "Stages": [ { "opacityMap": "mask_o.png" } ]
-                }
-                """);
-        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
-        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
-        assertFalse(plan.hasTexture(), "there is still no colour to sample");
-        assertTrue(plan.hasOpacity());
-        assertEquals("mask_o.png", plan.opacityPath());
-        assertEquals(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF, plan.alphaRef());
-    }
-
-    @Test
-    void defaultCutoutThresholdIsAUsableReference() {
-        assertTrue(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF > 0f
-                        && MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF < 1f,
-                "a threshold outside (0,1) clips everything or nothing");
+        assertEquals(0.25f, MaterialRenderPlanner.plan(def).alphaRef());
     }
 
     @Test

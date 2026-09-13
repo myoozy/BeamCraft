@@ -76,44 +76,15 @@ import java.util.List;
  */
 public final class MaterialRenderPlanner {
 
-    /**
-     * Alpha reference assumed for a coverage mask whose material declares no
-     * {@code alphaRef} of its own, and the value used when the config leaves it unset.
-     *
-     * <p>Note what this number does and does not do: it selects the render mode and is
-     * carried on the plan for diagnostics, but the clip itself is the vanilla cutout
-     * shader's own alpha test (see {@link MaterialRenderPlan#cutout}). Honouring an
-     * exact threshold would need a shader of our own.
-     */
-    public static final float DEFAULT_CUTOUT_ALPHA_REF = 0.5f;
-
     private MaterialRenderPlanner() {
     }
 
     /**
-     * Plans with {@link #DEFAULT_CUTOUT_ALPHA_REF}.
-     *
      * @param material the material resolved for the sub-mesh's DAE name, or null
      *                 when no material matched
      * @return a backend-neutral render plan; never null
      */
     public static MaterialRenderPlan plan(MaterialDefinition material) {
-        return plan(material, DEFAULT_CUTOUT_ALPHA_REF);
-    }
-
-    /**
-     * Plans a material, using {@code defaultCutoutAlphaRef} for an opacity map that
-     * declares no threshold of its own.
-     *
-     * <p>The rule that matters here: BeamNG marks genuinely see-through materials with
-     * {@code translucent}, so an opacity map on a material that is not translucent is
-     * <em>coverage</em> — the holes of a grille — not a blend weight. Dropping it
-     * renders the mesh as an unbroken panel.
-     *
-     * @param defaultCutoutAlphaRef threshold for an undeclared coverage mask
-     * @return a backend-neutral render plan; never null
-     */
-    public static MaterialRenderPlan plan(MaterialDefinition material, float defaultCutoutAlphaRef) {
         if (material == null) {
             return MaterialRenderPlan.colorOnly(RgbaColor.WHITE);
         }
@@ -185,7 +156,7 @@ public final class MaterialRenderPlanner {
         }
         RgbaColor factor = applyOpacityFactor(baseFactor, opacityFactor,
                 MaterialDefinition.isPremultipliedBlend(material.translucentBlendOp));
-        return classify(material, diffusePath, opacityPath, factor, defaultCutoutAlphaRef);
+        return classify(material, diffusePath, opacityPath, factor);
     }
 
     /**
@@ -356,7 +327,7 @@ public final class MaterialRenderPlanner {
      * in isolation. Never null.
      */
     static MaterialRenderPlan classify(MaterialDefinition material, String diffusePath, String opacityPath,
-                                       RgbaColor factor, float defaultCutoutAlphaRef) {
+                                       RgbaColor factor) {
         if (isMirrorMaterial(material)) {
             // Mirror reflective surfaces must not enter the see-through translucent
             // pass (BeamNG flags them translucent:true for a cubemap reflection that
@@ -393,7 +364,10 @@ public final class MaterialRenderPlanner {
             // No colour map at all: a flat baseColorFactor plus a coverage mask. The mask
             // still has to reach the alpha test, so it is composed over white and the
             // factor tints it — dropping to colorOnly is what painted grilles solid.
-            if (opacityPath != null) {
+            // A declared cutout with no colour map: a flat colour plus a coverage mask.
+            // Interior glass stays excluded — its shell must not be cut open (see
+            // isInteriorGlassMaterial).
+            if (opacityPath != null && !isInteriorGlassMaterial(material)) {
                 return MaterialRenderPlan.cutoutMaskOnly(opacityPath, factor, material.alphaRef);
             }
             return MaterialRenderPlan.colorOnly(factor);
@@ -401,14 +375,12 @@ public final class MaterialRenderPlanner {
         if (factor.a() < 1.0f) {
             return MaterialRenderPlan.translucent(diffusePath, opacityPath, factor, material.translucentBlendOp);
         }
-        if (opacityPath != null && !isInteriorGlassMaterial(material)) {
-            // A coverage mask on a material that is neither translucent nor carrying an
-            // explicit alphaRef: a grille's holes, not a blend weight. Ignoring it here
-            // is what painted mesh-style parts as solid panels.
-            return diffusePath != null
-                    ? MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, defaultCutoutAlphaRef)
-                    : MaterialRenderPlan.cutoutMaskOnly(opacityPath, factor, defaultCutoutAlphaRef);
-        }
+        // An opacity map with neither an alphaRef nor a translucent flag is deliberately
+        // left alone. BeamNG does not declare those as coverage, and the same _o.data slot
+        // holds maps that are not coverage at all: the Sunburst2 body's is 25% zero, 47%
+        // low and 28% full with no clean separation, so reading it as alpha turned most of
+        // the body transparent. A cutout therefore requires the asset to say so through
+        // alphaRef, which the stock grille materials do (grille_hex: 86, grille: 127).
         return diffusePath != null
                 ? MaterialRenderPlan.textured(diffusePath, factor)
                 : MaterialRenderPlan.colorOnly(factor);
