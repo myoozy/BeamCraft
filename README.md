@@ -186,6 +186,8 @@ Other versions not tested.
 - Some code is AI-assisted
 - Many comments and logs are in Chinese
 - Debug output may include Chinese text
+- Some compatibility code is adapted from BeamNG.drive bCDDL 1.1 Lua source;
+  see [Source provenance](SOURCE_PROVENANCE.md)
 
 ---
 
@@ -209,6 +211,10 @@ respective owners.
 Copyright (C) 2026 M1AO.
 
 BeamCraft's original code is licensed under the [MIT License](LICENSE).
+
+Files identified as adaptations of BeamNG.drive Lua source are licensed under
+the [bCDDL 1.1](LICENSES/bCDDL-1.1.txt), not MIT. See
+[Source provenance](SOURCE_PROVENANCE.md) for the file-level mapping.
 
 Portions derived from the Fabric Example Mod remain available under CC0 1.0.
 Bundled third-party components retain their respective licenses; see

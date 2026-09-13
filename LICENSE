@@ -1,3 +1,13 @@
+BeamCraft contains code under multiple licenses.
+
+The MIT License below applies only to BeamCraft original code that is not
+otherwise identified. Source files carrying a bCDDL 1.1 notice are adaptations
+of BeamNG.drive source code and are licensed under the bCDDL 1.1 instead; see
+LICENSES/bCDDL-1.1.txt and SOURCE_PROVENANCE.md. Fabric Example Mod-derived
+template portions remain under CC0 1.0 Universal. Bundled third-party
+components retain their respective licenses as recorded in
+THIRD_PARTY_NOTICES.md.
+
 MIT License
 
 Copyright (c) 2026 M1AO

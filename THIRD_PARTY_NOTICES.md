@@ -4,6 +4,21 @@ BeamCraft distributions may include the following third-party components.
 These components are not covered by BeamCraft's MIT license and remain subject
 to their respective licenses below.
 
+## BeamNG.drive bCDDL source adaptations
+
+- Component: selected BeamNG.drive Lua source files
+- Copyright and initial developer: BeamNG GmbH and its contributors
+- Project: <https://www.beamng.com/>
+- License: BeamNG Common Development and Distribution License (bCDDL) 1.1
+- License text: [`LICENSES/bCDDL-1.1.txt`](LICENSES/bCDDL-1.1.txt)
+- Covered BeamCraft files and upstream paths: [`SOURCE_PROVENANCE.md`](SOURCE_PROVENANCE.md)
+
+BeamNG's official programming documentation states that bCDDL-covered source
+may be copied, modified and redistributed when the bCDDL terms are followed.
+BeamCraft's Java adaptations and modifications to covered files are contributed
+by M1AO and BeamCraft contributors and remain available in source form under
+bCDDL 1.1. BeamNG GmbH does not endorse or sponsor BeamCraft.
+
 ## LWJGL Assimp bindings
 
 - Component: `org.lwjgl:lwjgl-assimp:3.3.3`

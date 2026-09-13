@@ -1,3 +1,12 @@
+/*
+ * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
+ * If a copy of the bCDDL was not distributed with this file, see
+ * LICENSES/bCDDL-1.1.txt.
+ *
+ * Adapted from BeamNG.drive lua/common/jbeam/slotSystem.lua, including
+ * unifyParts semantics. Java adaptation and modifications contributed by
+ * M1AO and BeamCraft contributors.
+ */
 package me.mzy.beamcraft.client.physics;
 
 import com.google.gson.JsonArray;

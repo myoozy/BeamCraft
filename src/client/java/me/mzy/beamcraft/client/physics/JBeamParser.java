@@ -1,3 +1,13 @@
+/*
+ * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
+ * If a copy of the bCDDL was not distributed with this file, see
+ * LICENSES/bCDDL-1.1.txt.
+ *
+ * Contains adaptations from BeamNG.drive lua/common/jbeam/expressionParser.lua,
+ * lua/common/jbeam/variables.lua, lua/common/jbeam/loader.lua, and
+ * lua/vehicle/jbeam/stage2.lua. Java adaptation and modifications contributed
+ * by M1AO and BeamCraft contributors.
+ */
 package me.mzy.beamcraft.client.physics;
 
 import com.google.gson.JsonArray;

@@ -1,3 +1,12 @@
+/*
+ * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
+ * If a copy of the bCDDL was not distributed with this file, see
+ * LICENSES/bCDDL-1.1.txt.
+ *
+ * Wheel construction is adapted from BeamNG.drive
+ * lua/common/jbeam/sections/wheels.lua. Java adaptation and modifications
+ * contributed by M1AO and BeamCraft contributors.
+ */
 package me.mzy.beamcraft.client.physics;
 
 import me.mzy.beamcraft.utility.Utility;

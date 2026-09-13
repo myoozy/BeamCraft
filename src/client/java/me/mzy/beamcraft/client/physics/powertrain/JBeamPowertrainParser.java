@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
+ * If a copy of the bCDDL was not distributed with this file, see LICENSES/bCDDL-1.1.txt.
+ * Adapted from BeamNG.drive Lua powertrain sources. Java adaptation and modifications
+ * contributed by M1AO and BeamCraft contributors. See SOURCE_PROVENANCE.md.
+ */
 package me.mzy.beamcraft.client.physics.powertrain;
 
 import com.google.gson.JsonArray;
