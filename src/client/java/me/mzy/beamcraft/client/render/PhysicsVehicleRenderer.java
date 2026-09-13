@@ -332,7 +332,7 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         // conditionally assigned above).
         final TextureResource capturedDiffuse = diffuse;
         final TextureResource capturedOpacity = opacity;
-        boolean composedAvailable = diffuse != null && opacity != null;
+        boolean composedAvailable = composedAvailable(plan, diffuse != null, opacity != null);
         return resolveSampler0Texture(
                 plan,
                 diffuse != null,
@@ -344,10 +344,11 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
 
     /**
      * Pure per-sub-mesh decision for which GL texture to bind as vanilla
-     * {@code Sampler0}. An opacity-carrying plan whose diffuse <em>and</em>
-     * opacity both resolved binds the composed texture; otherwise the decision
-     * degrades to {@link #resolveDiffuseTexture} (diffuse when it resolved,
-     * white otherwise). This pins the Iris-fix contract: the renderer never
+     * {@code Sampler0}. An opacity-carrying plan whose mask resolved binds the
+     * composed texture — over the diffuse when there is one, over white when the
+     * material is a flat colour; otherwise the decision degrades to
+     * {@link #resolveDiffuseTexture} (diffuse when it resolved, white otherwise).
+     * This pins the Iris-fix contract: the renderer never
      * binds a missing/unregistered texture for any sub-mesh, and a missing
      * opacity map can never take a whole vehicle down.
      */
@@ -367,6 +368,18 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
      * renderer never binds a missing/unregistered texture (the removed
      * {@code vehicle_default} placeholder) for any sub-mesh.
      */
+    /**
+     * Whether the composed diffuse+opacity texture can be built for this sub-mesh.
+     *
+     * <p>A plan with no colour map needs only the mask: it composes over white, which
+     * is how a flat-colour grille material gets an alpha for the cutout shader to test.
+     * A textured plan needs both halves — a missing diffuse must keep falling back to
+     * white rather than let the mask stand in for colour.
+     */
+    static boolean composedAvailable(MaterialRenderPlan plan, boolean diffuseResolved, boolean opacityResolved) {
+        return opacityResolved && (!plan.hasTexture() || diffuseResolved);
+    }
+
     static int resolveDiffuseTexture(MaterialRenderPlan plan, boolean resolved,
                                      IntSupplier upload, IntSupplier white) {
         if (plan.hasTexture() && resolved) {

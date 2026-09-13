@@ -90,12 +90,13 @@ public final class VehicleTextureUploader {
             if (!(o instanceof ComposedKey that)) {
                 return false;
             }
-            return diffuse.equals(that.diffuse) && opacity.equals(that.opacity);
+            return java.util.Objects.equals(diffuse, that.diffuse)
+                    && java.util.Objects.equals(opacity, that.opacity);
         }
 
         @Override
         public int hashCode() {
-            return 31 * diffuse.hashCode() + opacity.hashCode();
+            return 31 * java.util.Objects.hashCode(diffuse) + java.util.Objects.hashCode(opacity);
         }
     }
 
@@ -201,15 +202,17 @@ public final class VehicleTextureUploader {
      * shared white texture remains the final fallback only when
      * the diffuse upload itself also fails.
      *
-     * @param diffuse   base-colour texture handle (must be non-null)
+     * @param diffuse   base-colour texture handle, or null for a material with no
+     *                  colour map at all: the mask is then composed over white and the
+     *                  plan's flat factor supplies the tint (BeamNG's grille materials)
      * @param opacity   single-channel opacity texture handle (must be non-null)
      * @param namespace vehicle namespace owning the request, for lifecycle
      * @return a valid GL texture id, never -1
      */
     public int getOrUploadComposed(TextureResource diffuse, TextureResource opacity, String namespace) {
         RenderSystem.assertOnRenderThread();
-        if (diffuse == null || opacity == null) {
-            return getWhiteTexture();
+        if (opacity == null) {
+            return diffuse == null ? getWhiteTexture() : getOrUpload(diffuse, namespace);
         }
         ComposedKey key = new ComposedKey(diffuse, opacity);
         Entry entry = composedTextures.get(key);
@@ -217,12 +220,15 @@ public final class VehicleTextureUploader {
             return entry.textureId;
         }
         if (failedComposedTextures.contains(key)) {
-            return getOrUpload(diffuse, namespace);
+            return diffuse == null ? getWhiteTexture() : getOrUpload(diffuse, namespace);
         }
         try {
             long decodeStart = LoadTiming.start();
-            DecodedImage image = MaterialLibrary.composeDiffuseAndOpacity(diffuse, opacity, namespace);
-            LoadTiming.logSlowFile("  [texture] compose " + diffuse.describe() + " + " + opacity.describe(), decodeStart);
+            DecodedImage image = diffuse == null
+                    ? MaterialLibrary.composeWhiteWithOpacity(opacity, namespace)
+                    : MaterialLibrary.composeDiffuseAndOpacity(diffuse, opacity, namespace);
+            LoadTiming.logSlowFile("  [texture] compose "
+                    + (diffuse == null ? "(flat colour)" : diffuse.describe()) + " + " + opacity.describe(), decodeStart);
 
             long uploadStart = LoadTiming.start();
             int textureId;
@@ -233,7 +239,8 @@ public final class VehicleTextureUploader {
                 // returns a caller-owned, uncached image; after upload there is
                 // nothing left to pin or release. Only the GL texture is cached.
             }
-            LoadTiming.logSlowFile("  [texture] upload (composed) " + diffuse.describe(), uploadStart);
+            LoadTiming.logSlowFile("  [texture] upload (composed) "
+                    + (diffuse == null ? opacity.describe() : diffuse.describe()), uploadStart);
             String diffOwn = MaterialLibrary.resolveTextureOwnership(diffuse, namespace);
             String opOwn = MaterialLibrary.resolveTextureOwnership(opacity, namespace);
             String ownership = diffOwn != null ? diffOwn : opOwn;
@@ -245,7 +252,7 @@ public final class VehicleTextureUploader {
         } catch (Exception e) {
             rememberComposedFailure(key, namespace);
             warnOnceComposed(key, e);
-            return getOrUpload(diffuse, namespace);
+            return diffuse == null ? getWhiteTexture() : getOrUpload(diffuse, namespace);
         }
     }
 
@@ -460,11 +467,17 @@ public final class VehicleTextureUploader {
     }
 
     private void warnOnceComposed(ComposedKey key, Exception e) {
-        String describe = key.diffuse.describe() + " ⊕ " + key.opacity.describe();
+        String describe = describeComposed(key);
         if (warnedComposedResources.add(describe)) {
             BeamCraft.LOGGER.warn(
                     "BeamCraft: cannot compose opacity into diffuse for {} ({}); using diffuse baked alpha",
                     describe, e.getMessage());
         }
+    }
+
+    /** Human-readable key for the logs; a null diffuse is a flat-colour material. */
+    private static String describeComposed(ComposedKey key) {
+        return (key.diffuse == null ? "(flat colour)" : key.diffuse.describe())
+                + " ⊕ " + key.opacity.describe();
     }
 }

@@ -9,6 +9,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pins the per-sub-mesh Sampler0 decision for translucent/cutout plans with an
@@ -16,6 +18,35 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * and no Minecraft renderer required.
  */
 class Sampler0ResolutionTest {
+
+    @Test
+    void maskOnlyPlanComposesOverWhite() {
+        // A flat-colour grille material: no colour map, only the mask. It still has to
+        // reach the composed path, or the cutout shader gets no alpha to test.
+        MaterialRenderPlan plan = MaterialRenderPlan.cutoutMaskOnly(
+                "/vehicles/common/grille_hex_o.data.png", RgbaColor.WHITE, 86f / 255f);
+
+        assertFalse(plan.hasTexture());
+        assertTrue(plan.hasOpacity());
+        assertTrue(PhysicsVehicleRenderer.composedAvailable(plan, false, true));
+    }
+
+    @Test
+    void maskOnlyPlanStillNeedsItsMaskResolved() {
+        MaterialRenderPlan plan = MaterialRenderPlan.cutoutMaskOnly(
+                "/vehicles/common/grille_hex_o.data.png", RgbaColor.WHITE, 86f / 255f);
+
+        assertFalse(PhysicsVehicleRenderer.composedAvailable(plan, false, false));
+    }
+
+    @Test
+    void texturedPlanStillNeedsItsDiffuseToCompose() {
+        MaterialRenderPlan plan = MaterialRenderPlan.translucent(
+                "/vehicles/pickup/glass_d.png", "/vehicles/pickup/glass_o.png", RgbaColor.WHITE, null);
+
+        assertFalse(PhysicsVehicleRenderer.composedAvailable(plan, false, true),
+                "a missing diffuse must keep falling back rather than sample the mask as colour");
+    }
 
     @Test
     void composedTextureUsedWhenDiffuseAndOpacityBothResolved() {

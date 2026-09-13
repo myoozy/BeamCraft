@@ -61,4 +61,32 @@ public final class TextureCompositor {
         }
         return DecodedImage.ofOwned(base.width(), base.height(), out, base.isSrgb());
     }
+
+    /**
+     * Composes the opacity mask over flat white, for a material that has no
+     * base-colour texture at all. BeamNG's stock grille materials are exactly this
+     * shape: a flat {@code baseColorFactor} for the colour plus an {@code opacityMap}
+     * for the holes, and no {@code baseColorMap} anywhere in the material.
+     *
+     * <p>White is the identity for the colour, so the plan's factor tints the result
+     * unchanged; what matters is that the pattern rides on the <em>alpha</em> the
+     * cutout shader tests, exactly as it does for a textured material. Without this
+     * there is nothing for that test to read and the part draws as an unbroken panel.
+     *
+     * @param opacity single-channel opacity texture
+     * @return a new image with white {@code rgb} and {@code a = opacity.r}
+     */
+    public static DecodedImage composeWhiteWithOpacity(DecodedImage opacity) {
+        byte[] opacityPixels = opacity.pixelData();
+        byte[] out = new byte[opacityPixels.length];
+        for (int i = 0; i < out.length; i += 4) {
+            out[i] = (byte) 0xFF;
+            out[i + 1] = (byte) 0xFF;
+            out[i + 2] = (byte) 0xFF;
+            // The mask's own srgb flag is ignored, as it is for the base-composite path:
+            // the channel is coverage, not colour.
+            out[i + 3] = opacityPixels[i];
+        }
+        return DecodedImage.ofOwned(opacity.width(), opacity.height(), out, opacity.isSrgb());
+    }
 }

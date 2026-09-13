@@ -21,6 +21,21 @@ class TextureCompositorTest {
     }
 
     @Test
+    void whiteCompositeCarriesTheMaskOnAlpha() {
+        // A material with no base-colour map at all (BeamNG's grille shape): the result
+        // is white with the mask on alpha, so the cutout shader has something to test.
+        DecodedImage opacity = rgba(2, 1, new int[] {0xFF000000, 0xFF808080});
+
+        DecodedImage out = TextureCompositor.composeWhiteWithOpacity(opacity);
+
+        assertEquals(0x00FFFFFF, out.getPixelRgba(0, 0), "a cut texel is fully transparent");
+        assertEquals(0x80FFFFFF, out.getPixelRgba(1, 0), "a kept texel stays white");
+        assertEquals(2, out.width());
+        assertEquals(1, out.height());
+        assertTrue(out.isSrgb());
+    }
+
+    @Test
     void multipliesOpacityIntoBaseAlpha() {
         // Base: red, alpha 128 (0x80). Opacity: value 128 (0x80).
         // out.a = round(128*128/255) = 64.

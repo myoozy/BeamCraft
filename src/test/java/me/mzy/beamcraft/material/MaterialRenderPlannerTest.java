@@ -231,6 +231,53 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
+    void flatColourMaterialWithAMaskBecomesACutoutOverWhite() {
+        // The shape the stock grille materials have (grille/grille_hex/...): a flat
+        // baseColorFactor and an opacityMap, with no baseColorMap anywhere. The mask is
+        // the only thing that can drive the cutout, and dropping to colorOnly is what
+        // painted the hood vents and every grille as a solid panel.
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "grille_hex",
+                  "alphaRef": 86,
+                  "alphaTest": true,
+                  "doubleSided": true,
+                  "Stages": [ { "baseColorFactor": [0.14, 0.14, 0.14, 1],
+                                "normalMap": "vehicles/common/grille_hex_n.normal.png",
+                                "opacityMap": "/vehicles/common/grille_hex_o.data.png" } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
+        assertFalse(plan.hasTexture(), "there is no colour map to sample");
+        assertTrue(plan.hasOpacity(), "the mask is what drives the cutout");
+        assertEquals("/vehicles/common/grille_hex_o.data.png", plan.opacityPath());
+        assertEquals(86f / 255f, plan.alphaRef(), 1e-6f);
+        assertEquals(0.14f, plan.colorFactor().r(), 1e-6f);
+    }
+
+    @Test
+    void flatColourMaterialWithoutAMaskStaysColourOnly() {
+        // No mask means there is nothing to cut, so this stays a flat colour: the scope
+        // is deliberately limited to mask-carrying materials (mirrors, screens and gauge
+        // icons need their own handling).
+        MaterialDefinition def = def("""
+                {
+                  "mapTo": "mirror_F",
+                  "Stages": [ { "baseColorFactor": [1.0, 1.0, 1.0, 1] } ]
+                }
+                """);
+
+        MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
+
+        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
+        assertFalse(plan.hasTexture());
+        assertFalse(plan.hasOpacity());
+    }
+
+    @Test
     void undeclaredCoverageMaskUsesTheConfiguredThreshold() {
         MaterialDefinition def = def("""
                 {
@@ -269,8 +316,10 @@ class MaterialRenderPlannerTest {
     }
 
     @Test
-    void coverageMaskWithoutADiffuseStaysColourOnly() {
-        // There is nothing to clip, so the mask cannot turn this into a cutout.
+    void coverageMaskWithoutADiffuseIsCutOverWhite() {
+        // No colour map to sample, so the mask is composed over white and the flat factor
+        // tints it. This used to assert colorOnly — the behaviour that painted
+        // grille-style parts as solid panels.
         MaterialDefinition def = def("""
                 {
                   "mapTo": "mask_only",
@@ -278,9 +327,11 @@ class MaterialRenderPlannerTest {
                 }
                 """);
         MaterialRenderPlan plan = MaterialRenderPlanner.plan(def);
-        assertEquals(MaterialRenderPlan.RenderMode.OPAQUE, plan.mode());
-        assertFalse(plan.hasTexture());
-        assertEquals(0f, plan.alphaRef());
+        assertEquals(MaterialRenderPlan.RenderMode.CUTOUT, plan.mode());
+        assertFalse(plan.hasTexture(), "there is still no colour to sample");
+        assertTrue(plan.hasOpacity());
+        assertEquals("mask_o.png", plan.opacityPath());
+        assertEquals(MaterialRenderPlanner.DEFAULT_CUTOUT_ALPHA_REF, plan.alphaRef());
     }
 
     @Test

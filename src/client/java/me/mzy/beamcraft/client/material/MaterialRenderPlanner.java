@@ -126,6 +126,10 @@ public final class MaterialRenderPlanner {
         RgbaColor baseFactor = fallbackFactor;
         Float stageOpacityFactor = null;
         Float colorOnlyStageOpacityFactor = null;
+        // First mask and colour factor declared by any stage, kept for the
+        // no-colour-map case below.
+        String colorOnlyOpacityPath = null;
+        RgbaColor colorOnlyBaseFactor = null;
         if (material.activeLayers > 0) {
             List<MaterialStage> stages = material.stages;
             int limit = Math.min(material.activeLayers, stages.size());
@@ -134,7 +138,22 @@ public final class MaterialRenderPlanner {
                 if (colorOnlyStageOpacityFactor == null && stage != null && stage.opacityFactor != null) {
                     colorOnlyStageOpacityFactor = stage.opacityFactor;
                 }
-                if (stage == null || stage.baseColorMap == null || stage.baseColorMap.isEmpty()) {
+                if (stage == null) {
+                    continue;
+                }
+                // Noted before the colour-map test: BeamNG's flat-colour materials keep
+                // their holes in a stage that carries only a baseColorFactor plus an
+                // opacityMap, and skipping such a stage dropped the mask along with the
+                // colour map it was looking for.
+                if (colorOnlyOpacityPath == null && stage.opacityMap != null && !stage.opacityMap.isEmpty()) {
+                    colorOnlyOpacityPath = stage.opacityMap;
+                }
+                // The flat colour lives here too: grille_hex declares its 0.14 on the
+                // stage, and losing it would paint the part white rather than dark.
+                if (colorOnlyBaseFactor == null && stage.baseColorFactor != null) {
+                    colorOnlyBaseFactor = stage.baseColorFactor;
+                }
+                if (stage.baseColorMap == null || stage.baseColorMap.isEmpty()) {
                     continue;
                 }
                 diffusePath = stage.baseColorMap;
@@ -147,6 +166,12 @@ public final class MaterialRenderPlanner {
         }
         if (diffusePath == null) {
             stageOpacityFactor = colorOnlyStageOpacityFactor;
+            // A material with no colour map is not thereby a material with no mask, and
+            // its stage factor is still its colour.
+            opacityPath = colorOnlyOpacityPath;
+            if (colorOnlyBaseFactor != null) {
+                baseFactor = colorOnlyBaseFactor;
+            }
         }
         Float explicitOpacity = stageOpacityFactor != null ? stageOpacityFactor : material.opacityFactor;
         Float opacityFactor = InteriorGlassOpacityFallback.resolve(explicitOpacity,
@@ -352,9 +377,16 @@ public final class MaterialRenderPlanner {
             return MaterialRenderPlan.translucent(diffusePath, opacityPath, factor, material.translucentBlendOp);
         }
         if (material.alphaRef > 0f) {
-            return diffusePath != null
-                    ? MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, material.alphaRef)
-                    : MaterialRenderPlan.colorOnly(factor);
+            if (diffusePath != null) {
+                return MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, material.alphaRef);
+            }
+            // No colour map at all: a flat baseColorFactor plus a coverage mask. The mask
+            // still has to reach the alpha test, so it is composed over white and the
+            // factor tints it — dropping to colorOnly is what painted grilles solid.
+            if (opacityPath != null) {
+                return MaterialRenderPlan.cutoutMaskOnly(opacityPath, factor, material.alphaRef);
+            }
+            return MaterialRenderPlan.colorOnly(factor);
         }
         if (factor.a() < 1.0f) {
             return MaterialRenderPlan.translucent(diffusePath, opacityPath, factor, material.translucentBlendOp);
@@ -365,7 +397,7 @@ public final class MaterialRenderPlanner {
             // is what painted mesh-style parts as solid panels.
             return diffusePath != null
                     ? MaterialRenderPlan.cutout(diffusePath, opacityPath, factor, defaultCutoutAlphaRef)
-                    : MaterialRenderPlan.colorOnly(factor);
+                    : MaterialRenderPlan.cutoutMaskOnly(opacityPath, factor, defaultCutoutAlphaRef);
         }
         return diffusePath != null
                 ? MaterialRenderPlan.textured(diffusePath, factor)

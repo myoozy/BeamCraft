@@ -447,6 +447,27 @@ public final class MaterialLibrary {
         }
     }
 
+    /**
+     * Convenience: acquires the opacity texture, composes it over flat white (see
+     * {@link TextureCompositor#composeWhiteWithOpacity}), releases the acquire and
+     * returns the composed image. Used for a material that carries its colour as a
+     * factor and has no base-colour map at all — BeamNG's stock grille materials —
+     * where the mask is the only thing that can drive the cutout.
+     *
+     * @param opacity   single-channel opacity texture handle
+     * @param namespace vehicle namespace for lifecycle ownership
+     * @return the composed RGBA image (caller-owned, not cached)
+     * @throws IOException if the texture cannot be decoded
+     */
+    public static DecodedImage composeWhiteWithOpacity(TextureResource opacity, String namespace) throws IOException {
+        DecodedImage opacityImage = acquireDecodedTexture(opacity, namespace);
+        try {
+            return TextureCompositor.composeWhiteWithOpacity(opacityImage);
+        } finally {
+            releaseDecodedTexture(opacity);
+        }
+    }
+
     /** Decoded textures currently retained by the cache (diagnostic). */
     public static int getDecodedTextureCount() {
         return DECODED_TEXTURES.size();
