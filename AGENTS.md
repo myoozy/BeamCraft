@@ -1,5 +1,15 @@
 # Repository instructions for coding agents
 
+**Read `ARCHITECTURE.md` first.** It is the repository's architecture map,
+written for human maintainers and agents alike: the source-set split, the client
+vehicle lifecycle, the physics step (asynchronous, and split so the physics
+thread never touches the Minecraft world), the JBeam pipeline, the powertrain and
+materials subsystems, and asset/config discovery.
+
+The rules below are about provenance and licensing.
+
+## Provenance and licensing
+
 - Read `SOURCE_PROVENANCE.md` before changing JBeam parsing, wheel generation,
   adaptive dampers, or powertrain code.
 - Prefer BeamNG's public documentation for compatibility work. If BeamNG Lua is

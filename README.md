@@ -272,6 +272,7 @@ Other versions not tested.
 - Many code comments are in Chinese; log and error output is in English
 - Some compatibility code is adapted from BeamNG.drive bCDDL 1.1 Lua source;
   see [Source provenance](SOURCE_PROVENANCE.md)
+- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
 
