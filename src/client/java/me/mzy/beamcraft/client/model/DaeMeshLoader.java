@@ -15,6 +15,7 @@ import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class DaeMeshLoader {
 
@@ -72,9 +73,19 @@ public class DaeMeshLoader {
         List<ResolvedEntry> candidates;
         /** entryName of every candidate already handed to Assimp. */
         final Set<String> imported = new HashSet<>();
-        /** Node names seen in a candidate's text; kept across releases (files do not change). */
-        final Map<String, Set<String>> namesByEntry = new HashMap<>();
+        /**
+         * Node names seen in a candidate's text; kept across releases (files do not
+         * change). Written from the parallel harvest, so it must be concurrent.
+         */
+        final Map<String, Set<String>> namesByEntry = new ConcurrentHashMap<>();
     }
+
+    /**
+     * How many candidates are read and indexed before names are attributed. Each
+     * slice is scanned in parallel; the slice boundary is what keeps a vehicle from
+     * indexing a library it never touches.
+     */
+    private static final int HARVEST_SLICE = 32;
 
     private static final Map<String, NamespaceState> NAMESPACE_STATE = new HashMap<>();
     /** Mesh names of the current require call that no candidate declares. */
@@ -123,12 +134,19 @@ public class DaeMeshLoader {
         if (!COMMON.equals(namespace)) {
             importAllRemaining(namespace);
         }
-        unattributed.clear();
+
+        // Every wanted name is attributed in one batched pass: it stops as soon as the
+        // last name has a provider, instead of walking the candidate list per name.
+        Set<String> pending = new LinkedHashSet<>();
         for (String meshName : meshNames) {
-            if (meshName != null && !meshName.isEmpty()) {
-                ensureMesh(namespace, meshName);
+            if (meshName != null && !meshName.isEmpty() && !isCached(namespace, meshName)) {
+                pending.add(meshName);
             }
         }
+        attributeAll(COMMON, pending);
+
+        unattributed.clear();
+        unattributed.addAll(pending);
         LoadTiming.log("  [dae] " + namespace + ": " + importedSummary(namespace), started);
         reportUnattributed();
     }
@@ -178,53 +196,70 @@ public class DaeMeshLoader {
     }
 
     /**
-     * Makes {@code meshName} resolvable by importing the shared-library file that
-     * declares it. The vehicle's own namespace is already imported by the caller, so
-     * only the shared library is searched.
+     * Maps the shared-library files that declare any of {@code pending}, removing a
+     * name from the set once it resolves. The vehicle's own namespace is already
+     * imported by the caller, so only the shared library is searched.
+     *
+     * <p>Candidates are indexed a slice at a time and attributed in path order, so a
+     * name provided by several files still goes to the same winner it did when the
+     * search ran one name at a time. Inside a slice the scan runs in parallel: the
+     * needed files sit across the whole 615 MB of the shared library, so every
+     * candidate gets read either way, and the text scan is what costs — reading all
+     * 178 of them is 0.5 s against 1.2 s of scanning.
      */
+    private static void attributeAll(String namespace, Set<String> pending) {
+        NamespaceState state = stateFor(namespace);
+        for (int from = 0; from < state.candidates.size() && !pending.isEmpty(); from += HARVEST_SLICE) {
+            int to = Math.min(from + HARVEST_SLICE, state.candidates.size());
+            List<ResolvedEntry> slice = state.candidates.subList(from, to);
+
+            slice.parallelStream()
+                    .filter(entry -> !state.imported.contains(entry.entryName()))
+                    .forEach(entry -> harvest(state, entry));
+
+            for (ResolvedEntry entry : slice) {
+                if (pending.isEmpty()) {
+                    break;
+                }
+                if (state.imported.contains(entry.entryName())) {
+                    continue;
+                }
+                Set<String> names = state.namesByEntry.get(entry.entryName());
+                if (names == null || Collections.disjoint(names, pending)) {
+                    continue;
+                }
+                importEntry(entry, namespace, state);
+                // An import only counts if the geometry really landed: a file Assimp
+                // rejects must not retire a name it "declared".
+                pending.removeIf(name -> MESH_CACHE.containsKey(namespace + ":" + name));
+            }
+        }
+    }
+
+    /**
+     * Reads a candidate's text into the name index, once. Each entry appears in one
+     * slice, so no two threads ever harvest the same file.
+     */
+    private static void harvest(NamespaceState state, ResolvedEntry entry) {
+        state.namesByEntry.put(entry.entryName(), harvestNames(entry));
+    }
+
+    /** Resolves one mesh name eagerly, for a caller that is not {@link #requireMeshes}. */
     private static void ensureMesh(String namespace, String meshName) {
         if (isCached(namespace, meshName)) {
             return;
         }
-        if (ensureFrom(COMMON, meshName)) {
-            return;
+        Set<String> pending = new LinkedHashSet<>();
+        pending.add(meshName);
+        attributeAll(COMMON, pending);
+        if (!pending.isEmpty()) {
+            unattributed.add(meshName);
         }
-        unattributed.add(meshName);
     }
 
     private static boolean isCached(String namespace, String meshName) {
         return MESH_CACHE.containsKey(namespace + ":" + meshName)
                 || MESH_CACHE.containsKey(COMMON + ":" + meshName);
-    }
-
-    /** Imports providers from one namespace until {@code meshName} resolves, or none is left. */
-    private static boolean ensureFrom(String namespace, String meshName) {
-        NamespaceState state = stateFor(namespace);
-        String key = namespace + ":" + meshName;
-        for (ResolvedEntry entry : state.candidates) {
-            if (MESH_CACHE.containsKey(key)) {
-                return true;
-            }
-            if (state.imported.contains(entry.entryName()) || !provides(state, entry, meshName)) {
-                continue;
-            }
-            importEntry(entry, namespace, state);
-        }
-        return MESH_CACHE.containsKey(key);
-    }
-
-    /**
-     * True when a candidate's text declares {@code meshName}. The answer is cached
-     * per file so several names share one read; an unreadable file counts as a
-     * non-provider, which surfaces in the unattributed-name report instead.
-     */
-    private static boolean provides(NamespaceState state, ResolvedEntry entry, String meshName) {
-        Set<String> names = state.namesByEntry.get(entry.entryName());
-        if (names == null) {
-            names = harvestNames(entry);
-            state.namesByEntry.put(entry.entryName(), names);
-        }
-        return names.contains(meshName);
     }
 
     /**
