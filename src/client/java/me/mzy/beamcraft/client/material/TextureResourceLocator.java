@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -30,6 +31,10 @@ import java.util.zip.ZipFile;
  *   <li>A logical {@code *.png} reference falls back to the same-stem
  *       {@code *.dds} entry, because BeamNG material JSON paths usually say
  *       {@code .png} while archives ship {@code .dds}.</li>
+ *   <li>A {@code @name} reference is BeamNG's shorthand for a file-name tail, not a
+ *       path: {@code "@licenseplate-default"} is shipped as
+ *       {@code premade@licenseplate-default.dds}. This is resolved by matching the
+ *       name tail, again preferring the built {@code .dds}.</li>
  * </ul>
  *
  * <p><b>Path safety</b>: logical paths are rejected when they contain an empty,
@@ -54,11 +59,18 @@ import java.util.zip.ZipFile;
  */
 final class TextureResourceLocator {
 
+    /** BeamNG's marker for a material-to-texture reference given as a file-name tail. */
+    private static final String AT_REFERENCE_PREFIX = "@";
+    /** Extensions tried for an {@code @name} reference, the built texture first. */
+    private static final String[] AT_REFERENCE_EXTENSIONS = {".dds", ".png", ".jpg", ".jpeg"};
+
     private static final class Source {
         final File file;
         final boolean zip;
         // Lazy, case-insensitive ZIP entry index: lowercase entry name -> real entry name.
         Map<String, String> zipIndex;
+        // Same for a loose folder, but only built when an @name reference needs it.
+        Map<String, String> folderIndex;
 
         Source(File file, boolean zip) {
             this.file = file;
@@ -149,7 +161,90 @@ final class TextureResourceLocator {
         if (found == null && normalized.toLowerCase(Locale.ROOT).endsWith(".png")) {
             found = lookup(normalized.substring(0, normalized.length() - 4) + ".dds");
         }
+        if (found == null && normalized.startsWith(AT_REFERENCE_PREFIX)) {
+            found = lookupByFileTail(stripTextureExtension(normalized));
+        }
         return found;
+    }
+
+    /**
+     * Resolves BeamNG's {@code @name} texture shorthand by file-name tail.
+     *
+     * <p>A material stage saying {@code "@licenseplate-default"} is not naming a path:
+     * the stock asset ships the texture as {@code premade@licenseplate-default.dds}, so
+     * the reference is the tail of a file name. Extensions are tried in order so the
+     * built DDS wins over the source image, mirroring the {@code .png} to {@code .dds}
+     * rule above.
+     *
+     * <p>A loose folder needs a full walk to answer this, so its index is built lazily
+     * and only for a container that actually uses the shorthand.
+     */
+    private TextureResource lookupByFileTail(String tail) {
+        String lowerTail = tail.toLowerCase(Locale.ROOT);
+        for (String extension : AT_REFERENCE_EXTENSIONS) {
+            String suffix = lowerTail + extension;
+            for (Source source : sources) {
+                Map<String, String> index = source.zip ? zipIndex(source) : folderIndex(source);
+                String realEntry = smallestTailMatch(index, suffix);
+                if (realEntry != null) {
+                    return new TextureResource(source.file, realEntry, source.zip);
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Drops a trailing texture extension, so {@code @foo.png} and {@code @foo} search alike. */
+    private static String stripTextureExtension(String reference) {
+        String lower = reference.toLowerCase(Locale.ROOT);
+        for (String extension : AT_REFERENCE_EXTENSIONS) {
+            if (lower.endsWith(extension)) {
+                return reference.substring(0, reference.length() - extension.length());
+            }
+        }
+        return reference;
+    }
+
+    /**
+     * The lexicographically first entry whose file name ends with {@code suffix}. Several
+     * assets can share a tail ({@code licenseplate-default} is also a prefix of
+     * {@code -specular} and {@code -normal}), and picking the first map entry would make
+     * the choice depend on hash order.
+     */
+    private static String smallestTailMatch(Map<String, String> index, String suffix) {
+        String best = null;
+        for (String realEntry : index.values()) {
+            int slash = realEntry.lastIndexOf('/');
+            String name = (slash < 0 ? realEntry : realEntry.substring(slash + 1)).toLowerCase(Locale.ROOT);
+            if (name.endsWith(suffix) && (best == null || realEntry.compareTo(best) < 0)) {
+                best = realEntry;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Lazy case-insensitive index of a loose folder, built on the first {@code @name}
+     * lookup. Normal path lookups keep using {@link #caseInsensitivePath}, so a folder
+     * is never walked unless the shorthand asks for it.
+     */
+    private Map<String, String> folderIndex(Source source) {
+        if (source.folderIndex != null) {
+            return source.folderIndex;
+        }
+        Map<String, String> index = new HashMap<>();
+        Path root = source.file.toPath();
+        try (Stream<Path> paths = Files.walk(root)) {
+            paths.filter(Files::isRegularFile).forEach(path -> {
+                String relative = root.relativize(path).toString().replace('\\', '/');
+                index.put(relative.toLowerCase(Locale.ROOT), relative);
+            });
+        } catch (IOException e) {
+            System.err.println("⚠️ [Materials] Failed to index folder " + source.file.getAbsolutePath()
+                    + ": " + e.getMessage());
+        }
+        source.folderIndex = index;
+        return index;
     }
 
     /** Reads the full texture bytes for a resolved resource. */
