@@ -2,6 +2,9 @@
 
 The architecture map for BeamCraft, written for maintainers and coding agents alike.
 
+Licensing and upstream-source provenance are documented in `SOURCE_PROVENANCE.md`;
+the coding-agent rules for when it must be consulted are in `AGENTS.md`.
+
 ## Build / Test / Run
 
 ```bash
