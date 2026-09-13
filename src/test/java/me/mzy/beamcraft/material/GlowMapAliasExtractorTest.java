@@ -158,6 +158,15 @@ class GlowMapAliasExtractorTest {
     }
 
     @Test
+    void aDifferentlyCasedGlowMapKeyIsNotAnAlias() {
+        // This is what makes skipping content without the substring "glowMap" safe:
+        // collect() looks the key up case-sensitively on every part, so a "glowmap"
+        // section never produced an alias in the first place.
+        String jbeam = "{\"partA\":{\"glowmap\":{\"alpha\":{\"off\":\"targetA\"}}}}";
+        assertTrue(extract(jbeam).isEmpty());
+    }
+
+    @Test
     void onlyPartsWithGlowMapAreProcessed() {
         String jbeam = """
                 {
