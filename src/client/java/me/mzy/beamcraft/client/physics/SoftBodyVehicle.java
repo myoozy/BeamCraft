@@ -71,6 +71,13 @@ public class SoftBodyVehicle {
 
     final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
+    // Written once by this vehicle's broad-phase task and consumed after the
+    // parallel candidate-generation barrier. Primitive fields keep collision
+    // diagnostics allocation-free inside the hot loop.
+    int collisionCandidateSapHits;
+    int collisionCandidateStored;
+    int collisionCandidateDropped;
+
     double entityX = 0.0;
     double entityY = 0.0;
     double entityZ = 0.0;

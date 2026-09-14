@@ -128,8 +128,11 @@ public class PhysicsWorld {
         int subSteps = preparedStep.subSteps();
         float subDt = (float) (dt / subSteps);
         float plasticRelaxation = 1.0f;
-        int broadphaseRate = 10;
+        int broadphaseRate = 20;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
+        double candidateGenerationMs = 0.0, colorMs = 0.0;
+        long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L;
+        int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
         List<ElectricSnapshot> electricSnapshots = new ArrayList<>(preparedStep.electricSnapshots());
 
         int nextRenderSnapshotIndex = 1;
@@ -155,13 +158,15 @@ public class PhysicsWorld {
 
                 int activeOffset = 0;
                 for (SoftBodyVehicle vehicle : activeVehicles) {
+                    if (vehicle.nodes.count > SoftBodyCollisionManager.MAX_GLOBAL_NODES - activeOffset) {
+                        throw new IllegalStateException("Total vehicle node count exceeds collision capacity "
+                                + SoftBodyCollisionManager.MAX_GLOBAL_NODES);
+                    }
                     vehicle.globalNodeOffset = activeOffset;
                     activeOffset += vehicle.nodes.count;
 
-                    globalSap.insertNodes(vehicle);
+                    globalSap.insertNodes(vehicle, subDt * broadphaseRate);
                 }
-
-                // if (activeOffset >= SoftBodyCollisionManager.MAX_GLOBAL_NODES) { ... }
 
                 globalSap.updateAndSort();
 
@@ -170,11 +175,24 @@ public class PhysicsWorld {
 
                 collisionManager.clearContacts();
 
+                long candidateGenerationStarted = System.nanoTime();
                 activeVehicles.parallelStream().forEach(vehicle -> {
                     collisionPipeline.generateCollisionCandidates(vehicle, subDt * broadphaseRate);
                 });
+                candidateGenerationMs += (System.nanoTime() - candidateGenerationStarted) / 1_000_000.0;
 
+                lastSapHits = 0;
+                lastCandidatesStored = 0;
+                lastCandidatesDropped = 0;
+                for (SoftBodyVehicle vehicle : activeVehicles) {
+                    lastSapHits += vehicle.collisionCandidateSapHits;
+                    lastCandidatesStored += vehicle.collisionCandidateStored;
+                    lastCandidatesDropped += vehicle.collisionCandidateDropped;
+                }
+
+                long colorStarted = System.nanoTime();
                 collisionManager.buildAndColorBatches();
+                colorMs += (System.nanoTime() - colorStarted) / 1_000_000.0;
 
                 long tii3 = System.nanoTime();
                 dyeCollisionMs += (tii3 - tii2) / 1_000_000.0;
@@ -182,7 +200,10 @@ public class PhysicsWorld {
 
             long ti3 = System.nanoTime();
 
-            collisionPipeline.solveSoftBodyContacts(subDt);
+            narrowChecks += collisionManager.contactCount.get();
+            long narrowStats = collisionPipeline.solveSoftBodyContacts(subDt);
+            narrowAabbPassed += narrowStats & 0xFFFFFFFFL;
+            narrowResolved += narrowStats >>> 32;
 
             long ti4 = System.nanoTime();
             softCollisionMs += (ti4 - ti3) / 1_000_000.0;
@@ -216,7 +237,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[9];
+        double[] timings = new double[37];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -224,6 +245,22 @@ public class PhysicsWorld {
         timings[5] = softCollisionMs;
         timings[6] = mcCollisionMs;
         timings[7] = postUpdateMs;
+        timings[9] = candidateGenerationMs;
+        timings[12] = colorMs;
+        timings[13] = lastSapHits;
+        timings[14] = lastCandidatesStored;
+        timings[15] = lastCandidatesDropped;
+        timings[16] = narrowChecks;
+        timings[17] = narrowAabbPassed;
+        timings[18] = narrowResolved;
+        timings[19] = collisionManager.activeBatchCount;
+        int largestBatch = 0;
+        for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {
+            int size = collisionManager.batchSize[batch];
+            timings[21 + batch] = size;
+            if (size > largestBatch) largestBatch = size;
+        }
+        timings[20] = largestBatch;
         return new StepResult(preparedStep, timings, System.nanoTime());
     }
 

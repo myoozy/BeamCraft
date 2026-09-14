@@ -22,6 +22,9 @@ import java.util.stream.IntStream;
  * these calls safe on the pure-physics thread.
  */
 public final class CollisionPipeline {
+    private static final float SOFT_CONTACT_THICKNESS = 0.01f;
+    private static final float SOFT_CONTACT_BARYCENTRIC_TOLERANCE = 0.01f;
+
     private final VoxelSnapshot voxelSnapshot;
     private final DynamicAxisSweep sap;
     private final SoftBodyCollisionManager collisionManager;
@@ -41,6 +44,10 @@ public final class CollisionPipeline {
     public void generateCollisionCandidates(SoftBodyVehicle vehicle, double dtPredict) {
         double eX = vehicle.entityX, eY = vehicle.entityY, eZ = vehicle.entityZ;
 
+        int sapHits = 0;
+        int stored = 0;
+        int dropped = 0;
+
         double BASE_MARGIN = 0.01;
 
         for (int i = 0; i < vehicle.triangles.count; i++) {
@@ -54,54 +61,62 @@ public final class CollisionPipeline {
             double bx = eX + vehicle.nodes.posX[nB], by = eY + vehicle.nodes.posY[nB], bz = eZ + vehicle.nodes.posZ[nB];
             double cx = eX + vehicle.nodes.posX[nC], cy = eY + vehicle.nodes.posY[nC], cz = eZ + vehicle.nodes.posZ[nC];
 
-            double minX = Math.min(ax, Math.min(bx, cx)) - BASE_MARGIN;
-            double maxX = Math.max(ax, Math.max(bx, cx)) + BASE_MARGIN;
-            double minY = Math.min(ay, Math.min(by, cy)) - BASE_MARGIN;
-            double maxY = Math.max(ay, Math.max(by, cy)) + BASE_MARGIN;
-            double minZ = Math.min(az, Math.min(bz, cz)) - BASE_MARGIN;
-            double maxZ = Math.max(az, Math.max(bz, cz)) + BASE_MARGIN;
+            // Union the current and predicted position of every vertex. Using
+            // average triangle velocity misses rotation and deformation where
+            // one vertex sweeps much farther than the centroid.
+            double futureAx = ax + vehicle.nodes.velX[nA] * dtPredict;
+            double futureAy = ay + vehicle.nodes.velY[nA] * dtPredict;
+            double futureAz = az + vehicle.nodes.velZ[nA] * dtPredict;
+            double futureBx = bx + vehicle.nodes.velX[nB] * dtPredict;
+            double futureBy = by + vehicle.nodes.velY[nB] * dtPredict;
+            double futureBz = bz + vehicle.nodes.velZ[nB] * dtPredict;
+            double futureCx = cx + vehicle.nodes.velX[nC] * dtPredict;
+            double futureCy = cy + vehicle.nodes.velY[nC] * dtPredict;
+            double futureCz = cz + vehicle.nodes.velZ[nC] * dtPredict;
 
-            double triVx = (vehicle.nodes.velX[nA] + vehicle.nodes.velX[nB] + vehicle.nodes.velX[nC]) * 0.3333333333;
-            double triVy = (vehicle.nodes.velY[nA] + vehicle.nodes.velY[nB] + vehicle.nodes.velY[nC]) * 0.3333333333;
-            double triVz = (vehicle.nodes.velZ[nA] + vehicle.nodes.velZ[nB] + vehicle.nodes.velZ[nC]) * 0.3333333333;
-
-            double dx = triVx * dtPredict;
-            double dy = triVy * dtPredict;
-            double dz = triVz * dtPredict;
-
-            if (dx > 0) maxX += dx; else minX += dx;
-            if (dy > 0) maxY += dy; else minY += dy;
-            if (dz > 0) maxZ += dz; else minZ += dz;
+            double minX = Math.min(Math.min(ax, futureAx),
+                    Math.min(Math.min(bx, futureBx), Math.min(cx, futureCx))) - BASE_MARGIN;
+            double maxX = Math.max(Math.max(ax, futureAx),
+                    Math.max(Math.max(bx, futureBx), Math.max(cx, futureCx))) + BASE_MARGIN;
+            double minY = Math.min(Math.min(ay, futureAy),
+                    Math.min(Math.min(by, futureBy), Math.min(cy, futureCy))) - BASE_MARGIN;
+            double maxY = Math.max(Math.max(ay, futureAy),
+                    Math.max(Math.max(by, futureBy), Math.max(cy, futureCy))) + BASE_MARGIN;
+            double minZ = Math.min(Math.min(az, futureAz),
+                    Math.min(Math.min(bz, futureBz), Math.min(cz, futureCz))) - BASE_MARGIN;
+            double maxZ = Math.max(Math.max(az, futureAz),
+                    Math.max(Math.max(bz, futureBz), Math.max(cz, futureCz))) + BASE_MARGIN;
 
             vehicle.sweepResultBuffer.clear();
-            sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, vehicle.sweepResultBuffer);
+            int rawHits = sap.queryCollisionNodesInAABB(
+                    minX, minY, minZ, maxX, maxY, maxZ,
+                    vehicle, nA, nB, nC, vehicle.triangles.partId[i],
+                    vehicle.sweepResultBuffer);
+            sapHits += rawHits;
 
             for (int k = 0; k < vehicle.sweepResultBuffer.count; k++) {
                 SoftBodyVehicle hitVeh = vehicle.sweepResultBuffer.vehicles[k];
                 int hitNodeId = vehicle.sweepResultBuffer.nodeIds[k];
 
-                if (hitVeh == vehicle && !vehicle.nodes.selfCollision[hitNodeId]) continue;
-                if (hitVeh == vehicle && (hitNodeId == nA || hitNodeId == nB || hitNodeId == nC)) continue;
-
-                if (hitVeh == vehicle) {
-                    int triPartId = vehicle.triangles.partId[i];
-                    if (triPartId >= 0 && triPartId < vehicle.matrixPartStride) {
-                        if (vehicle.nodeInPartMatrix[hitNodeId * vehicle.matrixPartStride + triPartId]) {
-                            continue;
-                        }
-                    }
+                if (collisionManager.addContact(hitVeh, hitNodeId, vehicle, nA, nB, nC)) {
+                    stored++;
+                } else {
+                    dropped++;
                 }
-
-                collisionManager.addContact(hitVeh, hitNodeId, vehicle, nA, nB, nC);
             }
         }
+
+        vehicle.collisionCandidateSapHits = sapHits;
+        vehicle.collisionCandidateStored = stored;
+        vehicle.collisionCandidateDropped = dropped;
     }
 
     /**
      * Resolve cached soft-body contacts batch by batch.
      */
-    public void solveSoftBodyContacts(float dt) {
+    public long solveSoftBodyContacts(float dt) {
         final int PARALLEL_THRESHOLD = 1024;
+        long narrowStats = 0L;
 
         for (int b = 0; b < collisionManager.activeBatchCount; b++) {
             int currentBatchSize = collisionManager.batchSize[b];
@@ -109,25 +124,37 @@ public final class CollisionPipeline {
 
             final int batchIndex = b;
 
-            if (currentBatchSize < PARALLEL_THRESHOLD) {
+            if (!canSolveBatchInParallel(b, currentBatchSize, PARALLEL_THRESHOLD)) {
                 for (int idx = 0; idx < currentBatchSize; idx++) {
                     int contactId = collisionManager.batches[batchIndex][idx];
-                    resolveSingleContact(contactId, dt);
+                    narrowStats += packNarrowResult(resolveSingleContact(contactId, dt));
                 }
             } else {
-                IntStream.range(0, currentBatchSize).parallel().forEach(idx -> {
+                narrowStats += IntStream.range(0, currentBatchSize).parallel().mapToLong(idx -> {
                     int contactId = collisionManager.batches[batchIndex][idx];
-                    resolveSingleContact(contactId, dt);
-                });
+                    return packNarrowResult(resolveSingleContact(contactId, dt));
+                }).sum();
             }
         }
+        return narrowStats;
+    }
+
+    static boolean canSolveBatchInParallel(int batchIndex, int batchSize, int parallelThreshold) {
+        return batchIndex != SoftBodyCollisionManager.OVERFLOW_BATCH_INDEX
+                && batchSize >= parallelThreshold;
+    }
+
+    private static long packNarrowResult(int result) {
+        long aabbPassed = result >= 1 ? 1L : 0L;
+        long resolved = result >= 2 ? 1L : 0L;
+        return (resolved << 32) | aabbPassed;
     }
 
     /**
      * Resolve one node-vs-triangle soft-body contact in triangle-local coordinates.
      */
-    private void resolveSingleContact(int contactId, float dt) {
-        final float THICKNESS = 0.01f;
+    private int resolveSingleContact(int contactId, float dt) {
+        final float THICKNESS = SOFT_CONTACT_THICKNESS;
         final float PBD_RELAXATION = 1.0f;
         final float MAX_POS_PUSH = 0.1f;
         final float RESTITUTION = 0.0f;
@@ -159,7 +186,7 @@ public final class CollisionPipeline {
         float maxY = Math.max(ay, Math.max(by, cy)) + THICKNESS;
         float minZ = Math.min(az, Math.min(bz, cz)) - THICKNESS;
         float maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
-        if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) return;
+        if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) return 0;
 
         float abx = bx - ax, aby = by - ay, abz = bz - az;
         float acx = cx - ax, acy = cy - ay, acz = cz - az;
@@ -168,16 +195,9 @@ public final class CollisionPipeline {
         float nz = abx * acy - aby * acx;
 
         float nLenSq = nx * nx + ny * ny + nz * nz;
-        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) return 1;
         float invNLen = 1.0f / (float) Math.sqrt(nLenSq);
         nx *= invNLen; ny *= invNLen; nz *= invNLen;
-
-        float d00 = abx * abx + aby * aby + abz * abz;
-        float d01 = abx * acx + aby * acy + abz * acz;
-        float d11 = acx * acx + acy * acy + acz * acz;
-        float denom = d00 * d11 - d01 * d01;
-        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) return;
-        float invDenom = 1.0f / denom;
 
         float apx = pX - ax, apy = pY - ay, apz = pZ - az;
         float distCurr = apx * nx + apy * ny + apz * nz;
@@ -194,7 +214,16 @@ public final class CollisionPipeline {
         float pushDir = (distPrev > 0.0f) ? 1.0f : -1.0f;
         float signedDist = distCurr * pushDir;
         float penetration = THICKNESS - signedDist;
-        if (penetration <= 0.0f) return;
+        if (penetration <= 0.0f) return 1;
+
+        // Most cached candidates fail the plane-distance test above. Delay the
+        // barycentric Gram matrix until a contact can actually penetrate.
+        float d00 = abx * abx + aby * aby + abz * abz;
+        float d01 = abx * acx + aby * acy + abz * acz;
+        float d11 = acx * acx + acy * acy + acz * acz;
+        float denom = d00 * d11 - d01 * d01;
+        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) return 1;
+        float invDenom = 1.0f / denom;
 
         float ppx = apx - distCurr * nx;
         float ppy = apy - distCurr * ny;
@@ -207,8 +236,8 @@ public final class CollisionPipeline {
         float wC = (d00 * d21 - d01 * d20) * invDenom;
         float wA = 1.0f - wB - wC;
 
-        final float TOLERANCE = -0.01f;
-        if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) return;
+        final float TOLERANCE = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
+        if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) return 1;
 
         float effNx = nx * pushDir, effNy = ny * pushDir, effNz = nz * pushDir;
 
@@ -216,7 +245,7 @@ public final class CollisionPipeline {
         float massA = tVeh.nodes.mass[nA], massB = tVeh.nodes.mass[nB], massC = tVeh.nodes.mass[nC];
 
         float wTotal = (1.0f / massNode) + (wA * wA / massA) + (wB * wB / massB) + (wC * wC / massC);
-        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) return 1;
         float invWTotal = 1.0f / wTotal;
 
         float pushAmount = penetration * PBD_RELAXATION;
@@ -325,6 +354,7 @@ public final class CollisionPipeline {
         tVeh.applyPositionAndVelocityDeltaUnSafe(nC,
                 -dpX * (wC / massC), -dpY * (wC / massC), -dpZ * (wC / massC),
                 -dvX * (wC / massC), -dvY * (wC / massC), -dvZ * (wC / massC));
+        return 2;
     }
 
     /**
