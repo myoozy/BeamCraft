@@ -49,7 +49,7 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[37];
+	public static double[] lastPhysicsMsDetail = new double[38];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
 	private static final int[] ROLLING_TIMING_INDICES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12};
 	private static final double[][] ROLLING_TIMING_SAMPLES =
@@ -182,6 +182,7 @@ public class BeamCraftClient implements ClientModInitializer {
 			double narrowChecks = lastPhysicsMsDetail[16];
 			double narrowAabbPassed = lastPhysicsMsDetail[17];
 			double narrowResolved = lastPhysicsMsDetail[18];
+			double narrowCertificateSkipped = lastPhysicsMsDetail[37];
 			double aabbPassPercent = narrowChecks == 0.0 ? 0.0 : narrowAabbPassed * 100.0 / narrowChecks;
 			double resolvePercent = narrowChecks == 0.0 ? 0.0 : narrowResolved * 100.0 / narrowChecks;
 			String batchSizes = String.format("%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f | %.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f",
@@ -226,8 +227,9 @@ public class BeamCraftClient implements ClientModInitializer {
 					String.format("last broad SAP hits/stored/dropped: %.0f / %.0f / %.0f",
 							lastPhysicsMsDetail[13], lastPhysicsMsDetail[14], lastPhysicsMsDetail[15]),
 					timingSummary("softCollision", 5),
-					String.format("narrow checks/AABB/resolved: %.0f / %.0f (%.1f%%) / %.0f (%.2f%%)",
-							narrowChecks, narrowAabbPassed, aabbPassPercent, narrowResolved, resolvePercent),
+					String.format("narrow checks/cert-skip/AABB/resolved: %.0f / %.0f / %.0f (%.1f%%) / %.0f (%.2f%%)",
+							narrowChecks, narrowCertificateSkipped, narrowAabbPassed, aabbPassPercent,
+							narrowResolved, resolvePercent),
 					String.format("batches: %.0f | largest: %.0f | sizes: %s",
 							lastPhysicsMsDetail[19], lastPhysicsMsDetail[20], batchSizes),
 					timingSummary("mcCollision", 6),

@@ -131,7 +131,7 @@ public class PhysicsWorld {
         int broadphaseRate = 10;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
         double candidateGenerationMs = 0.0, colorMs = 0.0;
-        long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L;
+        long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L, narrowCertificateSkipped = 0L;
         int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
         List<ElectricSnapshot> electricSnapshots = new ArrayList<>(preparedStep.electricSnapshots());
 
@@ -166,7 +166,6 @@ public class PhysicsWorld {
                     activeOffset += vehicle.nodes.count;
 
                     globalSap.insertNodes(vehicle, subDt * broadphaseRate);
-                    globalSap.insertTriangles(vehicle, subDt * broadphaseRate);
                 }
 
                 globalSap.updateAndSort();
@@ -203,8 +202,10 @@ public class PhysicsWorld {
 
             narrowChecks += collisionManager.contactCount.get();
             long narrowStats = collisionPipeline.solveSoftBodyContacts(subDt);
-            narrowAabbPassed += narrowStats & 0xFFFFFFFFL;
-            narrowResolved += narrowStats >>> 32;
+            narrowAabbPassed += narrowStats & CollisionPipeline.NARROW_STAT_MASK;
+            narrowResolved += (narrowStats >>> CollisionPipeline.NARROW_STAT_BITS)
+                    & CollisionPipeline.NARROW_STAT_MASK;
+            narrowCertificateSkipped += narrowStats >>> (CollisionPipeline.NARROW_STAT_BITS * 2);
 
             long ti4 = System.nanoTime();
             softCollisionMs += (ti4 - ti3) / 1_000_000.0;
@@ -238,7 +239,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[37];
+        double[] timings = new double[38];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -254,6 +255,7 @@ public class PhysicsWorld {
         timings[16] = narrowChecks;
         timings[17] = narrowAabbPassed;
         timings[18] = narrowResolved;
+        timings[37] = narrowCertificateSkipped;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {

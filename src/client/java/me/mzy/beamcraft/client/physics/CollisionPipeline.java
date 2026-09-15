@@ -25,6 +25,8 @@ public final class CollisionPipeline {
     static final double SOFT_BROADPHASE_MARGIN = 0.01;
     private static final float SOFT_CONTACT_THICKNESS = 0.01f;
     private static final float SOFT_CONTACT_BARYCENTRIC_TOLERANCE = 0.01f;
+    static final int NARROW_STAT_BITS = 21;
+    static final long NARROW_STAT_MASK = (1L << NARROW_STAT_BITS) - 1L;
 
     private final VoxelSnapshot voxelSnapshot;
     private final DynamicAxisSweep sap;
@@ -144,9 +146,12 @@ public final class CollisionPipeline {
     }
 
     private static long packNarrowResult(int result) {
-        long aabbPassed = result >= 1 ? 1L : 0L;
-        long resolved = result >= 2 ? 1L : 0L;
-        return (resolved << 32) | aabbPassed;
+        long aabbPassed = result == 1 || result == 2 ? 1L : 0L;
+        long resolved = result == 2 ? 1L : 0L;
+        long certificateSkipped = result == 3 ? 1L : 0L;
+        return (certificateSkipped << (NARROW_STAT_BITS * 2))
+                | (resolved << NARROW_STAT_BITS)
+                | aabbPassed;
     }
 
     /**
@@ -179,26 +184,44 @@ public final class CollisionPipeline {
         float pY = entityDeltaY + nVeh.nodes.posY[nHit];
         float pZ = entityDeltaZ + nVeh.nodes.posZ[nHit];
 
+        float pax = pX - ax, pay = pY - ay, paz = pZ - az;
+        float bax = bx - ax, bay = by - ay, baz = bz - az;
+        float cax = cx - ax, cay = cy - ay, caz = cz - az;
+        if (collisionManager.separationCertificateStillValid(contactId,
+                pax, pay, paz, bax, bay, baz, cax, cay, caz)) {
+            return 3;
+        }
+
         float minX = Math.min(ax, Math.min(bx, cx)) - THICKNESS;
         float maxX = Math.max(ax, Math.max(bx, cx)) + THICKNESS;
         float minY = Math.min(ay, Math.min(by, cy)) - THICKNESS;
         float maxY = Math.max(ay, Math.max(by, cy)) + THICKNESS;
         float minZ = Math.min(az, Math.min(bz, cz)) - THICKNESS;
         float maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
-        if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) return 0;
+        if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) {
+            float aabbSlack = Math.max(
+                    Math.max(Math.max(minX - pX, pX - maxX), Math.max(minY - pY, pY - maxY)),
+                    Math.max(minZ - pZ, pZ - maxZ));
+            collisionManager.recordSeparationCertificate(contactId, aabbSlack,
+                    pax, pay, paz, bax, bay, baz, cax, cay, caz);
+            return 0;
+        }
 
-        float abx = bx - ax, aby = by - ay, abz = bz - az;
-        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float abx = bax, aby = bay, abz = baz;
+        float acx = cax, acy = cay, acz = caz;
         float nx = aby * acz - abz * acy;
         float ny = abz * acx - abx * acz;
         float nz = abx * acy - aby * acx;
 
         float nLenSq = nx * nx + ny * ny + nz * nz;
-        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) return 1;
+        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) {
+            collisionManager.invalidateSeparationCertificate(contactId);
+            return 1;
+        }
         float invNLen = 1.0f / (float) Math.sqrt(nLenSq);
         nx *= invNLen; ny *= invNLen; nz *= invNLen;
 
-        float apx = pX - ax, apy = pY - ay, apz = pZ - az;
+        float apx = pax, apy = pay, apz = paz;
         float distCurr = apx * nx + apy * ny + apz * nz;
 
         float triVx = (tVeh.nodes.velX[nA] + tVeh.nodes.velX[nB] + tVeh.nodes.velX[nC]) * 0.33333334f;
@@ -213,7 +236,10 @@ public final class CollisionPipeline {
         float pushDir = (distPrev > 0.0f) ? 1.0f : -1.0f;
         float signedDist = distCurr * pushDir;
         float penetration = THICKNESS - signedDist;
-        if (penetration <= 0.0f) return 1;
+        if (penetration <= 0.0f) {
+            recordGeometricSeparation(contactId, apx, apy, apz, abx, aby, abz, acx, acy, acz);
+            return 1;
+        }
 
         // Most cached candidates fail the plane-distance test above. Delay the
         // barycentric Gram matrix until a contact can actually penetrate.
@@ -221,7 +247,10 @@ public final class CollisionPipeline {
         float d01 = abx * acx + aby * acy + abz * acz;
         float d11 = acx * acx + acy * acy + acz * acz;
         float denom = d00 * d11 - d01 * d01;
-        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) return 1;
+        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) {
+            collisionManager.invalidateSeparationCertificate(contactId);
+            return 1;
+        }
         float invDenom = 1.0f / denom;
 
         float ppx = apx - distCurr * nx;
@@ -236,7 +265,10 @@ public final class CollisionPipeline {
         float wA = 1.0f - wB - wC;
 
         final float TOLERANCE = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
-        if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) return 1;
+        if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) {
+            recordGeometricSeparation(contactId, apx, apy, apz, abx, aby, abz, acx, acy, acz);
+            return 1;
+        }
 
         float effNx = nx * pushDir, effNy = ny * pushDir, effNz = nz * pushDir;
 
@@ -244,7 +276,10 @@ public final class CollisionPipeline {
         float massA = tVeh.nodes.mass[nA], massB = tVeh.nodes.mass[nB], massC = tVeh.nodes.mass[nC];
 
         float wTotal = (1.0f / massNode) + (wA * wA / massA) + (wB * wB / massB) + (wC * wC / massC);
-        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) return 1;
+        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) {
+            collisionManager.invalidateSeparationCertificate(contactId);
+            return 1;
+        }
         float invWTotal = 1.0f / wTotal;
 
         float pushAmount = penetration * PBD_RELAXATION;
@@ -353,7 +388,71 @@ public final class CollisionPipeline {
         tVeh.applyPositionAndVelocityDeltaUnSafe(nC,
                 -dpX * (wC / massC), -dpY * (wC / massC), -dpZ * (wC / massC),
                 -dvX * (wC / massC), -dvY * (wC / massC), -dvZ * (wC / massC));
+        collisionManager.invalidateSeparationCertificate(contactId);
         return 2;
+    }
+
+    private void recordGeometricSeparation(int contactId,
+                                           float px, float py, float pz,
+                                           float bx, float by, float bz,
+                                           float cx, float cy, float cz) {
+        float distanceSq = pointTriangleDistanceSquared(px, py, pz, bx, by, bz, cx, cy, cz);
+        float abLength = (float) Math.sqrt(bx * bx + by * by + bz * bz);
+        float acLength = (float) Math.sqrt(cx * cx + cy * cy + cz * cz);
+        float contactEnvelope = SOFT_CONTACT_THICKNESS
+                + SOFT_CONTACT_BARYCENTRIC_TOLERANCE * (abLength + acLength);
+        float slack = (float) Math.sqrt(distanceSq) - contactEnvelope;
+        collisionManager.recordSeparationCertificate(contactId, slack,
+                px, py, pz, bx, by, bz, cx, cy, cz);
+    }
+
+    /** Squared distance from P to triangle (0, B, C). */
+    static float pointTriangleDistanceSquared(float px, float py, float pz,
+                                              float bx, float by, float bz,
+                                              float cx, float cy, float cz) {
+        float d1 = bx * px + by * py + bz * pz;
+        float d2 = cx * px + cy * py + cz * pz;
+        if (d1 <= 0.0f && d2 <= 0.0f) return px * px + py * py + pz * pz;
+
+        float bpx = px - bx, bpy = py - by, bpz = pz - bz;
+        float d3 = bx * bpx + by * bpy + bz * bpz;
+        float d4 = cx * bpx + cy * bpy + cz * bpz;
+        if (d3 >= 0.0f && d4 <= d3) return bpx * bpx + bpy * bpy + bpz * bpz;
+
+        float vc = d1 * d4 - d3 * d2;
+        if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+            float v = d1 / (d1 - d3);
+            float qx = px - v * bx, qy = py - v * by, qz = pz - v * bz;
+            return qx * qx + qy * qy + qz * qz;
+        }
+
+        float cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+        float d5 = bx * cpx + by * cpy + bz * cpz;
+        float d6 = cx * cpx + cy * cpy + cz * cpz;
+        if (d6 >= 0.0f && d5 <= d6) return cpx * cpx + cpy * cpy + cpz * cpz;
+
+        float vb = d5 * d2 - d1 * d6;
+        if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+            float w = d2 / (d2 - d6);
+            float qx = px - w * cx, qy = py - w * cy, qz = pz - w * cz;
+            return qx * qx + qy * qy + qz * qz;
+        }
+
+        float va = d3 * d6 - d5 * d4;
+        if (va <= 0.0f && d4 - d3 >= 0.0f && d5 - d6 >= 0.0f) {
+            float edgeX = cx - bx, edgeY = cy - by, edgeZ = cz - bz;
+            float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            float qx = bpx - w * edgeX, qy = bpy - w * edgeY, qz = bpz - w * edgeZ;
+            return qx * qx + qy * qy + qz * qz;
+        }
+
+        float denom = 1.0f / (va + vb + vc);
+        float v = vb * denom;
+        float w = vc * denom;
+        float qx = px - bx * v - cx * w;
+        float qy = py - by * v - cy * w;
+        float qz = pz - bz * v - cz * w;
+        return qx * qx + qy * qy + qz * qz;
     }
 
     /**

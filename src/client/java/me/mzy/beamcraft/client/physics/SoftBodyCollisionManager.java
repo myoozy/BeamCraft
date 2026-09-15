@@ -28,6 +28,20 @@ public class SoftBodyCollisionManager {
     public final int[] contactTriB = new int[MAX_CONTACTS];
     public final int[] contactTriC = new int[MAX_CONTACTS];
 
+    // A separation certificate is expressed in triangle-A-relative coordinates.
+    // Common translation therefore costs nothing, while deformation, acceleration,
+    // and direction changes consume the recorded clearance using actual positions.
+    private final float[] separationSlack = new float[MAX_CONTACTS];
+    private final float[] separationRefPax = new float[MAX_CONTACTS];
+    private final float[] separationRefPay = new float[MAX_CONTACTS];
+    private final float[] separationRefPaz = new float[MAX_CONTACTS];
+    private final float[] separationRefBax = new float[MAX_CONTACTS];
+    private final float[] separationRefBay = new float[MAX_CONTACTS];
+    private final float[] separationRefBaz = new float[MAX_CONTACTS];
+    private final float[] separationRefCax = new float[MAX_CONTACTS];
+    private final float[] separationRefCay = new float[MAX_CONTACTS];
+    private final float[] separationRefCaz = new float[MAX_CONTACTS];
+
     // --- 批次数据结构 ---
     public final int[][] batches = new int[MAX_BATCHES][MAX_CONTACTS];
     public final int[] batchSize = new int[MAX_BATCHES];
@@ -56,7 +70,53 @@ public class SoftBodyCollisionManager {
         contactTriA[idx] = nA;
         contactTriB[idx] = nB;
         contactTriC[idx] = nC;
+        separationSlack[idx] = 0.0f;
         return true;
+    }
+
+    boolean separationCertificateStillValid(int contactId,
+                                            float pax, float pay, float paz,
+                                            float bax, float bay, float baz,
+                                            float cax, float cay, float caz) {
+        float slack = separationSlack[contactId];
+        if (!(slack > 0.0f)) return false;
+
+        // L1 distances are cheap upper bounds on Euclidean movement. Expressing
+        // all three vectors relative to A makes rigid translation cancel exactly.
+        float pointMovement = Math.abs(pax - separationRefPax[contactId])
+                + Math.abs(pay - separationRefPay[contactId])
+                + Math.abs(paz - separationRefPaz[contactId]);
+        float bMovement = Math.abs(bax - separationRefBax[contactId])
+                + Math.abs(bay - separationRefBay[contactId])
+                + Math.abs(baz - separationRefBaz[contactId]);
+        float cMovement = Math.abs(cax - separationRefCax[contactId])
+                + Math.abs(cay - separationRefCay[contactId])
+                + Math.abs(caz - separationRefCaz[contactId]);
+        return pointMovement + Math.max(bMovement, cMovement) < slack;
+    }
+
+    void recordSeparationCertificate(int contactId, float slack,
+                                     float pax, float pay, float paz,
+                                     float bax, float bay, float baz,
+                                     float cax, float cay, float caz) {
+        if (!(slack > 0.0f) || !Float.isFinite(slack)) {
+            separationSlack[contactId] = 0.0f;
+            return;
+        }
+        separationRefPax[contactId] = pax;
+        separationRefPay[contactId] = pay;
+        separationRefPaz[contactId] = paz;
+        separationRefBax[contactId] = bax;
+        separationRefBay[contactId] = bay;
+        separationRefBaz[contactId] = baz;
+        separationRefCax[contactId] = cax;
+        separationRefCay[contactId] = cay;
+        separationRefCaz[contactId] = caz;
+        separationSlack[contactId] = slack;
+    }
+
+    void invalidateSeparationCertificate(int contactId) {
+        separationSlack[contactId] = 0.0f;
     }
 
     public void buildAndColorBatches() {

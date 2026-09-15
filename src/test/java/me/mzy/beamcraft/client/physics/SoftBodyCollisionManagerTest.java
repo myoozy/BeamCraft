@@ -58,6 +58,41 @@ class SoftBodyCollisionManagerTest {
                 SoftBodyCollisionManager.OVERFLOW_BATCH_INDEX, Integer.MAX_VALUE, 1_024));
     }
 
+    @Test
+    void separationCertificateIgnoresCommonTranslationButObservesRelativeMotion() {
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        manager.addContact(vehicleAtOffset(0), 0, vehicleAtOffset(1_000), 0, 1, 2);
+        manager.recordSeparationCertificate(0, 0.5f,
+                0.0f, 0.0f, 2.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f);
+
+        assertTrue(manager.separationCertificateStillValid(0,
+                0.0f, 0.0f, 2.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f));
+        assertFalse(manager.separationCertificateStillValid(0,
+                0.0f, 0.0f, 1.4f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f));
+    }
+
+    @Test
+    void pointTriangleDistanceHandlesFaceEdgeAndVertexRegions() {
+        assertEquals(4.0f, CollisionPipeline.pointTriangleDistanceSquared(
+                0.25f, 0.25f, 2.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f), 1e-6f);
+        assertEquals(0.5f, CollisionPipeline.pointTriangleDistanceSquared(
+                1.0f, 1.0f, 0.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f), 1e-6f);
+        assertEquals(1.0f, CollisionPipeline.pointTriangleDistanceSquared(
+                -1.0f, 0.0f, 0.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f), 1e-6f);
+    }
+
     private static SoftBodyVehicle vehicleAtOffset(int globalNodeOffset) {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         vehicle.globalNodeOffset = globalNodeOffset;
