@@ -89,10 +89,11 @@ file has four sections:
 
 Set `physicsEventTrace` to `true` and restart the client to arm one substep-level
 capture. The first soft-body contact, fracture, or internal-force substep above
-`internalForceTriggerMs` retains its surrounding history and prints one CSV block
-to the console and `latest.log`; it does not add another HUD panel. Set the
-threshold to `0` to trigger only on contact or fracture. The trace automatically
-disarms after printing one capture.
+`internalForceTriggerMs` retains its surrounding history and writes it in the
+background to `beamcraft-traces/physics-trace-<timestamp>.csv`. The console and
+`latest.log` receive only one short line containing that path, and no HUD panel is
+added. Set the threshold to `0` to trigger only on contact or fracture. The trace
+automatically disarms after writing one capture.
 
 ### `assetRoots` — where vehicles are loaded from
 

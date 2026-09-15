@@ -8,9 +8,16 @@ import me.mzy.beamcraft.network.VehicleSyncPayload;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
@@ -19,6 +26,11 @@ import java.util.stream.IntStream;
  * Manages nodes, beams, collision caching and physics integration
  */
 public class PhysicsWorld {
+    private static final ExecutorService EVENT_TRACE_WRITER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "BeamCraft physics trace writer");
+        thread.setDaemon(true);
+        return thread;
+    });
     public static final float GRAVITY = -9.81f;
     public static final float SOUND_SPEED = 340.0f;
     public static final float BLOCK_REBOUND = 0.0f;
@@ -38,7 +50,8 @@ public class PhysicsWorld {
     public final DynamicAxisSweep globalSap = new DynamicAxisSweep();
     public final SoftBodyCollisionManager collisionManager = new SoftBodyCollisionManager();
     private final PhysicsEventTrace eventTrace = new PhysicsEventTrace();
-    private final AtomicReference<String> completedEventTrace = new AtomicReference<>();
+    private final AtomicReference<PhysicsEventTrace.CompletedCapture> completedEventTrace = new AtomicReference<>();
+    private Path eventTraceDirectory;
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -51,8 +64,9 @@ public class PhysicsWorld {
         // Empty constructor, data will be injected by JBeam parser
     }
 
-    public void configureEventTrace(boolean enabled, double internalForceTriggerMs) {
+    public void configureEventTrace(boolean enabled, double internalForceTriggerMs, Path outputDirectory) {
         eventTrace.configure(enabled, internalForceTriggerMs);
+        eventTraceDirectory = outputDirectory;
         completedEventTrace.set(null);
         if (enabled) {
             BeamCraft.LOGGER.info("BeamCraft substep event trace armed (internal-force trigger: {} ms)",
@@ -265,7 +279,7 @@ public class PhysicsWorld {
                     brokenTrianglesAfter += vehicle.triangles.brokenCount();
                     breakCommitNs += vehicle.physicsEventTraceBreakCommitNanos;
                 }
-                String completedTrace = eventTrace.record(s,
+                PhysicsEventTrace.CompletedCapture completedTrace = eventTrace.record(s,
                         substepInternalNs, breakCommitNs, substepSapNs, substepCandidateNs,
                         substepColorNs, substepSoftNs, substepEnvironmentNs,
                         collisionManager.contactCount.get(), substepCertificateSkipped,
@@ -351,9 +365,29 @@ public class PhysicsWorld {
         timings[8] = (System.nanoTime() - commitStartedNanos) / 1_000_000.0;
         timings[0] = (result.finishedNanos() - result.preparedStep().startedNanos()) / 1_000_000.0
                 + timings[8];
-        String traceDump = completedEventTrace.getAndSet(null);
-        if (traceDump != null) BeamCraft.LOGGER.info("{}", traceDump);
+        PhysicsEventTrace.CompletedCapture traceCapture = completedEventTrace.getAndSet(null);
+        if (traceCapture != null) persistEventTrace(traceCapture);
         return timings;
+    }
+
+    private void persistEventTrace(PhysicsEventTrace.CompletedCapture capture) {
+        Path outputDirectory = eventTraceDirectory;
+        if (outputDirectory == null) {
+            BeamCraft.LOGGER.warn("BeamCraft physics trace completed without an output directory");
+            return;
+        }
+        long capturedAtMillis = System.currentTimeMillis();
+        EVENT_TRACE_WRITER.execute(() -> {
+            try {
+                Files.createDirectories(outputDirectory);
+                Path output = outputDirectory.resolve("physics-trace-" + capturedAtMillis + ".csv");
+                Files.writeString(output, capture.formatCsv(), StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+                BeamCraft.LOGGER.info("BeamCraft physics trace written to {}", output.toAbsolutePath());
+            } catch (IOException exception) {
+                BeamCraft.LOGGER.error("Failed to write BeamCraft physics trace", exception);
+            }
+        });
     }
 
     /**

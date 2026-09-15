@@ -69,7 +69,8 @@ public class BeamCraftClient implements ClientModInitializer {
 				FabricLoader.getInstance().getConfigDir(), GAME_DIR);
 		PHYSICS_WORLD.configureEventTrace(
 				config.diagnostics.physicsEventTrace,
-				config.diagnostics.internalForceTriggerMs);
+				config.diagnostics.internalForceTriggerMs,
+				FabricLoader.getInstance().getGameDir().resolve("beamcraft-traces"));
 		VehicleInputHandler inputHandler = new VehicleInputHandler(config.input);
 		AssetScanner.INSTANCE.configure(config.policy());
 		for (File root : BeamCraftConfigManager.assetRoots()) {

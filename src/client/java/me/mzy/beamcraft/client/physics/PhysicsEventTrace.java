@@ -78,7 +78,7 @@ final class PhysicsEventTrace {
         return enabled;
     }
 
-    String record(int tickSubstep,
+    CompletedCapture record(int tickSubstep,
                   long internal, long breakCommit, long sap, long candidate, long color,
                   long soft, long environment, int contactCount, int certSkipped,
                   int passedAabb, int resolvedCount, int sweptResolvedCount, int beamBreaks,
@@ -114,7 +114,7 @@ final class PhysicsEventTrace {
 
         if (postRemaining >= 0 && --postRemaining <= 0) {
             enabled = false;
-            return formatCsv();
+            return new CompletedCapture(this, triggerReason, writeIndex, size);
         }
         return null;
     }
@@ -124,14 +124,14 @@ final class PhysicsEventTrace {
         postRemaining = postTriggerSamples + 1;
     }
 
-    private String formatCsv() {
-        StringBuilder output = new StringBuilder(size * 100);
-        output.append("[BeamCraft physics trace] trigger=").append(triggerReason).append('\n');
+    private String formatCsv(String completedTriggerReason, int completedWriteIndex, int completedSize) {
+        StringBuilder output = new StringBuilder(completedSize * 100);
+        output.append("[BeamCraft physics trace] trigger=").append(completedTriggerReason).append('\n');
         output.append("sequence,tick_substep,internal_us,break_commit_us,sap_us,candidate_us,color_us,")
                 .append("soft_us,environment_us,contacts,cert_skip,aabb_passed,resolved,ccd_resolved,")
                 .append("broken_beams,new_break_groups,broken_triangles\n");
-        int first = (writeIndex - size + capacity) % capacity;
-        for (int entry = 0; entry < size; entry++) {
+        int first = (completedWriteIndex - completedSize + capacity) % capacity;
+        for (int entry = 0; entry < completedSize; entry++) {
             int index = (first + entry) % capacity;
             output.append(sequence[index]).append(',').append(substep[index]).append(',')
                     .append(micros(internalNs[index])).append(',')
@@ -148,6 +148,29 @@ final class PhysicsEventTrace {
                     .append(brokenTriangles[index]).append('\n');
         }
         return output.toString();
+    }
+
+    /**
+     * A disarmed capture whose comparatively expensive CSV formatting can run away
+     * from both the physics worker and render thread. The owning trace remains
+     * immutable after its one-shot capture completes.
+     */
+    static final class CompletedCapture {
+        private final PhysicsEventTrace trace;
+        private final String triggerReason;
+        private final int writeIndex;
+        private final int size;
+
+        private CompletedCapture(PhysicsEventTrace trace, String triggerReason, int writeIndex, int size) {
+            this.trace = trace;
+            this.triggerReason = triggerReason;
+            this.writeIndex = writeIndex;
+            this.size = size;
+        }
+
+        String formatCsv() {
+            return trace.formatCsv(triggerReason, writeIndex, size);
+        }
     }
 
     private static String micros(long nanos) {

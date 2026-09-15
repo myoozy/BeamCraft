@@ -16,9 +16,10 @@ class PhysicsEventTraceTest {
         assertNull(record(trace, 1, 0));
         assertNull(record(trace, 2, 3));
         assertNull(record(trace, 3, 0));
-        String dump = record(trace, 4, 0);
+        PhysicsEventTrace.CompletedCapture capture = record(trace, 4, 0);
 
-        assertNotNull(dump);
+        assertNotNull(capture);
+        String dump = capture.formatCsv();
         assertTrue(dump.contains("trigger=soft-contact"));
         assertTrue(dump.contains("sequence,tick_substep"));
         assertTrue(dump.contains("0,0,"));
@@ -26,7 +27,7 @@ class PhysicsEventTraceTest {
         assertTrue(!trace.enabled());
     }
 
-    private static String record(PhysicsEventTrace trace, int substep, int resolved) {
+    private static PhysicsEventTrace.CompletedCapture record(PhysicsEventTrace trace, int substep, int resolved) {
         return trace.record(substep,
                 100L, 0L, 0L, 0L, 0L, 50L, 25L,
                 10, 0, 2, resolved, 0, 0, 0, 0);
