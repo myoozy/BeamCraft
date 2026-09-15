@@ -22,6 +22,7 @@ import java.util.stream.IntStream;
  * these calls safe on the pure-physics thread.
  */
 public final class CollisionPipeline {
+    static final double SOFT_BROADPHASE_MARGIN = 0.01;
     private static final float SOFT_CONTACT_THICKNESS = 0.01f;
     private static final float SOFT_CONTACT_BARYCENTRIC_TOLERANCE = 0.01f;
 
@@ -48,8 +49,6 @@ public final class CollisionPipeline {
         int stored = 0;
         int dropped = 0;
 
-        double BASE_MARGIN = 0.01;
-
         for (int i = 0; i < vehicle.triangles.count; i++) {
             if (!vehicle.triangles.collision[i] || vehicle.triangles.broken[i]) continue;
 
@@ -75,17 +74,17 @@ public final class CollisionPipeline {
             double futureCz = cz + vehicle.nodes.velZ[nC] * dtPredict;
 
             double minX = Math.min(Math.min(ax, futureAx),
-                    Math.min(Math.min(bx, futureBx), Math.min(cx, futureCx))) - BASE_MARGIN;
+                    Math.min(Math.min(bx, futureBx), Math.min(cx, futureCx))) - SOFT_BROADPHASE_MARGIN;
             double maxX = Math.max(Math.max(ax, futureAx),
-                    Math.max(Math.max(bx, futureBx), Math.max(cx, futureCx))) + BASE_MARGIN;
+                    Math.max(Math.max(bx, futureBx), Math.max(cx, futureCx))) + SOFT_BROADPHASE_MARGIN;
             double minY = Math.min(Math.min(ay, futureAy),
-                    Math.min(Math.min(by, futureBy), Math.min(cy, futureCy))) - BASE_MARGIN;
+                    Math.min(Math.min(by, futureBy), Math.min(cy, futureCy))) - SOFT_BROADPHASE_MARGIN;
             double maxY = Math.max(Math.max(ay, futureAy),
-                    Math.max(Math.max(by, futureBy), Math.max(cy, futureCy))) + BASE_MARGIN;
+                    Math.max(Math.max(by, futureBy), Math.max(cy, futureCy))) + SOFT_BROADPHASE_MARGIN;
             double minZ = Math.min(Math.min(az, futureAz),
-                    Math.min(Math.min(bz, futureBz), Math.min(cz, futureCz))) - BASE_MARGIN;
+                    Math.min(Math.min(bz, futureBz), Math.min(cz, futureCz))) - SOFT_BROADPHASE_MARGIN;
             double maxZ = Math.max(Math.max(az, futureAz),
-                    Math.max(Math.max(bz, futureBz), Math.max(cz, futureCz))) + BASE_MARGIN;
+                    Math.max(Math.max(bz, futureBz), Math.max(cz, futureCz))) + SOFT_BROADPHASE_MARGIN;
 
             vehicle.sweepResultBuffer.clear();
             int rawHits = sap.queryCollisionNodesInAABB(

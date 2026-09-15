@@ -128,7 +128,7 @@ public class PhysicsWorld {
         int subSteps = preparedStep.subSteps();
         float subDt = (float) (dt / subSteps);
         float plasticRelaxation = 1.0f;
-        int broadphaseRate = 20;
+        int broadphaseRate = 10;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
         double candidateGenerationMs = 0.0, colorMs = 0.0;
         long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L;
@@ -166,6 +166,7 @@ public class PhysicsWorld {
                     activeOffset += vehicle.nodes.count;
 
                     globalSap.insertNodes(vehicle, subDt * broadphaseRate);
+                    globalSap.insertTriangles(vehicle, subDt * broadphaseRate);
                 }
 
                 globalSap.updateAndSort();
