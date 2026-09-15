@@ -35,7 +35,6 @@ public class DynamicAxisSweep {
     private final int[] vehicleWrite = new int[MAX_GROUPS];
     private final int[] vehicleSelfNodeCount = new int[MAX_GROUPS];
     private final int[] vehicleSelfStart = new int[MAX_GROUPS + 1];
-    private final int[] vehicleSelfWrite = new int[MAX_GROUPS];
     private final int[] vehiclePartStart = new int[MAX_GROUPS];
     private final int[] vehiclePartEnd = new int[MAX_GROUPS];
     private final byte[] vehicleActiveAxis = new byte[MAX_GROUPS];
@@ -142,7 +141,6 @@ public class DynamicAxisSweep {
             vehicleWrite[vehicle] = offset;
             offset += vehicleNodeCount[vehicle];
             vehicleSelfStart[vehicle] = selfOffset;
-            vehicleSelfWrite[vehicle] = selfOffset;
             selfOffset += vehicleSelfNodeCount[vehicle];
             vehicleActiveAxis[vehicle] = chooseAxis(vehicle);
         }
@@ -152,10 +150,6 @@ public class DynamicAxisSweep {
         for (int index = 0; index < count; index++) {
             int vehicle = cacheVehicleProxy[index];
             sortKeys[vehicleWrite[vehicle]++] = sortKey(axisMin(index, vehicleActiveAxis[vehicle]), index);
-            if (cacheSelfCollision[index]) {
-                selfSortKeys[vehicleSelfWrite[vehicle]++] = sortKey(
-                        axisMin(index, vehicleActiveAxis[vehicle]), index);
-            }
         }
 
         for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
@@ -163,21 +157,20 @@ public class DynamicAxisSweep {
             if (end <= start) continue;
             Arrays.sort(sortKeys, start, end);
             double prefixMax = Double.NEGATIVE_INFINITY;
+            double selfPrefixMax = Double.NEGATIVE_INFINITY;
+            int selfSorted = vehicleSelfStart[vehicle];
             for (int sorted = start; sorted < end; sorted++) {
-                int original = (int) sortKeys[sorted];
+                long key = sortKeys[sorted];
+                int original = (int) key;
                 double maximum = axisMax(original, vehicleActiveAxis[vehicle]);
                 if (maximum > prefixMax) prefixMax = maximum;
                 sortedPrefixMax[sorted] = prefixMax;
-            }
-
-            int selfStart = vehicleSelfStart[vehicle], selfEnd = vehicleSelfStart[vehicle + 1];
-            Arrays.sort(selfSortKeys, selfStart, selfEnd);
-            prefixMax = Double.NEGATIVE_INFINITY;
-            for (int sorted = selfStart; sorted < selfEnd; sorted++) {
-                int original = (int) selfSortKeys[sorted];
-                double maximum = axisMax(original, vehicleActiveAxis[vehicle]);
-                if (maximum > prefixMax) prefixMax = maximum;
-                selfSortedPrefixMax[sorted] = prefixMax;
+                if (cacheSelfCollision[original]) {
+                    selfSortKeys[selfSorted] = key;
+                    if (maximum > selfPrefixMax) selfPrefixMax = maximum;
+                    selfSortedPrefixMax[selfSorted] = selfPrefixMax;
+                    selfSorted++;
+                }
             }
         }
     }
