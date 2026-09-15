@@ -16,6 +16,8 @@ public class DynamicAxisSweep {
 
     private final long[] sortKeys = new long[MAX_NODES];
     private final double[] sortedPrefixMax = new double[MAX_NODES];
+    private final long[] selfSortKeys = new long[MAX_NODES];
+    private final double[] selfSortedPrefixMax = new double[MAX_NODES];
     private final double[] cacheMinX = new double[MAX_NODES];
     private final double[] cacheMinY = new double[MAX_NODES];
     private final double[] cacheMinZ = new double[MAX_NODES];
@@ -25,11 +27,15 @@ public class DynamicAxisSweep {
     private final SoftBodyVehicle[] cacheVeh = new SoftBodyVehicle[MAX_NODES];
     private final int[] cacheNodeId = new int[MAX_NODES];
     private final int[] cacheVehicleProxy = new int[MAX_NODES];
+    private final boolean[] cacheSelfCollision = new boolean[MAX_NODES];
 
     private final SoftBodyVehicle[] vehicleRef = new SoftBodyVehicle[MAX_GROUPS];
     private final int[] vehicleNodeCount = new int[MAX_GROUPS];
     private final int[] vehicleStart = new int[MAX_GROUPS + 1];
     private final int[] vehicleWrite = new int[MAX_GROUPS];
+    private final int[] vehicleSelfNodeCount = new int[MAX_GROUPS];
+    private final int[] vehicleSelfStart = new int[MAX_GROUPS + 1];
+    private final int[] vehicleSelfWrite = new int[MAX_GROUPS];
     private final int[] vehiclePartStart = new int[MAX_GROUPS];
     private final int[] vehiclePartEnd = new int[MAX_GROUPS];
     private final byte[] vehicleActiveAxis = new byte[MAX_GROUPS];
@@ -74,6 +80,7 @@ public class DynamicAxisSweep {
         int vehicleProxy = vehicleCount++;
         vehicleRef[vehicleProxy] = vehicle;
         vehicleNodeCount[vehicleProxy] = 0;
+        vehicleSelfNodeCount[vehicleProxy] = 0;
         vehiclePartStart[vehicleProxy] = partCount;
         vehicleHasSelfNodes[vehicleProxy] = false;
         vehicleMinX[vehicleProxy] = vehicleMinY[vehicleProxy] = vehicleMinZ[vehicleProxy]
@@ -107,6 +114,7 @@ public class DynamicAxisSweep {
             cacheVeh[count] = vehicle;
             cacheNodeId[count] = node;
             cacheVehicleProxy[count] = vehicleProxy;
+            cacheSelfCollision[count] = vehicle.nodes.selfCollision[node];
             count++;
             vehicleNodeCount[vehicleProxy]++;
 
@@ -117,6 +125,7 @@ public class DynamicAxisSweep {
                     part, minX, minY, minZ, maxX, maxY, maxZ);
             if (vehicle.nodes.selfCollision[node]) {
                 vehicleHasSelfNodes[vehicleProxy] = true;
+                vehicleSelfNodeCount[vehicleProxy]++;
                 partHasSelfNodes[part] = true;
                 includeBounds(partSelfMinX, partSelfMinY, partSelfMinZ,
                         partSelfMaxX, partSelfMaxY, partSelfMaxZ,
@@ -127,18 +136,26 @@ public class DynamicAxisSweep {
     }
 
     public void updateAndSort() {
-        int offset = 0;
+        int offset = 0, selfOffset = 0;
         for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
             vehicleStart[vehicle] = offset;
             vehicleWrite[vehicle] = offset;
             offset += vehicleNodeCount[vehicle];
+            vehicleSelfStart[vehicle] = selfOffset;
+            vehicleSelfWrite[vehicle] = selfOffset;
+            selfOffset += vehicleSelfNodeCount[vehicle];
             vehicleActiveAxis[vehicle] = chooseAxis(vehicle);
         }
         vehicleStart[vehicleCount] = offset;
+        vehicleSelfStart[vehicleCount] = selfOffset;
 
         for (int index = 0; index < count; index++) {
             int vehicle = cacheVehicleProxy[index];
             sortKeys[vehicleWrite[vehicle]++] = sortKey(axisMin(index, vehicleActiveAxis[vehicle]), index);
+            if (cacheSelfCollision[index]) {
+                selfSortKeys[vehicleSelfWrite[vehicle]++] = sortKey(
+                        axisMin(index, vehicleActiveAxis[vehicle]), index);
+            }
         }
 
         for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
@@ -151,6 +168,16 @@ public class DynamicAxisSweep {
                 double maximum = axisMax(original, vehicleActiveAxis[vehicle]);
                 if (maximum > prefixMax) prefixMax = maximum;
                 sortedPrefixMax[sorted] = prefixMax;
+            }
+
+            int selfStart = vehicleSelfStart[vehicle], selfEnd = vehicleSelfStart[vehicle + 1];
+            Arrays.sort(selfSortKeys, selfStart, selfEnd);
+            prefixMax = Double.NEGATIVE_INFINITY;
+            for (int sorted = selfStart; sorted < selfEnd; sorted++) {
+                int original = (int) selfSortKeys[sorted];
+                double maximum = axisMax(original, vehicleActiveAxis[vehicle]);
+                if (maximum > prefixMax) prefixMax = maximum;
+                selfSortedPrefixMax[sorted] = prefixMax;
             }
         }
     }
@@ -165,7 +192,8 @@ public class DynamicAxisSweep {
         int rawHits = 0;
         for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
             if (!vehicleMayOverlap(vehicle, triangleVehicle, minX, minY, minZ, maxX, maxY, maxZ)) continue;
-            rawHits += queryVehicle(vehicle, minX, minY, minZ, maxX, maxY, maxZ,
+            boolean self = vehicleRef[vehicle] == triangleVehicle;
+            rawHits += queryVehicle(vehicle, self, minX, minY, minZ, maxX, maxY, maxZ,
                     triangleVehicle, triangleNodeA, triangleNodeB, triangleNodeC,
                     trianglePartId, result);
         }
@@ -192,14 +220,17 @@ public class DynamicAxisSweep {
         return false;
     }
 
-    private int queryVehicle(int vehicle,
+    private int queryVehicle(int vehicle, boolean self,
                              double minX, double minY, double minZ,
                              double maxX, double maxY, double maxZ,
                              SoftBodyVehicle triangleVehicle,
                              int triangleNodeA, int triangleNodeB, int triangleNodeC,
                              int trianglePartId,
                              SweepResultBuffer result) {
-        int start = vehicleStart[vehicle], end = vehicleStart[vehicle + 1];
+        long[] keys = self ? selfSortKeys : sortKeys;
+        double[] prefixMaxima = self ? selfSortedPrefixMax : sortedPrefixMax;
+        int start = self ? vehicleSelfStart[vehicle] : vehicleStart[vehicle];
+        int end = self ? vehicleSelfStart[vehicle + 1] : vehicleStart[vehicle + 1];
         int axis = vehicleActiveAxis[vehicle];
         double targetMin = axis == 0 ? minX : axis == 1 ? minY : minZ;
         double targetMax = axis == 0 ? maxX : axis == 1 ? maxY : maxZ;
@@ -207,7 +238,7 @@ public class DynamicAxisSweep {
         int left = start, right = end - 1, startIndex = end;
         while (left <= right) {
             int middle = (left + right) >>> 1;
-            if (sortedPrefixMax[middle] >= targetMin) {
+            if (prefixMaxima[middle] >= targetMin) {
                 startIndex = middle;
                 right = middle - 1;
             } else {
@@ -218,7 +249,7 @@ public class DynamicAxisSweep {
         long maxKeyLimit = sortableLimit(targetMax);
         int rawHits = 0;
         for (int sorted = startIndex; sorted < end; sorted++) {
-            long key = sortKeys[sorted];
+            long key = keys[sorted];
             if (key > maxKeyLimit) break;
             int original = (int) key;
             if (cacheMaxX[original] < minX || cacheMinX[original] > maxX

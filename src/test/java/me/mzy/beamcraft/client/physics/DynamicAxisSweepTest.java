@@ -143,7 +143,8 @@ class DynamicAxisSweepTest {
                 -1.0, -1.0, -1.0, 1.0, 1.0, 1.0,
                 triangleVehicle, 0, 1, 2, 0, result);
 
-        assertEquals(7, rawHits);
+        assertEquals(6, rawHits,
+                "the same-vehicle segment must contain only self-collidable nodes");
         assertEquals(2, result.count);
         boolean foundEligibleSelfNode = false;
         boolean foundOtherVehicleNode = false;
@@ -158,7 +159,7 @@ class DynamicAxisSweepTest {
         rawHits = sweep.queryCollisionNodesInAABB(
                 -1.0, -1.0, -1.0, 1.0, 1.0, 1.0,
                 triangleVehicle, 0, 1, 2, -1, result);
-        assertEquals(7, rawHits);
+        assertEquals(6, rawHits);
         assertEquals(3, result.count,
                 "an invalid triangle part must not apply the part-matrix filter");
     }
