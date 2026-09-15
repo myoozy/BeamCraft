@@ -61,6 +61,15 @@ public final class CollisionPipeline {
             double ax = eX + vehicle.nodes.posX[nA], ay = eY + vehicle.nodes.posY[nA], az = eZ + vehicle.nodes.posZ[nA];
             double bx = eX + vehicle.nodes.posX[nB], by = eY + vehicle.nodes.posY[nB], bz = eZ + vehicle.nodes.posZ[nB];
             double cx = eX + vehicle.nodes.posX[nC], cy = eY + vehicle.nodes.posY[nC], cz = eZ + vehicle.nodes.posZ[nC];
+            double previousAx = eX + vehicle.nodes.prevPosX[nA];
+            double previousAy = eY + vehicle.nodes.prevPosY[nA];
+            double previousAz = eZ + vehicle.nodes.prevPosZ[nA];
+            double previousBx = eX + vehicle.nodes.prevPosX[nB];
+            double previousBy = eY + vehicle.nodes.prevPosY[nB];
+            double previousBz = eZ + vehicle.nodes.prevPosZ[nB];
+            double previousCx = eX + vehicle.nodes.prevPosX[nC];
+            double previousCy = eY + vehicle.nodes.prevPosY[nC];
+            double previousCz = eZ + vehicle.nodes.prevPosZ[nC];
 
             // Union the current and predicted position of every vertex. Using
             // average triangle velocity misses rotation and deformation where
@@ -75,18 +84,18 @@ public final class CollisionPipeline {
             double futureCy = cy + vehicle.nodes.velY[nC] * dtPredict;
             double futureCz = cz + vehicle.nodes.velZ[nC] * dtPredict;
 
-            double minX = Math.min(Math.min(ax, futureAx),
-                    Math.min(Math.min(bx, futureBx), Math.min(cx, futureCx))) - SOFT_BROADPHASE_MARGIN;
-            double maxX = Math.max(Math.max(ax, futureAx),
-                    Math.max(Math.max(bx, futureBx), Math.max(cx, futureCx))) + SOFT_BROADPHASE_MARGIN;
-            double minY = Math.min(Math.min(ay, futureAy),
-                    Math.min(Math.min(by, futureBy), Math.min(cy, futureCy))) - SOFT_BROADPHASE_MARGIN;
-            double maxY = Math.max(Math.max(ay, futureAy),
-                    Math.max(Math.max(by, futureBy), Math.max(cy, futureCy))) + SOFT_BROADPHASE_MARGIN;
-            double minZ = Math.min(Math.min(az, futureAz),
-                    Math.min(Math.min(bz, futureBz), Math.min(cz, futureCz))) - SOFT_BROADPHASE_MARGIN;
-            double maxZ = Math.max(Math.max(az, futureAz),
-                    Math.max(Math.max(bz, futureBz), Math.max(cz, futureCz))) + SOFT_BROADPHASE_MARGIN;
+            double minX = Math.min(Math.min(previousAx, Math.min(previousBx, previousCx)), Math.min(Math.min(ax, futureAx),
+                    Math.min(Math.min(bx, futureBx), Math.min(cx, futureCx)))) - SOFT_BROADPHASE_MARGIN;
+            double maxX = Math.max(Math.max(previousAx, Math.max(previousBx, previousCx)), Math.max(Math.max(ax, futureAx),
+                    Math.max(Math.max(bx, futureBx), Math.max(cx, futureCx)))) + SOFT_BROADPHASE_MARGIN;
+            double minY = Math.min(Math.min(previousAy, Math.min(previousBy, previousCy)), Math.min(Math.min(ay, futureAy),
+                    Math.min(Math.min(by, futureBy), Math.min(cy, futureCy)))) - SOFT_BROADPHASE_MARGIN;
+            double maxY = Math.max(Math.max(previousAy, Math.max(previousBy, previousCy)), Math.max(Math.max(ay, futureAy),
+                    Math.max(Math.max(by, futureBy), Math.max(cy, futureCy)))) + SOFT_BROADPHASE_MARGIN;
+            double minZ = Math.min(Math.min(previousAz, Math.min(previousBz, previousCz)), Math.min(Math.min(az, futureAz),
+                    Math.min(Math.min(bz, futureBz), Math.min(cz, futureCz)))) - SOFT_BROADPHASE_MARGIN;
+            double maxZ = Math.max(Math.max(previousAz, Math.max(previousBz, previousCz)), Math.max(Math.max(az, futureAz),
+                    Math.max(Math.max(bz, futureBz), Math.max(cz, futureCz)))) + SOFT_BROADPHASE_MARGIN;
 
             vehicle.sweepResultBuffer.clear();
             int rawHits = sap.queryCollisionNodesInAABB(
@@ -198,7 +207,20 @@ public final class CollisionPipeline {
         float maxY = Math.max(ay, Math.max(by, cy)) + THICKNESS;
         float minZ = Math.min(az, Math.min(bz, cz)) - THICKNESS;
         float maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
-        if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) {
+        boolean currentAabbPassed = pX >= minX && pX <= maxX
+                && pY >= minY && pY <= maxY && pZ >= minZ && pZ <= maxZ;
+        float sweptHitTime = -1.0f;
+        if (!currentAabbPassed) {
+            sweptHitTime = sweptPointTriangleHitTime(
+                    entityDeltaX + nVeh.nodes.prevPosX[nHit],
+                    entityDeltaY + nVeh.nodes.prevPosY[nHit],
+                    entityDeltaZ + nVeh.nodes.prevPosZ[nHit],
+                    tVeh.nodes.prevPosX[nA], tVeh.nodes.prevPosY[nA], tVeh.nodes.prevPosZ[nA],
+                    tVeh.nodes.prevPosX[nB], tVeh.nodes.prevPosY[nB], tVeh.nodes.prevPosZ[nB],
+                    tVeh.nodes.prevPosX[nC], tVeh.nodes.prevPosY[nC], tVeh.nodes.prevPosZ[nC],
+                    pX, pY, pZ, ax, ay, az, bx, by, bz, cx, cy, cz);
+        }
+        if (!currentAabbPassed && sweptHitTime < 0.0f) {
             float aabbSlack = Math.max(
                     Math.max(Math.max(minX - pX, pX - maxX), Math.max(minY - pY, pY - maxY)),
                     Math.max(minZ - pZ, pZ - maxZ));
@@ -232,8 +254,23 @@ public final class CollisionPipeline {
                 (nVeh.nodes.velY[nHit] - triVy) * ny +
                 (nVeh.nodes.velZ[nHit] - triVz) * nz;
 
-        float distPrev = distCurr - approxRelV * dt;
-        float pushDir = (distPrev > 0.0f) ? 1.0f : -1.0f;
+        float prevAx = tVeh.nodes.prevPosX[nA], prevAy = tVeh.nodes.prevPosY[nA], prevAz = tVeh.nodes.prevPosZ[nA];
+        float prevAbx = tVeh.nodes.prevPosX[nB] - prevAx;
+        float prevAby = tVeh.nodes.prevPosY[nB] - prevAy;
+        float prevAbz = tVeh.nodes.prevPosZ[nB] - prevAz;
+        float prevAcx = tVeh.nodes.prevPosX[nC] - prevAx;
+        float prevAcy = tVeh.nodes.prevPosY[nC] - prevAy;
+        float prevAcz = tVeh.nodes.prevPosZ[nC] - prevAz;
+        float prevNx = prevAby * prevAcz - prevAbz * prevAcy;
+        float prevNy = prevAbz * prevAcx - prevAbx * prevAcz;
+        float prevNz = prevAbx * prevAcy - prevAby * prevAcx;
+        float prevApx = entityDeltaX + nVeh.nodes.prevPosX[nHit] - prevAx;
+        float prevApy = entityDeltaY + nVeh.nodes.prevPosY[nHit] - prevAy;
+        float prevApz = entityDeltaZ + nVeh.nodes.prevPosZ[nHit] - prevAz;
+        float prevSignedVolume = prevApx * prevNx + prevApy * prevNy + prevApz * prevNz;
+        float pushDir = prevSignedVolume != 0.0f
+                ? (prevSignedVolume > 0.0f ? 1.0f : -1.0f)
+                : (distCurr - approxRelV * dt > 0.0f ? 1.0f : -1.0f);
         float signedDist = distCurr * pushDir;
         float penetration = THICKNESS - signedDist;
         if (penetration <= 0.0f) {
@@ -263,6 +300,36 @@ public final class CollisionPipeline {
         float wB = (d11 * d20 - d01 * d21) * invDenom;
         float wC = (d00 * d21 - d01 * d20) * invDenom;
         float wA = 1.0f - wB - wC;
+
+        if (sweptHitTime >= 0.0f) {
+            float hitAx = lerp(prevAx, ax, sweptHitTime);
+            float hitAy = lerp(prevAy, ay, sweptHitTime);
+            float hitAz = lerp(prevAz, az, sweptHitTime);
+            float hitBx = lerp(tVeh.nodes.prevPosX[nB], bx, sweptHitTime);
+            float hitBy = lerp(tVeh.nodes.prevPosY[nB], by, sweptHitTime);
+            float hitBz = lerp(tVeh.nodes.prevPosZ[nB], bz, sweptHitTime);
+            float hitCx = lerp(tVeh.nodes.prevPosX[nC], cx, sweptHitTime);
+            float hitCy = lerp(tVeh.nodes.prevPosY[nC], cy, sweptHitTime);
+            float hitCz = lerp(tVeh.nodes.prevPosZ[nC], cz, sweptHitTime);
+            float hitPx = lerp(entityDeltaX + nVeh.nodes.prevPosX[nHit], pX, sweptHitTime);
+            float hitPy = lerp(entityDeltaY + nVeh.nodes.prevPosY[nHit], pY, sweptHitTime);
+            float hitPz = lerp(entityDeltaZ + nVeh.nodes.prevPosZ[nHit], pZ, sweptHitTime);
+            float hitAbx = hitBx - hitAx, hitAby = hitBy - hitAy, hitAbz = hitBz - hitAz;
+            float hitAcx = hitCx - hitAx, hitAcy = hitCy - hitAy, hitAcz = hitCz - hitAz;
+            float hitApx = hitPx - hitAx, hitApy = hitPy - hitAy, hitApz = hitPz - hitAz;
+            float hitD00 = hitAbx * hitAbx + hitAby * hitAby + hitAbz * hitAbz;
+            float hitD01 = hitAbx * hitAcx + hitAby * hitAcy + hitAbz * hitAcz;
+            float hitD11 = hitAcx * hitAcx + hitAcy * hitAcy + hitAcz * hitAcz;
+            float hitD20 = hitApx * hitAbx + hitApy * hitAby + hitApz * hitAbz;
+            float hitD21 = hitApx * hitAcx + hitApy * hitAcy + hitApz * hitAcz;
+            float hitDenom = hitD00 * hitD11 - hitD01 * hitD01;
+            if (hitDenom >= PhysicsWorld.KINDA_SMALL_NUMBER) {
+                float hitInvDenom = 1.0f / hitDenom;
+                wB = (hitD11 * hitD20 - hitD01 * hitD21) * hitInvDenom;
+                wC = (hitD00 * hitD21 - hitD01 * hitD20) * hitInvDenom;
+                wA = 1.0f - wB - wC;
+            }
+        }
 
         final float TOLERANCE = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
         if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) {
@@ -389,6 +456,7 @@ public final class CollisionPipeline {
                 -dpX * (wC / massC), -dpY * (wC / massC), -dpZ * (wC / massC),
                 -dvX * (wC / massC), -dvY * (wC / massC), -dvZ * (wC / massC));
         collisionManager.invalidateSeparationCertificate(contactId);
+        if (sweptHitTime >= 0.0f) collisionManager.sweptResolvedCount.incrementAndGet();
         return 2;
     }
 
@@ -453,6 +521,94 @@ public final class CollisionPipeline {
         float qy = py - by * v - cy * w;
         float qz = pz - bz * v - cz * w;
         return qx * qx + qy * qy + qz * qz;
+    }
+
+    static float sweptPointTriangleHitTime(
+            float p0x, float p0y, float p0z,
+            float a0x, float a0y, float a0z,
+            float b0x, float b0y, float b0z,
+            float c0x, float c0y, float c0z,
+            float p1x, float p1y, float p1z,
+            float a1x, float a1y, float a1z,
+            float b1x, float b1y, float b1z,
+            float c1x, float c1y, float c1z) {
+        float f0 = orientedVolume(p0x, p0y, p0z, a0x, a0y, a0z, b0x, b0y, b0z, c0x, c0y, c0z);
+        float f1 = orientedVolume(p1x, p1y, p1z, a1x, a1y, a1z, b1x, b1y, b1z, c1x, c1y, c1z);
+        if (!Float.isFinite(f0) || !Float.isFinite(f1) || f0 * f1 > 0.0f) return -1.0f;
+
+        float low = 0.0f, high = 1.0f, lowValue = f0;
+        for (int iteration = 0; iteration < 12; iteration++) {
+            float middle = (low + high) * 0.5f;
+            float value = orientedVolumeAt(middle,
+                    p0x, p0y, p0z, a0x, a0y, a0z, b0x, b0y, b0z, c0x, c0y, c0z,
+                    p1x, p1y, p1z, a1x, a1y, a1z, b1x, b1y, b1z, c1x, c1y, c1z);
+            if (Math.abs(value) <= 1e-7f) {
+                low = high = middle;
+                break;
+            }
+            if ((lowValue <= 0.0f && value <= 0.0f) || (lowValue >= 0.0f && value >= 0.0f)) {
+                low = middle;
+                lowValue = value;
+            } else {
+                high = middle;
+            }
+        }
+
+        float hitTime = (low + high) * 0.5f;
+        float ax = lerp(a0x, a1x, hitTime), ay = lerp(a0y, a1y, hitTime), az = lerp(a0z, a1z, hitTime);
+        float bx = lerp(b0x, b1x, hitTime), by = lerp(b0y, b1y, hitTime), bz = lerp(b0z, b1z, hitTime);
+        float cx = lerp(c0x, c1x, hitTime), cy = lerp(c0y, c1y, hitTime), cz = lerp(c0z, c1z, hitTime);
+        float px = lerp(p0x, p1x, hitTime) - ax;
+        float py = lerp(p0y, p1y, hitTime) - ay;
+        float pz = lerp(p0z, p1z, hitTime) - az;
+        float abx = bx - ax, aby = by - ay, abz = bz - az;
+        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float d00 = abx * abx + aby * aby + abz * abz;
+        float d01 = abx * acx + aby * acy + abz * acz;
+        float d11 = acx * acx + acy * acy + acz * acz;
+        float d20 = px * abx + py * aby + pz * abz;
+        float d21 = px * acx + py * acy + pz * acz;
+        float denominator = d00 * d11 - d01 * d01;
+        if (denominator < PhysicsWorld.KINDA_SMALL_NUMBER) return -1.0f;
+        float inverse = 1.0f / denominator;
+        float wB = (d11 * d20 - d01 * d21) * inverse;
+        float wC = (d00 * d21 - d01 * d20) * inverse;
+        float wA = 1.0f - wB - wC;
+        float tolerance = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
+        return wA >= tolerance && wB >= tolerance && wC >= tolerance ? hitTime : -1.0f;
+    }
+
+    private static float orientedVolumeAt(float t,
+                                          float p0x, float p0y, float p0z,
+                                          float a0x, float a0y, float a0z,
+                                          float b0x, float b0y, float b0z,
+                                          float c0x, float c0y, float c0z,
+                                          float p1x, float p1y, float p1z,
+                                          float a1x, float a1y, float a1z,
+                                          float b1x, float b1y, float b1z,
+                                          float c1x, float c1y, float c1z) {
+        return orientedVolume(
+                lerp(p0x, p1x, t), lerp(p0y, p1y, t), lerp(p0z, p1z, t),
+                lerp(a0x, a1x, t), lerp(a0y, a1y, t), lerp(a0z, a1z, t),
+                lerp(b0x, b1x, t), lerp(b0y, b1y, t), lerp(b0z, b1z, t),
+                lerp(c0x, c1x, t), lerp(c0y, c1y, t), lerp(c0z, c1z, t));
+    }
+
+    private static float orientedVolume(float px, float py, float pz,
+                                        float ax, float ay, float az,
+                                        float bx, float by, float bz,
+                                        float cx, float cy, float cz) {
+        float abx = bx - ax, aby = by - ay, abz = bz - az;
+        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float apx = px - ax, apy = py - ay, apz = pz - az;
+        float nx = aby * acz - abz * acy;
+        float ny = abz * acx - abx * acz;
+        float nz = abx * acy - aby * acx;
+        return apx * nx + apy * ny + apz * nz;
+    }
+
+    private static float lerp(float from, float to, float t) {
+        return from + (to - from) * t;
     }
 
     /**

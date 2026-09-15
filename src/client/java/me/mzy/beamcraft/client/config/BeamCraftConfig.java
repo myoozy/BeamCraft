@@ -26,11 +26,19 @@ public final class BeamCraftConfig {
 
     public Conflict conflict = new Conflict();
     public Input input = new Input();
+    public Diagnostics diagnostics = new Diagnostics();
 
     public static final class Conflict {
         public boolean notify = false;
         /** One of {@code newer}, {@code later-root}, or {@code earlier-root}. */
         public String strategy = "later-root";
+    }
+
+    public static final class Diagnostics {
+        /** Capture one impact-centered substep trace and print it to the console/latest.log. */
+        public boolean physicsEventTrace = false;
+        /** Also trigger when one internal-force substep exceeds this wall time. */
+        public double internalForceTriggerMs = 1.0;
     }
 
     /**
@@ -169,6 +177,9 @@ public final class BeamCraftConfig {
         }
         if (input == null) {
             input = new Input();
+        }
+        if (diagnostics == null) {
+            diagnostics = new Diagnostics();
         }
         return this;
     }

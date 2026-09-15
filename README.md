@@ -59,7 +59,7 @@ BeamCraft is configured by a single JSON file in the game directory — in a
 development client that is `run/config/beamcraft.json`. It is created
 automatically on first launch if absent; on later launches any missing default
 section is merged back in without discarding keys that are not recognised. The
-file has three sections:
+file has four sections:
 
 ```json
 {
@@ -71,6 +71,10 @@ file has three sections:
     "notify": false,
     "strategy": "later-root"
   },
+  "diagnostics": {
+    "physicsEventTrace": false,
+    "internalForceTriggerMs": 1.0
+  },
   "input": {
     "throttle": {
       "keys": [{ "key": "key.keyboard.up", "value": 1.0 }],
@@ -80,6 +84,15 @@ file has three sections:
   }
 }
 ```
+
+### `diagnostics` — impact event tracing
+
+Set `physicsEventTrace` to `true` and restart the client to arm one substep-level
+capture. The first soft-body contact, fracture, or internal-force substep above
+`internalForceTriggerMs` retains its surrounding history and prints one CSV block
+to the console and `latest.log`; it does not add another HUD panel. Set the
+threshold to `0` to trigger only on contact or fracture. The trace automatically
+disarms after printing one capture.
 
 ### `assetRoots` — where vehicles are loaded from
 

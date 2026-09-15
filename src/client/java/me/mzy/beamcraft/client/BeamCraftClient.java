@@ -67,6 +67,9 @@ public class BeamCraftClient implements ClientModInitializer {
 		// 加载配置文件，确定资产根列表并确保目录存在
 		BeamCraftConfig config = BeamCraftConfigManager.initialize(
 				FabricLoader.getInstance().getConfigDir(), GAME_DIR);
+		PHYSICS_WORLD.configureEventTrace(
+				config.diagnostics.physicsEventTrace,
+				config.diagnostics.internalForceTriggerMs);
 		VehicleInputHandler inputHandler = new VehicleInputHandler(config.input);
 		AssetScanner.INSTANCE.configure(config.policy());
 		for (File root : BeamCraftConfigManager.assetRoots()) {

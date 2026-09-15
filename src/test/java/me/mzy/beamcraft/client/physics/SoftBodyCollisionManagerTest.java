@@ -93,6 +93,31 @@ class SoftBodyCollisionManagerTest {
                 0.0f, 1.0f, 0.0f), 1e-6f);
     }
 
+    @Test
+    void sweptPointDetectsARealCrossingAndRejectsAPlaneCrossingOutsideTriangle() {
+        float hit = CollisionPipeline.sweptPointTriangleHitTime(
+                0.25f, 0.25f, 1.0f,
+                0.0f, 0.0f, 0.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f,
+                0.25f, 0.25f, -1.0f,
+                0.0f, 0.0f, 0.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f);
+        assertEquals(0.5f, hit, 0.001f);
+
+        float miss = CollisionPipeline.sweptPointTriangleHitTime(
+                2.0f, 2.0f, 1.0f,
+                0.0f, 0.0f, 0.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f,
+                2.0f, 2.0f, -1.0f,
+                0.0f, 0.0f, 0.0f,
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f);
+        assertTrue(miss < 0.0f);
+    }
+
     private static SoftBodyVehicle vehicleAtOffset(int globalNodeOffset) {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         vehicle.globalNodeOffset = globalNodeOffset;

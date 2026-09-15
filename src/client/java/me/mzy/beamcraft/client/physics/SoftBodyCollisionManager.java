@@ -19,6 +19,8 @@ public class SoftBodyCollisionManager {
     public static final int MAX_GLOBAL_NODES = 32768;
 
     public final AtomicInteger contactCount = new AtomicInteger(0);
+    /** Rare CCD resolutions; retained separately so packed narrow statistics stay compact. */
+    public final AtomicInteger sweptResolvedCount = new AtomicInteger(0);
 
     // --- 接触对缓存 (SoA 风格) ---
     public final SoftBodyVehicle[] contactNodeVeh = new SoftBodyVehicle[MAX_CONTACTS];

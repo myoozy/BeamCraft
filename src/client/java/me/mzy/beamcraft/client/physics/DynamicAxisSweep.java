@@ -98,11 +98,18 @@ public class DynamicAxisSweep {
             double x = eX + vehicle.nodes.posX[node];
             double y = eY + vehicle.nodes.posY[node];
             double z = eZ + vehicle.nodes.posZ[node];
+            double previousX = eX + vehicle.nodes.prevPosX[node];
+            double previousY = eY + vehicle.nodes.prevPosY[node];
+            double previousZ = eZ + vehicle.nodes.prevPosZ[node];
             double futureX = x + vehicle.nodes.velX[node] * dtPredict;
             double futureY = y + vehicle.nodes.velY[node] * dtPredict;
             double futureZ = z + vehicle.nodes.velZ[node] * dtPredict;
-            double minX = Math.min(x, futureX), minY = Math.min(y, futureY), minZ = Math.min(z, futureZ);
-            double maxX = Math.max(x, futureX), maxY = Math.max(y, futureY), maxZ = Math.max(z, futureZ);
+            double minX = Math.min(previousX, Math.min(x, futureX));
+            double minY = Math.min(previousY, Math.min(y, futureY));
+            double minZ = Math.min(previousZ, Math.min(z, futureZ));
+            double maxX = Math.max(previousX, Math.max(x, futureX));
+            double maxY = Math.max(previousY, Math.max(y, futureY));
+            double maxZ = Math.max(previousZ, Math.max(z, futureZ));
 
             cacheMinX[count] = minX;
             cacheMinY[count] = minY;

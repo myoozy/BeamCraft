@@ -68,6 +68,8 @@ public class SoftBodyVehicle {
     public java.util.Map<String, List<BeamPointer>> breakGroupMap = new java.util.HashMap<>();
     private final java.util.Set<String> triggeredBreakGroups = new java.util.HashSet<>();
     private final Set<String> triggeredDeformGroups = ConcurrentHashMap.newKeySet();
+    boolean physicsEventTraceEnabled;
+    long physicsEventTraceBreakCommitNanos;
 
     final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
 
@@ -977,6 +979,23 @@ public class SoftBodyVehicle {
 
     public Set<String> triggeredDeformGroups() {
         return Set.copyOf(triggeredDeformGroups);
+    }
+
+    int physicsEventTraceBreakGroupCount() {
+        return triggeredBreakGroups.size();
+    }
+
+    int physicsEventTraceBrokenBeamCount() {
+        return brokenCount(normalBeams) + brokenCount(supportBeams) + brokenCount(boundedBeams)
+                + brokenCount(lBeams) + brokenCount(anisotropicBeams);
+    }
+
+    private static int brokenCount(BeamContainer container) {
+        int result = 0;
+        for (int beam = 0; beam < container.count; beam++) {
+            if (container.broken[beam]) result++;
+        }
+        return result;
     }
 
     /** Evaluates only beams that declared a finite deformation trigger ratio. */

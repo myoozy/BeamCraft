@@ -40,7 +40,7 @@ class DynamicAxisSweepTest {
         vehicle.nodes.collision[1] = true;
         vehicle.nodes.selfCollision[1] = true;
         vehicle.nodes.partId[1] = 1;
-        vehicle.nodes.posX[1] = 100.0f;
+        vehicle.nodes.posX[1] = vehicle.nodes.prevPosX[1] = 100.0f;
 
         DynamicAxisSweep sweep = new DynamicAxisSweep();
         sweep.insertNodes(vehicle, 0.0);
@@ -77,6 +77,29 @@ class DynamicAxisSweepTest {
         assertEquals(1, result.count);
         assertTrue(result.vehicles[0] == movingVehicle);
         assertEquals(0, result.nodeIds[0]);
+    }
+
+    @Test
+    void previousToCurrentSweepIsRetainedWhenNodeIsAlreadyMovingAway() {
+        SoftBodyVehicle triangleVehicle = new SoftBodyVehicle(null);
+        SoftBodyVehicle movingVehicle = new SoftBodyVehicle(null);
+        movingVehicle.nodes.count = 1;
+        movingVehicle.nodes.collision[0] = true;
+        movingVehicle.nodes.prevPosX[0] = -1.0f;
+        movingVehicle.nodes.posX[0] = 1.0f;
+        movingVehicle.nodes.velX[0] = 10.0f;
+
+        DynamicAxisSweep sweep = new DynamicAxisSweep();
+        sweep.insertNodes(movingVehicle, 0.1);
+        sweep.updateAndSort();
+
+        SweepResultBuffer result = new SweepResultBuffer();
+        int rawHits = sweep.queryCollisionNodesInAABB(
+                -0.1, -0.1, -0.1, 0.1, 0.1, 0.1,
+                triangleVehicle, 0, 1, 2, -1, result);
+
+        assertEquals(1, rawHits);
+        assertEquals(1, result.count);
     }
 
     @Test

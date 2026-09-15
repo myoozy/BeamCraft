@@ -88,6 +88,14 @@ public class TriangleContainer {
         Arrays.fill(broken, 0, count, false);
     }
 
+    int brokenCount() {
+        int result = 0;
+        for (int triangle = 0; triangle < count; triangle++) {
+            if (broken[triangle]) result++;
+        }
+        return result;
+    }
+
     private static void addEdge(Map<Long, List<Integer>> index, int nodeA, int nodeB, int triangleIdx) {
         index.computeIfAbsent(edgeKey(nodeA, nodeB), ignored -> new ArrayList<>()).add(triangleIdx);
     }

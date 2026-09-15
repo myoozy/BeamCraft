@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.physics;
 
+import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.physics.electrics.ElectricSnapshot;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
@@ -10,6 +11,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
 /**
@@ -35,6 +37,8 @@ public class PhysicsWorld {
 
     public final DynamicAxisSweep globalSap = new DynamicAxisSweep();
     public final SoftBodyCollisionManager collisionManager = new SoftBodyCollisionManager();
+    private final PhysicsEventTrace eventTrace = new PhysicsEventTrace();
+    private final AtomicReference<String> completedEventTrace = new AtomicReference<>();
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -45,6 +49,15 @@ public class PhysicsWorld {
 
     public PhysicsWorld() {
         // Empty constructor, data will be injected by JBeam parser
+    }
+
+    public void configureEventTrace(boolean enabled, double internalForceTriggerMs) {
+        eventTrace.configure(enabled, internalForceTriggerMs);
+        completedEventTrace.set(null);
+        if (enabled) {
+            BeamCraft.LOGGER.info("BeamCraft substep event trace armed (internal-force trigger: {} ms)",
+                    internalForceTriggerMs);
+        }
     }
 
     public void addVehicle(SoftBodyVehicle vehicle) {
@@ -137,6 +150,19 @@ public class PhysicsWorld {
 
         int nextRenderSnapshotIndex = 1;
         for (int s = 0; s < subSteps; s++) {
+            boolean traceEnabled = eventTrace.enabled();
+            int brokenBeamsBefore = 0, breakGroupsBefore = 0, brokenTrianglesBefore = 0;
+            if (traceEnabled) {
+                for (SoftBodyVehicle vehicle : activeVehicles) {
+                    vehicle.physicsEventTraceEnabled = true;
+                    brokenBeamsBefore += vehicle.physicsEventTraceBrokenBeamCount();
+                    breakGroupsBefore += vehicle.physicsEventTraceBreakGroupCount();
+                    brokenTrianglesBefore += vehicle.triangles.brokenCount();
+                }
+            } else {
+                for (SoftBodyVehicle vehicle : activeVehicles) vehicle.physicsEventTraceEnabled = false;
+            }
+
             if (s > 0 && s % ELECTRIC_SNAPSHOT_SUBSTEP_INTERVAL == 0) {
                 for (int i = 0; i < activeVehicles.size(); i++) {
                     electricSnapshots.set(i, activeVehicles.get(i).electrics.snapshot());
@@ -150,7 +176,9 @@ public class PhysicsWorld {
                             subDt, plasticRelaxation, electricSnapshots.get(index)));
 
             long ti2 = System.nanoTime();
-            internalForceMs += (ti2 - ti1) / 1_000_000.0;
+            long substepInternalNs = ti2 - ti1;
+            internalForceMs += substepInternalNs / 1_000_000.0;
+            long substepSapNs = 0L, substepCandidateNs = 0L, substepColorNs = 0L;
 
             if (s % broadphaseRate == 0) {
                 long tii1 = System.nanoTime();
@@ -171,6 +199,7 @@ public class PhysicsWorld {
                 globalSap.updateAndSort();
 
                 long tii2 = System.nanoTime();
+                substepSapNs = tii2 - tii1;
                 globalSAPMs += (tii2 - tii1) / 1_000_000.0;
 
                 collisionManager.clearContacts();
@@ -179,7 +208,9 @@ public class PhysicsWorld {
                 activeVehicles.parallelStream().forEach(vehicle -> {
                     collisionPipeline.generateCollisionCandidates(vehicle, subDt * broadphaseRate);
                 });
-                candidateGenerationMs += (System.nanoTime() - candidateGenerationStarted) / 1_000_000.0;
+                long candidateGenerationFinished = System.nanoTime();
+                substepCandidateNs = candidateGenerationFinished - candidateGenerationStarted;
+                candidateGenerationMs += substepCandidateNs / 1_000_000.0;
 
                 lastSapHits = 0;
                 lastCandidatesStored = 0;
@@ -192,7 +223,9 @@ public class PhysicsWorld {
 
                 long colorStarted = System.nanoTime();
                 collisionManager.buildAndColorBatches();
-                colorMs += (System.nanoTime() - colorStarted) / 1_000_000.0;
+                long colorFinished = System.nanoTime();
+                substepColorNs = colorFinished - colorStarted;
+                colorMs += substepColorNs / 1_000_000.0;
 
                 long tii3 = System.nanoTime();
                 dyeCollisionMs += (tii3 - tii2) / 1_000_000.0;
@@ -201,21 +234,49 @@ public class PhysicsWorld {
             long ti3 = System.nanoTime();
 
             narrowChecks += collisionManager.contactCount.get();
+            collisionManager.sweptResolvedCount.set(0);
             long narrowStats = collisionPipeline.solveSoftBodyContacts(subDt);
-            narrowAabbPassed += narrowStats & CollisionPipeline.NARROW_STAT_MASK;
-            narrowResolved += (narrowStats >>> CollisionPipeline.NARROW_STAT_BITS)
-                    & CollisionPipeline.NARROW_STAT_MASK;
-            narrowCertificateSkipped += narrowStats >>> (CollisionPipeline.NARROW_STAT_BITS * 2);
+            int substepAabbPassed = (int) (narrowStats & CollisionPipeline.NARROW_STAT_MASK);
+            int substepResolved = (int) ((narrowStats >>> CollisionPipeline.NARROW_STAT_BITS)
+                    & CollisionPipeline.NARROW_STAT_MASK);
+            int substepCertificateSkipped = (int) (narrowStats >>> (CollisionPipeline.NARROW_STAT_BITS * 2));
+            narrowAabbPassed += substepAabbPassed;
+            narrowResolved += substepResolved;
+            narrowCertificateSkipped += substepCertificateSkipped;
 
             long ti4 = System.nanoTime();
-            softCollisionMs += (ti4 - ti3) / 1_000_000.0;
+            long substepSoftNs = ti4 - ti3;
+            softCollisionMs += substepSoftNs / 1_000_000.0;
 
             activeVehicles.parallelStream().forEach(vehicle -> {
                 collisionPipeline.solveEnvironmentCollisions(vehicle, subDt);
             });
 
             long ti5 = System.nanoTime();
-            mcCollisionMs += (ti5 - ti4) / 1_000_000.0;
+            long substepEnvironmentNs = ti5 - ti4;
+            mcCollisionMs += substepEnvironmentNs / 1_000_000.0;
+
+            if (traceEnabled) {
+                int brokenBeamsAfter = 0, breakGroupsAfter = 0, brokenTrianglesAfter = 0;
+                long breakCommitNs = 0L;
+                for (SoftBodyVehicle vehicle : activeVehicles) {
+                    brokenBeamsAfter += vehicle.physicsEventTraceBrokenBeamCount();
+                    breakGroupsAfter += vehicle.physicsEventTraceBreakGroupCount();
+                    brokenTrianglesAfter += vehicle.triangles.brokenCount();
+                    breakCommitNs += vehicle.physicsEventTraceBreakCommitNanos;
+                }
+                String completedTrace = eventTrace.record(s,
+                        substepInternalNs, breakCommitNs, substepSapNs, substepCandidateNs,
+                        substepColorNs, substepSoftNs, substepEnvironmentNs,
+                        collisionManager.contactCount.get(), substepCertificateSkipped,
+                        substepAabbPassed, substepResolved, collisionManager.sweptResolvedCount.get(),
+                        Math.max(0, brokenBeamsAfter - brokenBeamsBefore),
+                        Math.max(0, breakGroupsAfter - breakGroupsBefore),
+                        Math.max(0, brokenTrianglesAfter - brokenTrianglesBefore));
+                if (completedTrace != null) {
+                    completedEventTrace.set(completedTrace);
+                }
+            }
 
             int completedSubSteps = s + 1;
             if (isRenderSnapshotBoundary(completedSubSteps, subSteps)) {
@@ -290,6 +351,8 @@ public class PhysicsWorld {
         timings[8] = (System.nanoTime() - commitStartedNanos) / 1_000_000.0;
         timings[0] = (result.finishedNanos() - result.preparedStep().startedNanos()) / 1_000_000.0
                 + timings[8];
+        String traceDump = completedEventTrace.getAndSet(null);
+        if (traceDump != null) BeamCraft.LOGGER.info("{}", traceDump);
         return timings;
     }
 
