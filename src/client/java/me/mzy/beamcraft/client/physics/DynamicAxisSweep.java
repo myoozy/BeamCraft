@@ -3,11 +3,16 @@ package me.mzy.beamcraft.client.physics;
 import java.util.Arrays;
 
 /**
- * Dynamic 1D sweep-and-prune over all collidable nodes.
- * The widest axis is selected on every rebuild to avoid a persistently crowded axis.
+ * Allocation-free swept node SAP with one sorted segment per vehicle.
+ *
+ * <p>Part bounds gate each vehicle segment before its binary search. This keeps
+ * detached parts from turning a vehicle-wide bound into false candidates, while
+ * avoiding the many binary searches caused by sorting every authored part as a
+ * separate segment.</p>
  */
 public class DynamicAxisSweep {
     static final int MAX_NODES = SoftBodyCollisionManager.MAX_GLOBAL_NODES;
+    private static final int MAX_GROUPS = MAX_NODES;
 
     private final long[] sortKeys = new long[MAX_NODES];
     private final double[] sortedPrefixMax = new double[MAX_NODES];
@@ -19,15 +24,63 @@ public class DynamicAxisSweep {
     private final double[] cacheMaxZ = new double[MAX_NODES];
     private final SoftBodyVehicle[] cacheVeh = new SoftBodyVehicle[MAX_NODES];
     private final int[] cacheNodeId = new int[MAX_NODES];
+    private final int[] cacheVehicleProxy = new int[MAX_NODES];
+
+    private final SoftBodyVehicle[] vehicleRef = new SoftBodyVehicle[MAX_GROUPS];
+    private final int[] vehicleNodeCount = new int[MAX_GROUPS];
+    private final int[] vehicleStart = new int[MAX_GROUPS + 1];
+    private final int[] vehicleWrite = new int[MAX_GROUPS];
+    private final int[] vehiclePartStart = new int[MAX_GROUPS];
+    private final int[] vehiclePartEnd = new int[MAX_GROUPS];
+    private final byte[] vehicleActiveAxis = new byte[MAX_GROUPS];
+    private final boolean[] vehicleHasSelfNodes = new boolean[MAX_GROUPS];
+    private final double[] vehicleMinX = new double[MAX_GROUPS];
+    private final double[] vehicleMinY = new double[MAX_GROUPS];
+    private final double[] vehicleMinZ = new double[MAX_GROUPS];
+    private final double[] vehicleMaxX = new double[MAX_GROUPS];
+    private final double[] vehicleMaxY = new double[MAX_GROUPS];
+    private final double[] vehicleMaxZ = new double[MAX_GROUPS];
+
+    private final int[] partVehicleProxy = new int[MAX_GROUPS];
+    private final int[] partLocalId = new int[MAX_GROUPS];
+    private final double[] partMinX = new double[MAX_GROUPS];
+    private final double[] partMinY = new double[MAX_GROUPS];
+    private final double[] partMinZ = new double[MAX_GROUPS];
+    private final double[] partMaxX = new double[MAX_GROUPS];
+    private final double[] partMaxY = new double[MAX_GROUPS];
+    private final double[] partMaxZ = new double[MAX_GROUPS];
+    private final double[] partSelfMinX = new double[MAX_GROUPS];
+    private final double[] partSelfMinY = new double[MAX_GROUPS];
+    private final double[] partSelfMinZ = new double[MAX_GROUPS];
+    private final double[] partSelfMaxX = new double[MAX_GROUPS];
+    private final double[] partSelfMaxY = new double[MAX_GROUPS];
+    private final double[] partSelfMaxZ = new double[MAX_GROUPS];
+    private final boolean[] partHasSelfNodes = new boolean[MAX_GROUPS];
 
     private int count;
-    private int activeAxis;
+    private int vehicleCount;
+    private int partCount;
 
     public void clear() {
         count = 0;
+        vehicleCount = 0;
+        partCount = 0;
     }
 
     public void insertNodes(SoftBodyVehicle vehicle, double dtPredict) {
+        if (vehicleCount >= MAX_GROUPS) {
+            throw new IllegalStateException("Vehicle count exceeds SAP capacity " + MAX_GROUPS);
+        }
+        int vehicleProxy = vehicleCount++;
+        vehicleRef[vehicleProxy] = vehicle;
+        vehicleNodeCount[vehicleProxy] = 0;
+        vehiclePartStart[vehicleProxy] = partCount;
+        vehicleHasSelfNodes[vehicleProxy] = false;
+        vehicleMinX[vehicleProxy] = vehicleMinY[vehicleProxy] = vehicleMinZ[vehicleProxy]
+                = Double.POSITIVE_INFINITY;
+        vehicleMaxX[vehicleProxy] = vehicleMaxY[vehicleProxy] = vehicleMaxZ[vehicleProxy]
+                = Double.NEGATIVE_INFINITY;
+
         double eX = vehicle.entityX, eY = vehicle.entityY, eZ = vehicle.entityZ;
         for (int node = 0; node < vehicle.nodes.count; node++) {
             if (!vehicle.nodes.collision[node]) continue;
@@ -35,64 +88,73 @@ public class DynamicAxisSweep {
                 throw new IllegalStateException("Collidable node count exceeds SAP capacity " + MAX_NODES);
             }
 
+            int part = findOrCreatePart(vehicleProxy, vehicle.nodes.partId[node]);
             double x = eX + vehicle.nodes.posX[node];
             double y = eY + vehicle.nodes.posY[node];
             double z = eZ + vehicle.nodes.posZ[node];
             double futureX = x + vehicle.nodes.velX[node] * dtPredict;
             double futureY = y + vehicle.nodes.velY[node] * dtPredict;
             double futureZ = z + vehicle.nodes.velZ[node] * dtPredict;
-            cacheMinX[count] = Math.min(x, futureX);
-            cacheMinY[count] = Math.min(y, futureY);
-            cacheMinZ[count] = Math.min(z, futureZ);
-            cacheMaxX[count] = Math.max(x, futureX);
-            cacheMaxY[count] = Math.max(y, futureY);
-            cacheMaxZ[count] = Math.max(z, futureZ);
+            double minX = Math.min(x, futureX), minY = Math.min(y, futureY), minZ = Math.min(z, futureZ);
+            double maxX = Math.max(x, futureX), maxY = Math.max(y, futureY), maxZ = Math.max(z, futureZ);
+
+            cacheMinX[count] = minX;
+            cacheMinY[count] = minY;
+            cacheMinZ[count] = minZ;
+            cacheMaxX[count] = maxX;
+            cacheMaxY[count] = maxY;
+            cacheMaxZ[count] = maxZ;
             cacheVeh[count] = vehicle;
             cacheNodeId[count] = node;
+            cacheVehicleProxy[count] = vehicleProxy;
             count++;
+            vehicleNodeCount[vehicleProxy]++;
+
+            includeBounds(vehicleMinX, vehicleMinY, vehicleMinZ,
+                    vehicleMaxX, vehicleMaxY, vehicleMaxZ,
+                    vehicleProxy, minX, minY, minZ, maxX, maxY, maxZ);
+            includeBounds(partMinX, partMinY, partMinZ, partMaxX, partMaxY, partMaxZ,
+                    part, minX, minY, minZ, maxX, maxY, maxZ);
+            if (vehicle.nodes.selfCollision[node]) {
+                vehicleHasSelfNodes[vehicleProxy] = true;
+                partHasSelfNodes[part] = true;
+                includeBounds(partSelfMinX, partSelfMinY, partSelfMinZ,
+                        partSelfMaxX, partSelfMaxY, partSelfMaxZ,
+                        part, minX, minY, minZ, maxX, maxY, maxZ);
+            }
         }
+        vehiclePartEnd[vehicleProxy] = partCount;
     }
 
     public void updateAndSort() {
-        if (count == 0) return;
+        int offset = 0;
+        for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
+            vehicleStart[vehicle] = offset;
+            vehicleWrite[vehicle] = offset;
+            offset += vehicleNodeCount[vehicle];
+            vehicleActiveAxis[vehicle] = chooseAxis(vehicle);
+        }
+        vehicleStart[vehicleCount] = offset;
 
-        double minX = cacheMinX[0], maxX = cacheMaxX[0];
-        double minY = cacheMinY[0], maxY = cacheMaxY[0];
-        double minZ = cacheMinZ[0], maxZ = cacheMaxZ[0];
-        for (int i = 1; i < count; i++) {
-            if (cacheMinX[i] < minX) minX = cacheMinX[i];
-            if (cacheMaxX[i] > maxX) maxX = cacheMaxX[i];
-            if (cacheMinY[i] < minY) minY = cacheMinY[i];
-            if (cacheMaxY[i] > maxY) maxY = cacheMaxY[i];
-            if (cacheMinZ[i] < minZ) minZ = cacheMinZ[i];
-            if (cacheMaxZ[i] > maxZ) maxZ = cacheMaxZ[i];
+        for (int index = 0; index < count; index++) {
+            int vehicle = cacheVehicleProxy[index];
+            sortKeys[vehicleWrite[vehicle]++] = sortKey(axisMin(index, vehicleActiveAxis[vehicle]), index);
         }
 
-        double spanX = maxX - minX;
-        double spanY = maxY - minY;
-        double spanZ = maxZ - minZ;
-        if (spanX >= spanY && spanX >= spanZ) activeAxis = 0;
-        else if (spanY >= spanX && spanY >= spanZ) activeAxis = 1;
-        else activeAxis = 2;
-
-        for (int i = 0; i < count; i++) {
-            sortKeys[i] = sortKey(axisMin(i), i);
-        }
-        Arrays.sort(sortKeys, 0, count);
-
-        double prefixMax = Double.NEGATIVE_INFINITY;
-        for (int i = 0; i < count; i++) {
-            int original = (int) sortKeys[i];
-            double maximum = axisMax(original);
-            if (maximum > prefixMax) prefixMax = maximum;
-            sortedPrefixMax[i] = prefixMax;
+        for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
+            int start = vehicleStart[vehicle], end = vehicleStart[vehicle + 1];
+            if (end <= start) continue;
+            Arrays.sort(sortKeys, start, end);
+            double prefixMax = Double.NEGATIVE_INFINITY;
+            for (int sorted = start; sorted < end; sorted++) {
+                int original = (int) sortKeys[sorted];
+                double maximum = axisMax(original, vehicleActiveAxis[vehicle]);
+                if (maximum > prefixMax) prefixMax = maximum;
+                sortedPrefixMax[sorted] = prefixMax;
+            }
         }
     }
 
-    /**
-     * Queries one triangle's node candidates and applies topology-only filters.
-     * The return value is the raw 3D AABB hit count used by diagnostics.
-     */
     public int queryCollisionNodesInAABB(
             double minX, double minY, double minZ,
             double maxX, double maxY, double maxZ,
@@ -100,11 +162,49 @@ public class DynamicAxisSweep {
             int triangleNodeA, int triangleNodeB, int triangleNodeC,
             int trianglePartId,
             SweepResultBuffer result) {
-        if (count == 0) return 0;
+        int rawHits = 0;
+        for (int vehicle = 0; vehicle < vehicleCount; vehicle++) {
+            if (!vehicleMayOverlap(vehicle, triangleVehicle, minX, minY, minZ, maxX, maxY, maxZ)) continue;
+            rawHits += queryVehicle(vehicle, minX, minY, minZ, maxX, maxY, maxZ,
+                    triangleVehicle, triangleNodeA, triangleNodeB, triangleNodeC,
+                    trianglePartId, result);
+        }
+        return rawHits;
+    }
 
-        double targetMin = activeAxis == 0 ? minX : activeAxis == 1 ? minY : minZ;
-        double targetMax = activeAxis == 0 ? maxX : activeAxis == 1 ? maxY : maxZ;
-        int left = 0, right = count - 1, startIndex = count;
+    private boolean vehicleMayOverlap(int vehicle, SoftBodyVehicle triangleVehicle,
+                                      double minX, double minY, double minZ,
+                                      double maxX, double maxY, double maxZ) {
+        boolean self = vehicleRef[vehicle] == triangleVehicle;
+        if (self && !vehicleHasSelfNodes[vehicle]) return false;
+        for (int part = vehiclePartStart[vehicle]; part < vehiclePartEnd[vehicle]; part++) {
+            if (self && !partHasSelfNodes[part]) continue;
+            double pMinX = self ? partSelfMinX[part] : partMinX[part];
+            double pMinY = self ? partSelfMinY[part] : partMinY[part];
+            double pMinZ = self ? partSelfMinZ[part] : partMinZ[part];
+            double pMaxX = self ? partSelfMaxX[part] : partMaxX[part];
+            double pMaxY = self ? partSelfMaxY[part] : partMaxY[part];
+            double pMaxZ = self ? partSelfMaxZ[part] : partMaxZ[part];
+            if (pMaxX >= minX && pMinX <= maxX
+                    && pMaxY >= minY && pMinY <= maxY
+                    && pMaxZ >= minZ && pMinZ <= maxZ) return true;
+        }
+        return false;
+    }
+
+    private int queryVehicle(int vehicle,
+                             double minX, double minY, double minZ,
+                             double maxX, double maxY, double maxZ,
+                             SoftBodyVehicle triangleVehicle,
+                             int triangleNodeA, int triangleNodeB, int triangleNodeC,
+                             int trianglePartId,
+                             SweepResultBuffer result) {
+        int start = vehicleStart[vehicle], end = vehicleStart[vehicle + 1];
+        int axis = vehicleActiveAxis[vehicle];
+        double targetMin = axis == 0 ? minX : axis == 1 ? minY : minZ;
+        double targetMax = axis == 0 ? maxX : axis == 1 ? maxY : maxZ;
+
+        int left = start, right = end - 1, startIndex = end;
         while (left <= right) {
             int middle = (left + right) >>> 1;
             if (sortedPrefixMax[middle] >= targetMin) {
@@ -117,7 +217,7 @@ public class DynamicAxisSweep {
 
         long maxKeyLimit = sortableLimit(targetMax);
         int rawHits = 0;
-        for (int sorted = startIndex; sorted < count; sorted++) {
+        for (int sorted = startIndex; sorted < end; sorted++) {
             long key = sortKeys[sorted];
             if (key > maxKeyLimit) break;
             int original = (int) key;
@@ -141,12 +241,51 @@ public class DynamicAxisSweep {
         return rawHits;
     }
 
-    private double axisMin(int index) {
-        return activeAxis == 0 ? cacheMinX[index] : activeAxis == 1 ? cacheMinY[index] : cacheMinZ[index];
+    private int findOrCreatePart(int vehicle, int localPart) {
+        for (int part = vehiclePartStart[vehicle]; part < partCount; part++) {
+            if (partVehicleProxy[part] == vehicle && partLocalId[part] == localPart) return part;
+        }
+        if (partCount >= MAX_GROUPS) {
+            throw new IllegalStateException("Collision part count exceeds SAP capacity " + MAX_GROUPS);
+        }
+        int part = partCount++;
+        partVehicleProxy[part] = vehicle;
+        partLocalId[part] = localPart;
+        partHasSelfNodes[part] = false;
+        partMinX[part] = partMinY[part] = partMinZ[part] = Double.POSITIVE_INFINITY;
+        partMaxX[part] = partMaxY[part] = partMaxZ[part] = Double.NEGATIVE_INFINITY;
+        partSelfMinX[part] = partSelfMinY[part] = partSelfMinZ[part] = Double.POSITIVE_INFINITY;
+        partSelfMaxX[part] = partSelfMaxY[part] = partSelfMaxZ[part] = Double.NEGATIVE_INFINITY;
+        return part;
     }
 
-    private double axisMax(int index) {
-        return activeAxis == 0 ? cacheMaxX[index] : activeAxis == 1 ? cacheMaxY[index] : cacheMaxZ[index];
+    private byte chooseAxis(int vehicle) {
+        double spanX = vehicleMaxX[vehicle] - vehicleMinX[vehicle];
+        double spanY = vehicleMaxY[vehicle] - vehicleMinY[vehicle];
+        double spanZ = vehicleMaxZ[vehicle] - vehicleMinZ[vehicle];
+        if (spanX >= spanY && spanX >= spanZ) return 0;
+        if (spanY >= spanX && spanY >= spanZ) return 1;
+        return 2;
+    }
+
+    private double axisMin(int index, int axis) {
+        return axis == 0 ? cacheMinX[index] : axis == 1 ? cacheMinY[index] : cacheMinZ[index];
+    }
+
+    private double axisMax(int index, int axis) {
+        return axis == 0 ? cacheMaxX[index] : axis == 1 ? cacheMaxY[index] : cacheMaxZ[index];
+    }
+
+    private static void includeBounds(double[] minsX, double[] minsY, double[] minsZ,
+                                      double[] maxsX, double[] maxsY, double[] maxsZ, int index,
+                                      double minX, double minY, double minZ,
+                                      double maxX, double maxY, double maxZ) {
+        if (minX < minsX[index]) minsX[index] = minX;
+        if (minY < minsY[index]) minsY[index] = minY;
+        if (minZ < minsZ[index]) minsZ[index] = minZ;
+        if (maxX > maxsX[index]) maxsX[index] = maxX;
+        if (maxY > maxsY[index]) maxsY[index] = maxY;
+        if (maxZ > maxsZ[index]) maxsZ[index] = maxZ;
     }
 
     private static long sortKey(double value, int original) {

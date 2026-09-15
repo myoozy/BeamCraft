@@ -7,6 +7,55 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DynamicAxisSweepTest {
     @Test
+    void vehicleSegmentWithoutSelfCollisionIsSkippedBeforeSapQuery() {
+        SoftBodyVehicle triangleVehicle = new SoftBodyVehicle(null);
+        triangleVehicle.nodes.count = 1;
+        triangleVehicle.nodes.collision[0] = true;
+
+        SoftBodyVehicle otherVehicle = new SoftBodyVehicle(null);
+        otherVehicle.nodes.count = 1;
+        otherVehicle.nodes.collision[0] = true;
+
+        DynamicAxisSweep sweep = new DynamicAxisSweep();
+        sweep.insertNodes(triangleVehicle, 0.0);
+        sweep.insertNodes(otherVehicle, 0.0);
+        sweep.updateAndSort();
+
+        SweepResultBuffer result = new SweepResultBuffer();
+        int rawHits = sweep.queryCollisionNodesInAABB(
+                -1.0, -1.0, -1.0, 1.0, 1.0, 1.0,
+                triangleVehicle, 1, 2, 3, -1, result);
+
+        assertEquals(1, rawHits);
+        assertEquals(1, result.count);
+        assertTrue(result.vehicles[0] == otherVehicle);
+    }
+
+    @Test
+    void selfCollisionPartBoundsGateTheVehicleSegment() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.nodes.count = 2;
+        vehicle.nodes.collision[0] = true;
+        vehicle.nodes.partId[0] = 0;
+        vehicle.nodes.collision[1] = true;
+        vehicle.nodes.selfCollision[1] = true;
+        vehicle.nodes.partId[1] = 1;
+        vehicle.nodes.posX[1] = 100.0f;
+
+        DynamicAxisSweep sweep = new DynamicAxisSweep();
+        sweep.insertNodes(vehicle, 0.0);
+        sweep.updateAndSort();
+
+        SweepResultBuffer result = new SweepResultBuffer();
+        int rawHits = sweep.queryCollisionNodesInAABB(
+                -1.0, -1.0, -1.0, 1.0, 1.0, 1.0,
+                vehicle, 2, 3, 4, -1, result);
+
+        assertEquals(0, rawHits);
+        assertEquals(0, result.count);
+    }
+
+    @Test
     void movingNodeIsFoundWhenItsSweptIntervalEntersTheQuery() {
         SoftBodyVehicle triangleVehicle = new SoftBodyVehicle(null);
         SoftBodyVehicle movingVehicle = new SoftBodyVehicle(null);
