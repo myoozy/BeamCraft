@@ -8,28 +8,42 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PhysicsEventTraceTest {
     @Test
-    void captureIncludesPreTriggerAndPostTriggerSubsteps() {
-        PhysicsEventTrace trace = new PhysicsEventTrace(8, 2);
-        trace.configure(true, 10.0);
+    void manualCaptureRunsUntilStoppedAndRetainsNewestSamples() {
+        PhysicsEventTrace trace = new PhysicsEventTrace(4);
+        trace.configure(true);
+        assertTrue(trace.start());
 
-        assertNull(record(trace, 0, 0));
-        assertNull(record(trace, 1, 0));
-        assertNull(record(trace, 2, 3));
-        assertNull(record(trace, 3, 0));
-        PhysicsEventTrace.CompletedCapture capture = record(trace, 4, 0);
+        record(trace, 0, 0);
+        record(trace, 1, 0);
+        record(trace, 2, 3);
+        record(trace, 3, 0);
+        record(trace, 4, 0);
+        assertTrue(trace.enabled());
+        PhysicsEventTrace.CompletedCapture capture = trace.stop();
 
         assertNotNull(capture);
         String dump = capture.formatCsv();
-        assertTrue(dump.contains("trigger=soft-contact"));
+        assertTrue(dump.contains("trigger=manual-stop"));
+        assertTrue(dump.contains("retained_samples=4 total_samples=5"));
         assertTrue(dump.contains("sequence,tick_substep"));
-        assertTrue(dump.contains("0,0,"));
+        assertTrue(dump.lines().noneMatch(line -> line.startsWith("0,0,")));
+        assertTrue(dump.contains("1,1,"));
         assertTrue(dump.contains("4,4,"));
         assertTrue(!trace.enabled());
     }
 
-    private static PhysicsEventTrace.CompletedCapture record(PhysicsEventTrace trace, int substep, int resolved) {
-        return trace.record(substep,
-                100L, 0L, 0L, 0L, 0L, 50L, 25L,
+    @Test
+    void disabledTraceCannotStart() {
+        PhysicsEventTrace trace = new PhysicsEventTrace(4);
+        trace.configure(false);
+
+        assertTrue(!trace.start());
+        assertNull(trace.stop());
+    }
+
+    private static void record(PhysicsEventTrace trace, int substep, int resolved) {
+        trace.record(substep,
+                200L, 100L, 0L, 0L, 0L, 0L, 50L, 25L,
                 10, 0, 2, resolved, 0, 0, 0, 0);
     }
 }

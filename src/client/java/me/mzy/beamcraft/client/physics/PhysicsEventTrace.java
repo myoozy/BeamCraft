@@ -3,17 +3,17 @@ package me.mzy.beamcraft.client.physics;
 import java.util.Locale;
 
 /**
- * Optional allocation-free substep ring buffer for impact-spike diagnosis.
- * A completed capture is formatted once, after the post-trigger window.
+ * Optional allocation-free substep ring buffer for manually bounded impact-spike diagnosis.
+ * A completed capture is formatted only after recording has stopped.
  */
 final class PhysicsEventTrace {
-    private static final int DEFAULT_CAPACITY = 384;
-    private static final int DEFAULT_POST_TRIGGER = 128;
+    /** Ten seconds at the current 2000 Hz physics rate. */
+    private static final int DEFAULT_CAPACITY = 20_000;
 
     private final int capacity;
-    private final int postTriggerSamples;
     private final long[] sequence;
     private final int[] substep;
+    private final long[] totalNs;
     private final long[] internalNs;
     private final long[] breakCommitNs;
     private final long[] sapNs;
@@ -30,23 +30,21 @@ final class PhysicsEventTrace {
     private final int[] breakGroups;
     private final int[] brokenTriangles;
 
-    private boolean enabled;
-    private long internalTriggerNs;
+    private boolean available;
+    private boolean recording;
     private long nextSequence;
     private int writeIndex;
     private int size;
-    private int postRemaining = -1;
-    private String triggerReason;
 
     PhysicsEventTrace() {
-        this(DEFAULT_CAPACITY, DEFAULT_POST_TRIGGER);
+        this(DEFAULT_CAPACITY);
     }
 
-    PhysicsEventTrace(int capacity, int postTriggerSamples) {
+    PhysicsEventTrace(int capacity) {
         this.capacity = capacity;
-        this.postTriggerSamples = postTriggerSamples;
         sequence = new long[capacity];
         substep = new int[capacity];
+        totalNs = new long[capacity];
         internalNs = new long[capacity];
         breakCommitNs = new long[capacity];
         sapNs = new long[capacity];
@@ -64,30 +62,50 @@ final class PhysicsEventTrace {
         brokenTriangles = new int[capacity];
     }
 
-    void configure(boolean enabled, double internalTriggerMs) {
-        this.enabled = enabled;
-        this.internalTriggerNs = Math.max(0L, Math.round(internalTriggerMs * 1_000_000.0));
+    void configure(boolean available) {
+        this.available = available;
+        recording = false;
+        reset();
+    }
+
+    boolean start() {
+        if (!available || recording) return false;
+        reset();
+        recording = true;
+        return true;
+    }
+
+    CompletedCapture stop() {
+        if (!recording) return null;
+        recording = false;
+        return new CompletedCapture(this, "manual-stop", writeIndex, size, nextSequence);
+    }
+
+    private void reset() {
         nextSequence = 0L;
         writeIndex = 0;
         size = 0;
-        postRemaining = -1;
-        triggerReason = null;
     }
 
     boolean enabled() {
-        return enabled;
+        return recording;
     }
 
-    CompletedCapture record(int tickSubstep,
-                  long internal, long breakCommit, long sap, long candidate, long color,
+    boolean available() {
+        return available;
+    }
+
+    void record(int tickSubstep,
+                  long total, long internal, long breakCommit, long sap, long candidate, long color,
                   long soft, long environment, int contactCount, int certSkipped,
                   int passedAabb, int resolvedCount, int sweptResolvedCount, int beamBreaks,
                   int newBreakGroups, int triangleBreaks) {
-        if (!enabled) return null;
+        if (!recording) return;
 
         int index = writeIndex;
         sequence[index] = nextSequence++;
         substep[index] = tickSubstep;
+        totalNs[index] = total;
         internalNs[index] = internal;
         breakCommitNs[index] = breakCommit;
         sapNs[index] = sap;
@@ -105,35 +123,22 @@ final class PhysicsEventTrace {
         brokenTriangles[index] = triangleBreaks;
         writeIndex = (writeIndex + 1) % capacity;
         if (size < capacity) size++;
-
-        if (postRemaining < 0) {
-            if (resolvedCount > 0) armPostWindow("soft-contact");
-            else if (beamBreaks > 0 || newBreakGroups > 0 || triangleBreaks > 0) armPostWindow("fracture");
-            else if (internalTriggerNs > 0L && internal >= internalTriggerNs) armPostWindow("internal-force-spike");
-        }
-
-        if (postRemaining >= 0 && --postRemaining <= 0) {
-            enabled = false;
-            return new CompletedCapture(this, triggerReason, writeIndex, size);
-        }
-        return null;
     }
 
-    private void armPostWindow(String reason) {
-        triggerReason = reason;
-        postRemaining = postTriggerSamples + 1;
-    }
-
-    private String formatCsv(String completedTriggerReason, int completedWriteIndex, int completedSize) {
+    private String formatCsv(String completedTriggerReason, int completedWriteIndex,
+                             int completedSize, long completedTotalSamples) {
         StringBuilder output = new StringBuilder(completedSize * 100);
-        output.append("[BeamCraft physics trace] trigger=").append(completedTriggerReason).append('\n');
-        output.append("sequence,tick_substep,internal_us,break_commit_us,sap_us,candidate_us,color_us,")
+        output.append("[BeamCraft physics trace] trigger=").append(completedTriggerReason)
+                .append(" retained_samples=").append(completedSize)
+                .append(" total_samples=").append(completedTotalSamples).append('\n');
+        output.append("sequence,tick_substep,total_us,internal_us,break_commit_us,sap_us,candidate_us,color_us,")
                 .append("soft_us,environment_us,contacts,cert_skip,aabb_passed,resolved,ccd_resolved,")
                 .append("broken_beams,new_break_groups,broken_triangles\n");
         int first = (completedWriteIndex - completedSize + capacity) % capacity;
         for (int entry = 0; entry < completedSize; entry++) {
             int index = (first + entry) % capacity;
             output.append(sequence[index]).append(',').append(substep[index]).append(',')
+                    .append(micros(totalNs[index])).append(',')
                     .append(micros(internalNs[index])).append(',')
                     .append(micros(breakCommitNs[index])).append(',')
                     .append(micros(sapNs[index])).append(',')
@@ -160,16 +165,23 @@ final class PhysicsEventTrace {
         private final String triggerReason;
         private final int writeIndex;
         private final int size;
+        private final long totalSamples;
 
-        private CompletedCapture(PhysicsEventTrace trace, String triggerReason, int writeIndex, int size) {
+        private CompletedCapture(PhysicsEventTrace trace, String triggerReason, int writeIndex,
+                                 int size, long totalSamples) {
             this.trace = trace;
             this.triggerReason = triggerReason;
             this.writeIndex = writeIndex;
             this.size = size;
+            this.totalSamples = totalSamples;
         }
 
         String formatCsv() {
-            return trace.formatCsv(triggerReason, writeIndex, size);
+            return trace.formatCsv(triggerReason, writeIndex, size, totalSamples);
+        }
+
+        int retainedSamples() {
+            return size;
         }
     }
 

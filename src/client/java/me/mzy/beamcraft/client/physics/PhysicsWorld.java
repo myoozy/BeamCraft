@@ -18,7 +18,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
 /**
@@ -50,8 +49,8 @@ public class PhysicsWorld {
     public final DynamicAxisSweep globalSap = new DynamicAxisSweep();
     public final SoftBodyCollisionManager collisionManager = new SoftBodyCollisionManager();
     private final PhysicsEventTrace eventTrace = new PhysicsEventTrace();
-    private final AtomicReference<PhysicsEventTrace.CompletedCapture> completedEventTrace = new AtomicReference<>();
     private Path eventTraceDirectory;
+    private volatile boolean eventTraceWriteInFlight;
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -64,14 +63,43 @@ public class PhysicsWorld {
         // Empty constructor, data will be injected by JBeam parser
     }
 
-    public void configureEventTrace(boolean enabled, double internalForceTriggerMs, Path outputDirectory) {
-        eventTrace.configure(enabled, internalForceTriggerMs);
+    public void configureEventTrace(boolean enabled, Path outputDirectory) {
+        eventTrace.configure(enabled);
         eventTraceDirectory = outputDirectory;
-        completedEventTrace.set(null);
         if (enabled) {
-            BeamCraft.LOGGER.info("BeamCraft substep event trace armed (internal-force trigger: {} ms)",
-                    internalForceTriggerMs);
+            BeamCraft.LOGGER.info("BeamCraft manual substep trace enabled; use its key binding to start and stop");
         }
+    }
+
+    public boolean eventTraceAvailable() {
+        return eventTrace.available();
+    }
+
+    public boolean eventTraceRecording() {
+        return eventTrace.enabled();
+    }
+
+    /** Called at the client tick barrier, while no physics job is in flight. */
+    public boolean toggleEventTrace() {
+        if (!eventTrace.available()) return false;
+        if (!eventTrace.enabled()) {
+            if (eventTraceWriteInFlight) {
+                BeamCraft.LOGGER.warn("BeamCraft physics trace is still being written; start ignored");
+                return false;
+            }
+            eventTrace.start();
+            BeamCraft.LOGGER.info("BeamCraft manual physics trace recording started");
+            return true;
+        }
+
+        PhysicsEventTrace.CompletedCapture capture = eventTrace.stop();
+        if (capture != null) {
+            BeamCraft.LOGGER.info("BeamCraft manual physics trace recording stopped ({} retained samples)",
+                    capture.retainedSamples());
+            eventTraceWriteInFlight = true;
+            persistEventTrace(capture);
+        }
+        return false;
     }
 
     public void addVehicle(SoftBodyVehicle vehicle) {
@@ -165,6 +193,7 @@ public class PhysicsWorld {
         int nextRenderSnapshotIndex = 1;
         for (int s = 0; s < subSteps; s++) {
             boolean traceEnabled = eventTrace.enabled();
+            long substepStartedNanos = traceEnabled ? System.nanoTime() : 0L;
             int brokenBeamsBefore = 0, breakGroupsBefore = 0, brokenTrianglesBefore = 0;
             if (traceEnabled) {
                 for (SoftBodyVehicle vehicle : activeVehicles) {
@@ -279,7 +308,8 @@ public class PhysicsWorld {
                     brokenTrianglesAfter += vehicle.triangles.brokenCount();
                     breakCommitNs += vehicle.physicsEventTraceBreakCommitNanos;
                 }
-                PhysicsEventTrace.CompletedCapture completedTrace = eventTrace.record(s,
+                eventTrace.record(s,
+                        System.nanoTime() - substepStartedNanos,
                         substepInternalNs, breakCommitNs, substepSapNs, substepCandidateNs,
                         substepColorNs, substepSoftNs, substepEnvironmentNs,
                         collisionManager.contactCount.get(), substepCertificateSkipped,
@@ -287,9 +317,6 @@ public class PhysicsWorld {
                         Math.max(0, brokenBeamsAfter - brokenBeamsBefore),
                         Math.max(0, breakGroupsAfter - breakGroupsBefore),
                         Math.max(0, brokenTrianglesAfter - brokenTrianglesBefore));
-                if (completedTrace != null) {
-                    completedEventTrace.set(completedTrace);
-                }
             }
 
             int completedSubSteps = s + 1;
@@ -365,14 +392,13 @@ public class PhysicsWorld {
         timings[8] = (System.nanoTime() - commitStartedNanos) / 1_000_000.0;
         timings[0] = (result.finishedNanos() - result.preparedStep().startedNanos()) / 1_000_000.0
                 + timings[8];
-        PhysicsEventTrace.CompletedCapture traceCapture = completedEventTrace.getAndSet(null);
-        if (traceCapture != null) persistEventTrace(traceCapture);
         return timings;
     }
 
     private void persistEventTrace(PhysicsEventTrace.CompletedCapture capture) {
         Path outputDirectory = eventTraceDirectory;
         if (outputDirectory == null) {
+            eventTraceWriteInFlight = false;
             BeamCraft.LOGGER.warn("BeamCraft physics trace completed without an output directory");
             return;
         }
@@ -386,6 +412,8 @@ public class PhysicsWorld {
                 BeamCraft.LOGGER.info("BeamCraft physics trace written to {}", output.toAbsolutePath());
             } catch (IOException exception) {
                 BeamCraft.LOGGER.error("Failed to write BeamCraft physics trace", exception);
+            } finally {
+                eventTraceWriteInFlight = false;
             }
         });
     }

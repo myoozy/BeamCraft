@@ -72,8 +72,7 @@ file has four sections:
     "strategy": "later-root"
   },
   "diagnostics": {
-    "physicsEventTrace": false,
-    "internalForceTriggerMs": 1.0
+    "physicsEventTrace": false
   },
   "input": {
     "throttle": {
@@ -87,13 +86,13 @@ file has four sections:
 
 ### `diagnostics` — impact event tracing
 
-Set `physicsEventTrace` to `true` and restart the client to arm one substep-level
-capture. The first soft-body contact, fracture, or internal-force substep above
-`internalForceTriggerMs` retains its surrounding history and writes it in the
+Set `physicsEventTrace` to `true` and restart the client to enable manual
+substep-level capture. Press F8 before the test to start recording, then press F8
+again after the event to stop. F8 is exposed in Minecraft's Controls menu and can
+be rebound. Up to the newest ten seconds are retained and written in the
 background to `beamcraft-traces/physics-trace-<timestamp>.csv`. The console and
-`latest.log` receive only one short line containing that path, and no HUD panel is
-added. Set the threshold to `0` to trigger only on contact or fracture. The trace
-automatically disarms after writing one capture.
+`latest.log` receive only short start/stop/path messages, and no HUD panel is
+added.
 
 ### `assetRoots` — where vehicles are loaded from
 

@@ -35,10 +35,8 @@ public final class BeamCraftConfig {
     }
 
     public static final class Diagnostics {
-        /** Capture one impact-centered substep trace and print it to the console/latest.log. */
+        /** Enable the manual F8 start/stop substep trace recorder. */
         public boolean physicsEventTrace = false;
-        /** Also trigger when one internal-force substep exceeds this wall time. */
-        public double internalForceTriggerMs = 1.0;
     }
 
     /**
