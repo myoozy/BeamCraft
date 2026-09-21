@@ -88,6 +88,65 @@ class CollisionChunkIndexTest {
         assertEquals(1, manager.contactCount.get());
     }
 
+    @Test
+    void chunkSapSkipsNodeChunksThatCannotOverlapOnItsActiveAxis() {
+        SoftBodyVehicle triangleVehicle = triangleVehicleAtOrigin();
+        SoftBodyVehicle nodeVehicle = new SoftBodyVehicle(null);
+        for (int node = 0; node < 64; node++) {
+            float x = node < 32 ? -100.0f - node : 100.0f + node;
+            setNode(nodeVehicle, node, x, 0.25f, 0.25f, true);
+        }
+
+        refit(triangleVehicle, nodeVehicle);
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        CollisionPipeline pipeline = new CollisionPipeline(new VoxelSnapshot(), new DynamicAxisSweep(), manager);
+
+        pipeline.generateChunkCollisionCandidates(triangleVehicle, List.of(nodeVehicle));
+
+        assertTrue(nodeVehicle.collisionChunks.nodeChunkCount() > 1);
+        assertEquals(0, triangleVehicle.collisionChunkPairTests,
+                "the chunk SAP should reject separated chunks before their 3D AABB tests");
+        assertEquals(0, manager.contactCount.get());
+    }
+
+    @Test
+    void localNodeSapScansOnlyTheOneDimensionalCandidates() {
+        SoftBodyVehicle triangleVehicle = triangleVehicleAtOrigin();
+        SoftBodyVehicle nodeVehicle = new SoftBodyVehicle(null);
+        for (int node = 0; node < 16; node++) {
+            float x = node < 7 ? -100.0f - node : node == 7 ? 0.0f : 100.0f + node;
+            setNode(nodeVehicle, node, x, 0.25f, 0.25f, true);
+        }
+
+        refit(triangleVehicle, nodeVehicle);
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        CollisionPipeline pipeline = new CollisionPipeline(new VoxelSnapshot(), new DynamicAxisSweep(), manager);
+
+        pipeline.generateChunkCollisionCandidates(triangleVehicle, List.of(nodeVehicle));
+
+        assertEquals(1, nodeVehicle.collisionChunks.nodeChunkCount());
+        assertEquals(1, triangleVehicle.collisionFinePairTests,
+                "the local SAP should avoid 3D tests for the other fifteen nodes");
+        assertEquals(1, manager.contactCount.get());
+        assertEquals(7, manager.contactNodeId[0]);
+    }
+
+    private static SoftBodyVehicle triangleVehicleAtOrigin() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        setNode(vehicle, 0, 0.0f, 0.0f, 0.0f, false);
+        setNode(vehicle, 1, 0.0f, 1.0f, 0.0f, false);
+        setNode(vehicle, 2, 0.0f, 0.0f, 1.0f, false);
+        addTriangle(vehicle, 0, 0, 1, 2);
+        return vehicle;
+    }
+
+    private static void refit(SoftBodyVehicle... vehicles) {
+        for (SoftBodyVehicle vehicle : vehicles) {
+            vehicle.collisionChunks.rebuild();
+            vehicle.collisionChunks.refit(0.0);
+        }
+    }
+
     private static void setNode(SoftBodyVehicle vehicle, int node, float x, float y, float z, boolean collision) {
         vehicle.nodes.count = Math.max(vehicle.nodes.count, node + 1);
         vehicle.nodes.baseX[node] = vehicle.nodes.posX[node] = vehicle.nodes.prevPosX[node] = x;

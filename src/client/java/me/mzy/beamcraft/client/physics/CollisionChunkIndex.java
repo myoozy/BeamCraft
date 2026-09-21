@@ -41,6 +41,16 @@ final class CollisionChunkIndex {
     private double[] meshletMinX = new double[0], meshletMinY = new double[0], meshletMinZ = new double[0];
     private double[] meshletMaxX = new double[0], meshletMaxY = new double[0], meshletMaxZ = new double[0];
 
+    // Rebuilt with the swept bounds. The first SAP prunes node chunks for a
+    // meshlet; the second independently sorts the at-most-16 nodes in each
+    // surviving chunk for individual triangle queries.
+    private long[] sortedNodeChunkKeys = new long[0];
+    private double[] sortedNodeChunkPrefixMax = new double[0];
+    private byte nodeChunkSweepAxis;
+    private long[] sortedNodeKeys = new long[0];
+    private double[] sortedNodePrefixMax = new double[0];
+    private byte[] nodeChunkNodeSweepAxis = new byte[0];
+
     CollisionChunkIndex(SoftBodyVehicle vehicle) {
         this.vehicle = vehicle;
     }
@@ -78,6 +88,11 @@ final class CollisionChunkIndex {
         int nodeChunkCount = nodeLeaves.size();
         nodeChunkMinX = new double[nodeChunkCount]; nodeChunkMinY = new double[nodeChunkCount]; nodeChunkMinZ = new double[nodeChunkCount];
         nodeChunkMaxX = new double[nodeChunkCount]; nodeChunkMaxY = new double[nodeChunkCount]; nodeChunkMaxZ = new double[nodeChunkCount];
+        sortedNodeChunkKeys = new long[nodeChunkCount];
+        sortedNodeChunkPrefixMax = new double[nodeChunkCount];
+        nodeChunkNodeSweepAxis = new byte[nodeChunkCount];
+        sortedNodeKeys = new long[nodeMembers.length];
+        sortedNodePrefixMax = new double[nodeMembers.length];
         int meshletCount = meshlets.size();
         meshletMinX = new double[meshletCount]; meshletMinY = new double[meshletCount]; meshletMinZ = new double[meshletCount];
         meshletMaxX = new double[meshletCount]; meshletMaxY = new double[meshletCount]; meshletMaxZ = new double[meshletCount];
@@ -115,6 +130,8 @@ final class CollisionChunkIndex {
                         nodeChunkMaxX, nodeChunkMaxY, nodeChunkMaxZ, chunk, node);
             }
         }
+        rebuildNodeChunkSap();
+        rebuildNodeSaps();
 
         TriangleContainer triangles = vehicle.triangles;
         double margin = CollisionPipeline.SOFT_BROADPHASE_MARGIN;
@@ -150,9 +167,7 @@ final class CollisionChunkIndex {
     int nodeChunkCount() { return nodeChunkStart.length - 1; }
     int triangleMeshletCount() { return triangleMeshletStart.length - 1; }
     int oversizedTriangleCount() { return oversizedTriangleCount; }
-    int nodeChunkStart(int chunk) { return nodeChunkStart[chunk]; }
     int nodeChunkEnd(int chunk) { return nodeChunkStart[chunk + 1]; }
-    int nodeAt(int member) { return nodeMembers[member]; }
     boolean nodeChunkHasSelfCollision(int chunk) { return nodeChunkHasSelfCollision[chunk]; }
     int triangleMeshletStart(int meshlet) { return triangleMeshletStart[meshlet]; }
     int triangleMeshletEnd(int meshlet) { return triangleMeshletStart[meshlet + 1]; }
@@ -163,6 +178,46 @@ final class CollisionChunkIndex {
                 meshletMaxX[meshlet], meshletMaxY[meshlet], meshletMaxZ[meshlet],
                 nodes.nodeChunkMinX[nodeChunk], nodes.nodeChunkMinY[nodeChunk], nodes.nodeChunkMinZ[nodeChunk],
                 nodes.nodeChunkMaxX[nodeChunk], nodes.nodeChunkMaxY[nodeChunk], nodes.nodeChunkMaxZ[nodeChunk]);
+    }
+
+    boolean meshletActive(int meshlet) {
+        return meshletMinX[meshlet] != Double.POSITIVE_INFINITY;
+    }
+
+    /** First sorted node-chunk position whose prefix maximum can reach the meshlet. */
+    int firstNodeChunkCandidate(int meshlet, CollisionChunkIndex nodes) {
+        double targetMin = axisValue(meshletMinX[meshlet], meshletMinY[meshlet], meshletMinZ[meshlet],
+                nodes.nodeChunkSweepAxis);
+        return firstPrefixCandidate(nodes.sortedNodeChunkPrefixMax, 0, nodes.nodeChunkCount(), targetMin);
+    }
+
+    int sortedNodeChunkAt(CollisionChunkIndex nodes, int sortedPosition) {
+        return (int) nodes.sortedNodeChunkKeys[sortedPosition];
+    }
+
+    boolean nodeChunkStartsAfterMeshlet(int meshlet, CollisionChunkIndex nodes, int sortedPosition) {
+        double targetMax = axisValue(meshletMaxX[meshlet], meshletMaxY[meshlet], meshletMaxZ[meshlet],
+                nodes.nodeChunkSweepAxis);
+        return nodes.sortedNodeChunkKeys[sortedPosition] > sortableLimit(targetMax);
+    }
+
+    /** First sorted node position whose prefix maximum can reach the triangle. */
+    int firstNodeCandidate(int triangle, int nodeChunk, CollisionChunkIndex nodes) {
+        int axis = nodes.nodeChunkNodeSweepAxis[nodeChunk];
+        double targetMin = axisValue(triangleMinX[triangle], triangleMinY[triangle], triangleMinZ[triangle], axis);
+        return firstPrefixCandidate(nodes.sortedNodePrefixMax,
+                nodes.nodeChunkStart[nodeChunk], nodes.nodeChunkStart[nodeChunk + 1], targetMin);
+    }
+
+    int sortedNodeAt(CollisionChunkIndex nodes, int sortedPosition) {
+        return (int) nodes.sortedNodeKeys[sortedPosition];
+    }
+
+    boolean nodeStartsAfterTriangle(int triangle, int nodeChunk,
+                                    CollisionChunkIndex nodes, int sortedPosition) {
+        int axis = nodes.nodeChunkNodeSweepAxis[nodeChunk];
+        double targetMax = axisValue(triangleMaxX[triangle], triangleMaxY[triangle], triangleMaxZ[triangle], axis);
+        return nodes.sortedNodeKeys[sortedPosition] > sortableLimit(targetMax);
     }
 
     boolean triangleOverlapsNode(int triangle, CollisionChunkIndex nodes, int node) {
@@ -203,6 +258,54 @@ final class CollisionChunkIndex {
         int middle = (start + end) >>> 1;
         splitNodes(indices, start, middle, leaves);
         splitNodes(indices, middle, end, leaves);
+    }
+
+    private void rebuildNodeChunkSap() {
+        int count = nodeChunkCount();
+        if (count == 0) return;
+        double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+        for (int chunk = 0; chunk < count; chunk++) {
+            minX = Math.min(minX, nodeChunkMinX[chunk]);
+            minY = Math.min(minY, nodeChunkMinY[chunk]);
+            minZ = Math.min(minZ, nodeChunkMinZ[chunk]);
+            maxX = Math.max(maxX, nodeChunkMaxX[chunk]);
+            maxY = Math.max(maxY, nodeChunkMaxY[chunk]);
+            maxZ = Math.max(maxZ, nodeChunkMaxZ[chunk]);
+        }
+        nodeChunkSweepAxis = (byte) longestAxis(maxX - minX, maxY - minY, maxZ - minZ);
+        for (int chunk = 0; chunk < count; chunk++) {
+            sortedNodeChunkKeys[chunk] = sortKey(axisChunkMin(chunk, nodeChunkSweepAxis), chunk);
+        }
+        Arrays.sort(sortedNodeChunkKeys);
+        double prefixMax = Double.NEGATIVE_INFINITY;
+        for (int sorted = 0; sorted < count; sorted++) {
+            int chunk = (int) sortedNodeChunkKeys[sorted];
+            prefixMax = Math.max(prefixMax, axisChunkMax(chunk, nodeChunkSweepAxis));
+            sortedNodeChunkPrefixMax[sorted] = prefixMax;
+        }
+    }
+
+    private void rebuildNodeSaps() {
+        for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+            int axis = longestAxis(
+                    nodeChunkMaxX[chunk] - nodeChunkMinX[chunk],
+                    nodeChunkMaxY[chunk] - nodeChunkMinY[chunk],
+                    nodeChunkMaxZ[chunk] - nodeChunkMinZ[chunk]);
+            nodeChunkNodeSweepAxis[chunk] = (byte) axis;
+            int start = nodeChunkStart[chunk], end = nodeChunkStart[chunk + 1];
+            for (int member = start; member < end; member++) {
+                int node = nodeMembers[member];
+                sortedNodeKeys[member] = sortKey(axisNodeMin(node, axis), node);
+            }
+            Arrays.sort(sortedNodeKeys, start, end);
+            double prefixMax = Double.NEGATIVE_INFINITY;
+            for (int sorted = start; sorted < end; sorted++) {
+                int node = (int) sortedNodeKeys[sorted];
+                prefixMax = Math.max(prefixMax, axisNodeMax(node, axis));
+                sortedNodePrefixMax[sorted] = prefixMax;
+            }
+        }
     }
 
     private void splitTriangles(Integer[] indices, int start, int end, List<int[]> leaves) {
@@ -280,8 +383,12 @@ final class CollisionChunkIndex {
     }
 
     private static int longestAxis(double[] range) {
-        if (range[0] >= range[1] && range[0] >= range[2]) return 0;
-        return range[1] >= range[2] ? 1 : 2;
+        return longestAxis(range[0], range[1], range[2]);
+    }
+
+    private static int longestAxis(double x, double y, double z) {
+        if (x >= y && x >= z) return 0;
+        return y >= z ? 1 : 2;
     }
 
     private double nodeCoordinate(int node, int axis) {
@@ -362,5 +469,51 @@ final class CollisionChunkIndex {
         return aMaxX >= bMinX && aMinX <= bMaxX
                 && aMaxY >= bMinY && aMinY <= bMaxY
                 && aMaxZ >= bMinZ && aMinZ <= bMaxZ;
+    }
+
+    private double axisChunkMin(int chunk, int axis) {
+        return axisValue(nodeChunkMinX[chunk], nodeChunkMinY[chunk], nodeChunkMinZ[chunk], axis);
+    }
+
+    private double axisChunkMax(int chunk, int axis) {
+        return axisValue(nodeChunkMaxX[chunk], nodeChunkMaxY[chunk], nodeChunkMaxZ[chunk], axis);
+    }
+
+    private double axisNodeMin(int node, int axis) {
+        return axisValue(nodeMinX[node], nodeMinY[node], nodeMinZ[node], axis);
+    }
+
+    private double axisNodeMax(int node, int axis) {
+        return axisValue(nodeMaxX[node], nodeMaxY[node], nodeMaxZ[node], axis);
+    }
+
+    private static double axisValue(double x, double y, double z, int axis) {
+        return axis == 0 ? x : axis == 1 ? y : z;
+    }
+
+    private static int firstPrefixCandidate(double[] prefixMaxima, int start, int end, double targetMin) {
+        int left = start, right = end - 1, result = end;
+        while (left <= right) {
+            int middle = (left + right) >>> 1;
+            if (prefixMaxima[middle] >= targetMin) {
+                result = middle;
+                right = middle - 1;
+            } else {
+                left = middle + 1;
+            }
+        }
+        return result;
+    }
+
+    private static long sortKey(double value, int original) {
+        long sortable = Double.doubleToRawLongBits(value);
+        if (sortable < 0) sortable = Long.MIN_VALUE - sortable;
+        return (sortable & 0xFFFFFFFF00000000L) | (original & 0xFFFFFFFFL);
+    }
+
+    private static long sortableLimit(double value) {
+        long sortable = Double.doubleToRawLongBits(value);
+        if (sortable < 0) sortable = Long.MIN_VALUE - sortable;
+        return (sortable & 0xFFFFFFFF00000000L) | 0xFFFFFFFFL;
     }
 }

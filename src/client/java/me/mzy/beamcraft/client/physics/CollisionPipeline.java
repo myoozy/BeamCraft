@@ -462,9 +462,10 @@ public final class CollisionPipeline {
     }
 
     /**
-     * Generates candidates by directly enumerating only overlapping node-chunk
-     * and triangle-meshlet pairs. Chunk membership is unique, so the same
-     * node-triangle pair cannot be emitted by two different chunk pairs.
+     * Generates candidates through a node-chunk SAP followed by a small node
+     * SAP inside each overlapping triangle-meshlet/node-chunk pair. Chunk
+     * membership is unique, so the same node-triangle pair cannot be emitted
+     * by two different chunk pairs.
      */
     public void generateChunkCollisionCandidates(SoftBodyVehicle triangleVehicle,
                                                  List<SoftBodyVehicle> activeVehicles) {
@@ -475,10 +476,15 @@ public final class CollisionPipeline {
         long finePairTests = 0L;
 
         for (int meshlet = 0; meshlet < triangleChunks.triangleMeshletCount(); meshlet++) {
+            if (!triangleChunks.meshletActive(meshlet)) continue;
             for (SoftBodyVehicle nodeVehicle : activeVehicles) {
                 CollisionChunkIndex nodeChunks = nodeVehicle.collisionChunks;
                 boolean self = nodeVehicle == triangleVehicle;
-                for (int nodeChunk = 0; nodeChunk < nodeChunks.nodeChunkCount(); nodeChunk++) {
+                int firstNodeChunk = triangleChunks.firstNodeChunkCandidate(meshlet, nodeChunks);
+                for (int sortedChunk = firstNodeChunk;
+                     sortedChunk < nodeChunks.nodeChunkCount(); sortedChunk++) {
+                    if (triangleChunks.nodeChunkStartsAfterMeshlet(meshlet, nodeChunks, sortedChunk)) break;
+                    int nodeChunk = triangleChunks.sortedNodeChunkAt(nodeChunks, sortedChunk);
                     if (self && !nodeChunks.nodeChunkHasSelfCollision(nodeChunk)) continue;
                     chunkPairTests++;
                     if (!triangleChunks.chunksOverlap(meshlet, nodeChunks, nodeChunk)) continue;
@@ -493,9 +499,12 @@ public final class CollisionPipeline {
                         int nC = triangles.node3[triangle];
                         int trianglePart = triangles.partId[triangle];
 
-                        for (int nodeMember = nodeChunks.nodeChunkStart(nodeChunk);
-                             nodeMember < nodeChunks.nodeChunkEnd(nodeChunk); nodeMember++) {
-                            int node = nodeChunks.nodeAt(nodeMember);
+                        int firstNode = triangleChunks.firstNodeCandidate(triangle, nodeChunk, nodeChunks);
+                        for (int sortedNode = firstNode;
+                             sortedNode < nodeChunks.nodeChunkEnd(nodeChunk); sortedNode++) {
+                            if (triangleChunks.nodeStartsAfterTriangle(
+                                    triangle, nodeChunk, nodeChunks, sortedNode)) break;
+                            int node = triangleChunks.sortedNodeAt(nodeChunks, sortedNode);
                             if (self && !nodeVehicle.nodes.selfCollision[node]) continue;
                             finePairTests++;
                             if (!triangleChunks.triangleOverlapsNode(triangle, nodeChunks, node)) continue;
