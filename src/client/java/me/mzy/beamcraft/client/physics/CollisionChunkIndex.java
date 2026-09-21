@@ -49,6 +49,17 @@ final class CollisionChunkIndex {
     private byte nodeChunkSweepAxis;
     private long[] sortedNodeKeys = new long[0];
     private double[] sortedNodePrefixMax = new double[0];
+    private boolean nodeSapsInitialized;
+
+    long refitNodeBoundsNanos;
+    long refitNodeChunkBoundsNanos;
+    long refitChunkSapNanos;
+    long refitLocalSapsNanos;
+    long refitLocalKeyFillNanos;
+    long refitLocalSortNanos;
+    long refitLocalPrefixNanos;
+    long refitTriangleBoundsNanos;
+    long refitMeshletBoundsNanos;
 
     CollisionChunkIndex(SoftBodyVehicle vehicle) {
         this.vehicle = vehicle;
@@ -91,6 +102,7 @@ final class CollisionChunkIndex {
         sortedNodeChunkPrefixMax = new double[nodeChunkCount];
         sortedNodeKeys = new long[nodeMembers.length * 3];
         sortedNodePrefixMax = new double[nodeMembers.length * 3];
+        nodeSapsInitialized = false;
         int meshletCount = meshlets.size();
         meshletMinX = new double[meshletCount]; meshletMinY = new double[meshletCount]; meshletMinZ = new double[meshletCount];
         meshletMaxX = new double[meshletCount]; meshletMaxY = new double[meshletCount]; meshletMaxZ = new double[meshletCount];
@@ -99,6 +111,7 @@ final class CollisionChunkIndex {
     void refit(double dtPredict) {
         if (builtNodeCount != vehicle.nodes.count || builtTriangleCount != vehicle.triangles.count) rebuild();
 
+        long stageStarted = System.nanoTime();
         NodeContainer nodes = vehicle.nodes;
         double entityX = vehicle.entityX, entityY = vehicle.entityY, entityZ = vehicle.entityZ;
         for (int node = 0; node < nodes.count; node++) {
@@ -118,6 +131,9 @@ final class CollisionChunkIndex {
             nodeMaxY[node] = Math.max(previousY, Math.max(y, futureY));
             nodeMaxZ[node] = Math.max(previousZ, Math.max(z, futureZ));
         }
+        long stageFinished = System.nanoTime();
+        refitNodeBoundsNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
 
         for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
             resetBounds(nodeChunkMinX, nodeChunkMinY, nodeChunkMinZ,
@@ -128,8 +144,17 @@ final class CollisionChunkIndex {
                         nodeChunkMaxX, nodeChunkMaxY, nodeChunkMaxZ, chunk, node);
             }
         }
+        stageFinished = System.nanoTime();
+        refitNodeChunkBoundsNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
         rebuildNodeChunkSap();
+        stageFinished = System.nanoTime();
+        refitChunkSapNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
         rebuildNodeSaps();
+        stageFinished = System.nanoTime();
+        refitLocalSapsNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
 
         TriangleContainer triangles = vehicle.triangles;
         double margin = CollisionPipeline.SOFT_BROADPHASE_MARGIN;
@@ -147,6 +172,9 @@ final class CollisionChunkIndex {
             triangleMaxY[triangle] = Math.max(nodeMaxY[a], Math.max(nodeMaxY[b], nodeMaxY[c])) + margin;
             triangleMaxZ[triangle] = Math.max(nodeMaxZ[a], Math.max(nodeMaxZ[b], nodeMaxZ[c])) + margin;
         }
+        stageFinished = System.nanoTime();
+        refitTriangleBoundsNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
 
         for (int meshlet = 0; meshlet < triangleMeshletCount(); meshlet++) {
             resetBounds(meshletMinX, meshletMinY, meshletMinZ,
@@ -160,6 +188,7 @@ final class CollisionChunkIndex {
                         triangleMaxX[triangle], triangleMaxY[triangle], triangleMaxZ[triangle]);
             }
         }
+        refitMeshletBoundsNanos = System.nanoTime() - stageStarted;
     }
 
     int nodeChunkCount() { return nodeChunkStart.length - 1; }
@@ -307,16 +336,41 @@ final class CollisionChunkIndex {
     }
 
     private void rebuildNodeSaps() {
+        long stageStarted = System.nanoTime();
         for (int axis = 0; axis < 3; axis++) {
             int axisOffset = axisOffset(axis);
             for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
                 int start = axisOffset + nodeChunkStart[chunk];
                 int end = axisOffset + nodeChunkStart[chunk + 1];
-                for (int member = nodeChunkStart[chunk]; member < nodeChunkStart[chunk + 1]; member++) {
-                    int node = nodeMembers[member];
-                    sortedNodeKeys[axisOffset + member] = sortKey(axisNodeMin(node, axis), node);
+                for (int sorted = start; sorted < end; sorted++) {
+                    int node = nodeSapsInitialized
+                            ? (int) sortedNodeKeys[sorted]
+                            : nodeMembers[sorted - axisOffset];
+                    sortedNodeKeys[sorted] = sortKey(axisNodeMin(node, axis), node);
                 }
+            }
+        }
+        long stageFinished = System.nanoTime();
+        refitLocalKeyFillNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
+
+        for (int axis = 0; axis < 3; axis++) {
+            int axisOffset = axisOffset(axis);
+            for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+                int start = axisOffset + nodeChunkStart[chunk];
+                int end = axisOffset + nodeChunkStart[chunk + 1];
                 Arrays.sort(sortedNodeKeys, start, end);
+            }
+        }
+        stageFinished = System.nanoTime();
+        refitLocalSortNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
+
+        for (int axis = 0; axis < 3; axis++) {
+            int axisOffset = axisOffset(axis);
+            for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+                int start = axisOffset + nodeChunkStart[chunk];
+                int end = axisOffset + nodeChunkStart[chunk + 1];
                 double prefixMax = Double.NEGATIVE_INFINITY;
                 for (int sorted = start; sorted < end; sorted++) {
                     int node = (int) sortedNodeKeys[sorted];
@@ -325,6 +379,8 @@ final class CollisionChunkIndex {
                 }
             }
         }
+        refitLocalPrefixNanos = System.nanoTime() - stageStarted;
+        nodeSapsInitialized = true;
     }
 
     private void splitTriangles(Integer[] indices, int start, int end, List<int[]> leaves) {

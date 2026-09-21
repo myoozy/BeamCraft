@@ -54,9 +54,11 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[42];
+	public static double[] lastPhysicsMsDetail = new double[51];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
-	private static final int[] ROLLING_TIMING_INDICES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12};
+	private static final int[] ROLLING_TIMING_INDICES = {
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50
+	};
 	private static final double[][] ROLLING_TIMING_SAMPLES =
 			new double[ROLLING_TIMING_INDICES.length][PHYSICS_TIMING_WINDOW];
 	private static final double[] ROLLING_TIMING_SUMS = new double[ROLLING_TIMING_INDICES.length];
@@ -240,6 +242,9 @@ public class BeamCraftClient implements ClientModInitializer {
 					timingSummary("mcWorldScan", 1),
 					timingSummary("internalForce", 2),
 					timingSummary("chunk refit", 3),
+					timingBreakdown("refit node/chunk/coarseSAP", 42, 43, 44),
+					timingBreakdown("refit localSAP/triangle/meshlet", 45, 46, 47),
+					timingBreakdown("localSAP key/sort/prefix", 48, 49, 50),
 					timingSummary("candidate+color", 4),
 					timingSummary("candidate wall", 9),
 					timingSummary("color", 12),
@@ -502,6 +507,13 @@ public class BeamCraftClient implements ClientModInitializer {
 		return String.format("%s current/avg/min/max: %.2f / %.2f / %.2f / %.2f ms", label,
 				lastPhysicsMsDetail[timingIndex], rollingAverage(metric),
 				ROLLING_TIMING_MINS[metric], ROLLING_TIMING_MAXES[metric]);
+	}
+
+	private static String timingBreakdown(String label, int first, int second, int third) {
+		return String.format("%s current/avg: %.2f/%.2f / %.2f/%.2f / %.2f/%.2f ms", label,
+				lastPhysicsMsDetail[first], rollingAverage(rollingMetricForTimingIndex(first)),
+				lastPhysicsMsDetail[second], rollingAverage(rollingMetricForTimingIndex(second)),
+				lastPhysicsMsDetail[third], rollingAverage(rollingMetricForTimingIndex(third)));
 	}
 
 	private static int rollingMetricForTimingIndex(int timingIndex) {

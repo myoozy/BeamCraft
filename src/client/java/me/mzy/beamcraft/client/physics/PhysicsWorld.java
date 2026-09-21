@@ -186,6 +186,9 @@ public class PhysicsWorld {
         int broadphaseRate = 10;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
         double candidateGenerationMs = 0.0, colorMs = 0.0;
+        double refitNodeBoundsMs = 0.0, refitNodeChunkBoundsMs = 0.0, refitChunkSapMs = 0.0;
+        double refitLocalSapsMs = 0.0, refitTriangleBoundsMs = 0.0, refitMeshletBoundsMs = 0.0;
+        double refitLocalKeyFillMs = 0.0, refitLocalSortMs = 0.0, refitLocalPrefixMs = 0.0;
         long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L, narrowCertificateSkipped = 0L;
         int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
         int lastChunkPairTests = 0, lastChunkPairOverlaps = 0, lastChunkPairProductive = 0;
@@ -236,6 +239,15 @@ public class PhysicsWorld {
                     vehicle.globalNodeOffset = activeOffset;
                     activeOffset += vehicle.nodes.count;
                     vehicle.collisionChunks.refit(subDt * broadphaseRate);
+                    refitNodeBoundsMs += vehicle.collisionChunks.refitNodeBoundsNanos / 1_000_000.0;
+                    refitNodeChunkBoundsMs += vehicle.collisionChunks.refitNodeChunkBoundsNanos / 1_000_000.0;
+                    refitChunkSapMs += vehicle.collisionChunks.refitChunkSapNanos / 1_000_000.0;
+                    refitLocalSapsMs += vehicle.collisionChunks.refitLocalSapsNanos / 1_000_000.0;
+                    refitLocalKeyFillMs += vehicle.collisionChunks.refitLocalKeyFillNanos / 1_000_000.0;
+                    refitLocalSortMs += vehicle.collisionChunks.refitLocalSortNanos / 1_000_000.0;
+                    refitLocalPrefixMs += vehicle.collisionChunks.refitLocalPrefixNanos / 1_000_000.0;
+                    refitTriangleBoundsMs += vehicle.collisionChunks.refitTriangleBoundsNanos / 1_000_000.0;
+                    refitMeshletBoundsMs += vehicle.collisionChunks.refitMeshletBoundsNanos / 1_000_000.0;
                 }
 
                 long tii2 = System.nanoTime();
@@ -346,7 +358,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[42];
+        double[] timings = new double[51];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -367,6 +379,15 @@ public class PhysicsWorld {
         timings[39] = lastChunkPairOverlaps;
         timings[40] = lastFinePairTests;
         timings[41] = lastChunkPairProductive;
+        timings[42] = refitNodeBoundsMs;
+        timings[43] = refitNodeChunkBoundsMs;
+        timings[44] = refitChunkSapMs;
+        timings[45] = refitLocalSapsMs;
+        timings[46] = refitTriangleBoundsMs;
+        timings[47] = refitMeshletBoundsMs;
+        timings[48] = refitLocalKeyFillMs;
+        timings[49] = refitLocalSortMs;
+        timings[50] = refitLocalPrefixMs;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {
