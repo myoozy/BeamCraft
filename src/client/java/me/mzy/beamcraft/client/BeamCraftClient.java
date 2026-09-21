@@ -54,7 +54,7 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[38];
+	public static double[] lastPhysicsMsDetail = new double[41];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
 	private static final int[] ROLLING_TIMING_INDICES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12};
 	private static final double[][] ROLLING_TIMING_SAMPLES =
@@ -239,12 +239,19 @@ public class BeamCraftClient implements ClientModInitializer {
 					String.format("tickBarrierWait: %.2f ms", lastPhysicsWaitMs),
 					timingSummary("mcWorldScan", 1),
 					timingSummary("internalForce", 2),
-					timingSummary("globalSAP", 3),
+					timingSummary("chunk refit", 3),
 					timingSummary("candidate+color", 4),
 					timingSummary("candidate wall", 9),
 					timingSummary("color", 12),
-					String.format("last broad SAP hits/stored/dropped: %.0f / %.0f / %.0f",
+					String.format("last fine AABB hits/stored/dropped: %.0f / %.0f / %.0f",
 							lastPhysicsMsDetail[13], lastPhysicsMsDetail[14], lastPhysicsMsDetail[15]),
+					String.format("last chunk pairs overlap/tested: %.0f / %.0f",
+							lastPhysicsMsDetail[39], lastPhysicsMsDetail[38]),
+					String.format("last fine AABB passed/tested: %.0f / %.0f (%.2f%%)",
+							lastPhysicsMsDetail[13], lastPhysicsMsDetail[40],
+							lastPhysicsMsDetail[40] > 0.0
+									? lastPhysicsMsDetail[13] * 100.0 / lastPhysicsMsDetail[40]
+									: 0.0),
 					timingSummary("softCollision", 5),
 					String.format("narrow checks/cert-skip/AABB/resolved: %.0f / %.0f / %.0f (%.1f%%) / %.0f (%.2f%%)",
 							narrowChecks, narrowCertificateSkipped, narrowAabbPassed, aabbPassPercent,

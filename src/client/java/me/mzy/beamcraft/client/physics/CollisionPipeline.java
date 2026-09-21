@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.physics;
 
+import java.util.List;
 import java.util.stream.IntStream;
 
 /**
@@ -9,7 +10,7 @@ import java.util.stream.IntStream;
  * world scheduler and the per-vehicle class:
  * <ul>
  *     <li>soft-body contact candidate generation (triangle vs node, fed by the
- *     shared SAP broad-phase),</li>
+ *     active chunk broad-phase or the retained SAP implementation),</li>
  *     <li>the batched resolution of cached soft-body contacts (former
  *     {@code PhysicsWorld.solveCachedContacts}/{@code resolveSingleContact}), and</li>
  *     <li>Minecraft environment collision resolution from a {@link VoxelSnapshot}.</li>
@@ -458,6 +459,72 @@ public final class CollisionPipeline {
         collisionManager.invalidateSeparationCertificate(contactId);
         if (sweptHitTime >= 0.0f) collisionManager.sweptResolvedCount.incrementAndGet();
         return 2;
+    }
+
+    /**
+     * Generates candidates by directly enumerating only overlapping node-chunk
+     * and triangle-meshlet pairs. Chunk membership is unique, so the same
+     * node-triangle pair cannot be emitted by two different chunk pairs.
+     */
+    public void generateChunkCollisionCandidates(SoftBodyVehicle triangleVehicle,
+                                                 List<SoftBodyVehicle> activeVehicles) {
+        CollisionChunkIndex triangleChunks = triangleVehicle.collisionChunks;
+        TriangleContainer triangles = triangleVehicle.triangles;
+        int rawHits = 0, stored = 0, dropped = 0;
+        int chunkPairTests = 0, chunkPairOverlaps = 0;
+        long finePairTests = 0L;
+
+        for (int meshlet = 0; meshlet < triangleChunks.triangleMeshletCount(); meshlet++) {
+            for (SoftBodyVehicle nodeVehicle : activeVehicles) {
+                CollisionChunkIndex nodeChunks = nodeVehicle.collisionChunks;
+                boolean self = nodeVehicle == triangleVehicle;
+                for (int nodeChunk = 0; nodeChunk < nodeChunks.nodeChunkCount(); nodeChunk++) {
+                    if (self && !nodeChunks.nodeChunkHasSelfCollision(nodeChunk)) continue;
+                    chunkPairTests++;
+                    if (!triangleChunks.chunksOverlap(meshlet, nodeChunks, nodeChunk)) continue;
+                    chunkPairOverlaps++;
+
+                    for (int triangleMember = triangleChunks.triangleMeshletStart(meshlet);
+                         triangleMember < triangleChunks.triangleMeshletEnd(meshlet); triangleMember++) {
+                        int triangle = triangleChunks.triangleAt(triangleMember);
+                        if (triangles.broken[triangle]) continue;
+                        int nA = triangles.node1[triangle];
+                        int nB = triangles.node2[triangle];
+                        int nC = triangles.node3[triangle];
+                        int trianglePart = triangles.partId[triangle];
+
+                        for (int nodeMember = nodeChunks.nodeChunkStart(nodeChunk);
+                             nodeMember < nodeChunks.nodeChunkEnd(nodeChunk); nodeMember++) {
+                            int node = nodeChunks.nodeAt(nodeMember);
+                            if (self && !nodeVehicle.nodes.selfCollision[node]) continue;
+                            finePairTests++;
+                            if (!triangleChunks.triangleOverlapsNode(triangle, nodeChunks, node)) continue;
+                            rawHits++;
+
+                            if (self) {
+                                if (node == nA || node == nB || node == nC) continue;
+                                if (trianglePart >= 0 && trianglePart < triangleVehicle.matrixPartStride
+                                        && triangleVehicle.nodeInPartMatrix != null
+                                        && triangleVehicle.nodeInPartMatrix[
+                                        node * triangleVehicle.matrixPartStride + trianglePart]) continue;
+                            }
+                            if (collisionManager.addContact(nodeVehicle, node, triangleVehicle, nA, nB, nC)) {
+                                stored++;
+                            } else {
+                                dropped++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        triangleVehicle.collisionCandidateSapHits = rawHits;
+        triangleVehicle.collisionCandidateStored = stored;
+        triangleVehicle.collisionCandidateDropped = dropped;
+        triangleVehicle.collisionChunkPairTests = chunkPairTests;
+        triangleVehicle.collisionChunkPairOverlaps = chunkPairOverlaps;
+        triangleVehicle.collisionFinePairTests = finePairTests;
     }
 
     private void recordGeometricSeparation(int contactId,

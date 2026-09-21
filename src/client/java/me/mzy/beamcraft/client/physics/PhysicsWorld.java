@@ -188,6 +188,8 @@ public class PhysicsWorld {
         double candidateGenerationMs = 0.0, colorMs = 0.0;
         long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L, narrowCertificateSkipped = 0L;
         int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
+        int lastChunkPairTests = 0, lastChunkPairOverlaps = 0;
+        long lastFinePairTests = 0L;
         List<ElectricSnapshot> electricSnapshots = new ArrayList<>(preparedStep.electricSnapshots());
 
         int nextRenderSnapshotIndex = 1;
@@ -225,8 +227,6 @@ public class PhysicsWorld {
 
             if (s % broadphaseRate == 0) {
                 long tii1 = System.nanoTime();
-                globalSap.clear();
-
                 int activeOffset = 0;
                 for (SoftBodyVehicle vehicle : activeVehicles) {
                     if (vehicle.nodes.count > SoftBodyCollisionManager.MAX_GLOBAL_NODES - activeOffset) {
@@ -235,11 +235,8 @@ public class PhysicsWorld {
                     }
                     vehicle.globalNodeOffset = activeOffset;
                     activeOffset += vehicle.nodes.count;
-
-                    globalSap.insertNodes(vehicle, subDt * broadphaseRate);
+                    vehicle.collisionChunks.refit(subDt * broadphaseRate);
                 }
-
-                globalSap.updateAndSort();
 
                 long tii2 = System.nanoTime();
                 substepSapNs = tii2 - tii1;
@@ -249,7 +246,7 @@ public class PhysicsWorld {
 
                 long candidateGenerationStarted = System.nanoTime();
                 activeVehicles.parallelStream().forEach(vehicle -> {
-                    collisionPipeline.generateCollisionCandidates(vehicle, subDt * broadphaseRate);
+                    collisionPipeline.generateChunkCollisionCandidates(vehicle, activeVehicles);
                 });
                 long candidateGenerationFinished = System.nanoTime();
                 substepCandidateNs = candidateGenerationFinished - candidateGenerationStarted;
@@ -258,10 +255,16 @@ public class PhysicsWorld {
                 lastSapHits = 0;
                 lastCandidatesStored = 0;
                 lastCandidatesDropped = 0;
+                lastChunkPairTests = 0;
+                lastChunkPairOverlaps = 0;
+                lastFinePairTests = 0L;
                 for (SoftBodyVehicle vehicle : activeVehicles) {
                     lastSapHits += vehicle.collisionCandidateSapHits;
                     lastCandidatesStored += vehicle.collisionCandidateStored;
                     lastCandidatesDropped += vehicle.collisionCandidateDropped;
+                    lastChunkPairTests += vehicle.collisionChunkPairTests;
+                    lastChunkPairOverlaps += vehicle.collisionChunkPairOverlaps;
+                    lastFinePairTests += vehicle.collisionFinePairTests;
                 }
 
                 long colorStarted = System.nanoTime();
@@ -341,7 +344,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[38];
+        double[] timings = new double[41];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -358,6 +361,9 @@ public class PhysicsWorld {
         timings[17] = narrowAabbPassed;
         timings[18] = narrowResolved;
         timings[37] = narrowCertificateSkipped;
+        timings[38] = lastChunkPairTests;
+        timings[39] = lastChunkPairOverlaps;
+        timings[40] = lastFinePairTests;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {

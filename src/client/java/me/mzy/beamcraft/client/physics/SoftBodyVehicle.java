@@ -52,6 +52,7 @@ public class SoftBodyVehicle {
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
     public final VehicleCameraData cameras = new VehicleCameraData();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
+    final CollisionChunkIndex collisionChunks = new CollisionChunkIndex(this);
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -79,6 +80,9 @@ public class SoftBodyVehicle {
     int collisionCandidateSapHits;
     int collisionCandidateStored;
     int collisionCandidateDropped;
+    int collisionChunkPairTests;
+    int collisionChunkPairOverlaps;
+    long collisionFinePairTests;
 
     double entityX = 0.0;
     double entityY = 0.0;
@@ -482,6 +486,7 @@ public class SoftBodyVehicle {
         powertrain.finalizeSetup();
         flexbodies.compileGroupsCSR(nodes);
         triangles.buildBreakIndices();
+        collisionChunks.rebuild();
 
         // Actuators address beams by their authored name, so the lookup must be
         // built only once every beam of every selected part exists.
