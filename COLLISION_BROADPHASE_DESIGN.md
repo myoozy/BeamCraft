@@ -467,6 +467,22 @@ Consequently 36.30% of coarse overlaps were empty, but most overlaps represented
 real fine candidates. Better grouping still has room to help, but cannot remove
 the approximately 4,300 irreducible AABB candidates in this test.
 
+Refit instrumentation then separated node bounds, node-chunk reduction, coarse
+SAP, local SAP, triangle bounds, and meshlet reduction. Local SAP was initially
+the largest component at about 0.71 ms of a 1.27 ms refit. Its own breakdown was
+approximately 0.13 ms generating keys, 0.45 ms sorting, and 0.14 ms rebuilding
+prefix maxima.
+
+The implementation had been regenerating keys in static membership order before
+every `Arrays.sort`, discarding temporal coherence. Retaining the previous
+sorted node IDs, updating their coordinate keys in place, and still calling the
+JDK sort reduced the measured sort average from about 0.45 ms to 0.06 ms. Local
+SAP fell to about 0.31 ms and complete chunk refit to about 0.65 ms. This avoided
+a custom insertion sort while still giving the JDK an almost-sorted primitive
+array. The corresponding capture showed approximately 0.11 / 0.06 / 0.14 ms for
+key generation / sort / prefix maxima. Prefix construction, not sorting, is now
+the largest of those three local operations.
+
 ### Conclusions from the chunk prototype
 
 - Primitive budget alone is not enough: oversized or spatially incoherent
@@ -488,6 +504,127 @@ the approximately 4,300 irreducible AABB candidates in this test.
 - A future per-substep design should update only coarse chunk bounds frequently
   and reuse conservative fine-candidate supersets until a chunk pair is new or
   its fat/swept validity bound is escaped.
+
+## Proposed per-substep two-rate pipeline
+
+The original goal was to compare collision-chunk AABBs every substep. That does
+not require rebuilding every primitive-level SAP and candidate list every
+substep. The proposed design separates cheap discovery from expensive fine
+candidate generation.
+
+### Static data built or rebuilt on topology changes
+
+- bounded-SAH node-chunk and triangle-meshlet membership;
+- one primary node chunk for every collidable node;
+- the unique referenced-node list for every triangle meshlet;
+- node-to-meshlet reverse adjacency, used to invalidate only meshlets affected
+  by an escaping node or broken triangle;
+- self-collision/topology metadata and oversized-triangle isolation;
+- stable identifiers for directed meshlet/node-chunk pairs.
+
+Meshlet coarse bounds should be reduced directly from their unique referenced
+nodes. Scanning every triangle and its three vertices merely to discover coarse
+meshlet overlap would repeat the main failure mode of the full persistent SAP.
+Tight individual triangle bounds are needed only when a fine cache is rebuilt.
+
+### Work performed every substep
+
+1. Integrate/update nodes as today.
+2. While node positions are already hot, compute previous-to-current swept node
+   bounds, reduce node-chunk bounds, and check containment in each node's cached
+   fat validity bound.
+3. Reduce coarse triangle-meshlet bounds from precomputed unique referenced-node
+   lists. A node that escapes its fat bound marks its node chunk and referencing
+   meshlets dirty through the reverse adjacency.
+4. Compare coarse meshlet/node-chunk swept AABBs for relevant vehicle pairs.
+   Retain pair-state bits so new overlap, continuing overlap, and separation are
+   distinguishable without reconstructing a hash table.
+5. Remove caches for separated pairs. Rebuild only newly overlapping or dirty
+   pair caches. Continuing valid pairs reuse their conservative candidate
+   supersets.
+6. Present the active cached candidates to the existing coloring and narrow
+   phase. The point-triangle CCD still operates on actual substep motion.
+
+The coarse bound must cover previous-to-current motion so a pair that crosses
+entirely during one substep is still discovered. Longer absolute-velocity
+prediction is unnecessary for this frequent pass. A relative-motion slab gate
+can later reject pairs whose conservative chunk velocity ranges cannot close,
+but it is an optional optimization rather than a correctness dependency.
+
+### Fine-candidate cache validity
+
+When rebuilding one meshlet/node-chunk pair, generate candidates from fat node
+bounds and fat triangle bounds covering a chosen horizon. The resulting list is
+a conservative superset. It remains complete while every contributing node
+stays inside its stored fat bound. Because triangle vertices are nodes, vertex
+containment also conservatively contains the triangle bound.
+
+A cache is invalidated by:
+
+- any contributing node escaping its fat bound;
+- the pair becoming newly overlapping after separation;
+- a triangle break or collision/topology flag change;
+- local regrouping after fracture;
+- an explicit maximum-age fallback while the scheme is being validated.
+
+Start with whole-pair rebuild on invalidation. Only introduce partial primitive
+updates if measurements show pair rebuilds are frequent and expensive. Track
+cache rebuild count, average lifetime, escape reason, candidate count, and time
+spent in coarse versus fine work.
+
+This design preserves the current useful behavior: once a conservative contact
+candidate exists, separation certificates can cheaply reject it on later
+substeps. The new cache controls when the candidate set itself must change.
+
+## Candidate-generation cost and parallelism
+
+The SAH/order-reuse capture still showed about 5.36 ms candidate wall time for
+roughly 8,712 tested chunk pairs, 1,456 overlaps, 12,608 complete fine AABB
+tests, and 4,457 passes. Candidate generation is therefore the dominant
+broadphase stage even after refit sorting became cheap.
+
+The current code calls `activeVehicles.parallelStream()` and assigns one
+candidate-generation task per triangle vehicle. With two vehicles this exposes
+only two large tasks. Every accepted candidate also calls
+`SoftBodyCollisionManager.addContact`, whose shared `AtomicInteger` reserves a
+global output slot. Splitting the same loop into more tasks without changing
+output ownership would increase atomic contention and scheduling overhead.
+
+The preferred parallel form is deterministic buffered generation:
+
+1. Build tasks from directed vehicle-pair meshlet ranges, or from dirty
+   meshlet/node-chunk pair ranges in the two-rate design.
+2. Each task writes contacts and counters into an exclusive reusable buffer;
+   it performs no atomic increment per contact.
+3. After the parallel join, compute a prefix sum of task counts, clamp once to
+   global capacity, and copy buffers into the manager's SoA arrays.
+4. Merge tasks in stable range order so overflow behavior and solver ordering
+   remain reproducible.
+5. Run small workloads sequentially; create multiple tasks only above a measured
+   meshlet/pair threshold.
+
+This can use more cores than vehicle-level parallelism and removes the current
+per-contact atomic. It needs a bounded, allocation-free buffer strategy before
+implementation. A task must not reserve `MAX_CONTACTS` independently. Practical
+options are preallocated worker slices plus an overflow path, or a two-pass
+count/fill scheme if repeating the cheap portion proves faster than oversized
+buffers.
+
+Reducing computation is preferable to parallelizing it. Priorities are:
+
+1. Reuse valid fine-candidate supersets so most substeps do no local SAP or fine
+   candidate generation.
+2. Build coarse meshlet bounds from unique referenced nodes rather than scanning
+   all triangle vertices every substep.
+3. Generate fine candidates only for new/dirty chunk pairs.
+4. Buffer contact output to remove atomics and then parallelize dirty pair or
+   meshlet ranges.
+5. Instrument coarse traversal, local query, full AABB, topology filtering, and
+   output/merge separately before attempting lower-level loop rewrites.
+
+The two directed cross-vehicle passes are both required: nodes of A against
+triangles of B and nodes of B against triangles of A detect different contacts.
+They are not duplicate work that can simply be removed.
 
 ## Narrow-phase tunnelling gaps
 
@@ -535,27 +672,29 @@ Useful counters include:
 
 ## Recommended investigation order
 
-The direct chunk, hierarchical SAP, joint-sweep, adaptive-axis, and bounded-SAH
-experiments have now been measured. The next work should avoid another broad
-rewrite and proceed in this order:
+The direct chunk, hierarchical SAP, joint-sweep, adaptive-axis, bounded-SAH,
+and refit-order experiments have now been measured. The next work should avoid
+another broad rewrite and proceed in this order:
 
-1. Split the current chunk-refit timing into node swept bounds, node-chunk
-   reduction, chunk/local sorting and prefix maxima, triangle bounds, and
-   meshlet reduction. Do not assume sorting is dominant.
-2. Decide whether bounded SAH's modest net gain justifies its changed leaf
-   distribution. If retained, constrain leaf count closer to the median split
-   only if refit measurements show leaf proliferation is the cause of the
-   regression.
+1. Instrument candidate generation by coarse traversal, local query/full AABB,
+   topology filtering, and contact output/merge. Refit is no longer the largest
+   unknown after temporal ordering reduced it to roughly 0.65 ms.
+2. Precompute unique referenced-node lists per meshlet and node-to-meshlet
+   reverse adjacency, prerequisites for cheap coarse bounds and local cache
+   invalidation.
 3. Measure a coarse-only per-substep path separately. It should update chunk
    bounds and detect new chunk-pair overlap without rebuilding all fine
    node/triangle candidates.
 4. Cache a conservative fine-candidate superset per chunk pair. Rebuild only
    when the pair is new, a primitive escapes its fat/swept validity bounds, or a
    fracture/regroup event invalidates membership.
-5. Improve the CCD trigger so cached broadphase candidates that genuinely cross
+5. If dirty-pair rebuild wall time remains material, replace per-vehicle tasks
+   and atomic contact insertion with stable meshlet/pair-range tasks, reusable
+   local buffers, a prefix sum, and one deterministic merge.
+6. Improve the CCD trigger so cached broadphase candidates that genuinely cross
    a face are not lost in narrow phase.
-6. Add local/event-driven regrouping for fracture-induced bound inflation.
-7. Consider virtual subdivision only for measured oversized-triangle hot spots,
+7. Add local/event-driven regrouping for fracture-induced bound inflation.
+8. Consider virtual subdivision only for measured oversized-triangle hot spots,
    and selected edge collision only after data shows it is necessary.
 
 Do not retry the full primitive persistent SAP or the joint local endpoint
@@ -564,8 +703,8 @@ linear scan/bookkeeping cost without improving the measured result.
 
 ## Open questions
 
-- How much of chunk refit is primitive-bound construction, chunk/meshlet
-  reduction, sorting, and prefix-max construction?
+- How much of the remaining candidate wall is local binary querying and full
+  AABB work versus topology filtering, atomic output, and task imbalance?
 - How many self-collision nodes and candidates exist in representative vehicles?
 - What is the distribution of collision triangle size, aspect ratio, and unique
   node reuse, especially for pressure wheels?
