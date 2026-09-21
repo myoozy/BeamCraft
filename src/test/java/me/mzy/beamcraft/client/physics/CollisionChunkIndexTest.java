@@ -159,12 +159,83 @@ class CollisionChunkIndexTest {
         assertEquals(7, manager.contactNodeId[0]);
     }
 
+    @Test
+    void spatialLeavesAreRefinedIntoPartHomogeneousChunksAndMeshlets() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        for (int node = 0; node < 8; node++) {
+            setNode(vehicle, node, node * 0.1f, 0.0f, 0.0f, true);
+            vehicle.nodes.partId[node] = node % 2 == 0 ? 3 : 7;
+        }
+        for (int triangle = 0; triangle < 4; triangle++) {
+            addTriangle(vehicle, triangle, 0, 1, 2);
+            vehicle.triangles.partId[triangle] = triangle % 2 == 0 ? 3 : 7;
+        }
+
+        vehicle.collisionChunks.rebuild();
+
+        assertEquals(2, vehicle.collisionChunks.nodeChunkCount());
+        assertEquals(3, vehicle.collisionChunks.nodeChunkPartId(0));
+        assertEquals(7, vehicle.collisionChunks.nodeChunkPartId(1));
+        assertEquals(2, vehicle.collisionChunks.triangleMeshletCount());
+        assertEquals(3, vehicle.collisionChunks.triangleMeshletPartId(0));
+        assertEquals(7, vehicle.collisionChunks.triangleMeshletPartId(1));
+    }
+
+    @Test
+    void sameKnownPartSkipsSelfCollisionBeforeChunkAabbTest() {
+        SoftBodyVehicle vehicle = selfCollisionVehicle(4, 4);
+        refit(vehicle);
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        CollisionPipeline pipeline = new CollisionPipeline(new VoxelSnapshot(), new DynamicAxisSweep(), manager);
+
+        pipeline.generateChunkCollisionCandidates(vehicle, List.of(vehicle));
+
+        assertEquals(0, vehicle.collisionChunkPairTests);
+        assertEquals(0, manager.contactCount.get());
+    }
+
+    @Test
+    void differentKnownPartsStillProduceSelfCollisionCandidates() {
+        SoftBodyVehicle vehicle = selfCollisionVehicle(4, 5);
+        refit(vehicle);
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        CollisionPipeline pipeline = new CollisionPipeline(new VoxelSnapshot(), new DynamicAxisSweep(), manager);
+
+        pipeline.generateChunkCollisionCandidates(vehicle, List.of(vehicle));
+
+        assertEquals(1, vehicle.collisionChunkPairTests);
+        assertEquals(1, manager.contactCount.get());
+        assertEquals(3, manager.contactNodeId[0]);
+    }
+
+    @Test
+    void unknownMatchingPartIdsRemainConservative() {
+        SoftBodyVehicle vehicle = selfCollisionVehicle(-1, -1);
+        refit(vehicle);
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        CollisionPipeline pipeline = new CollisionPipeline(new VoxelSnapshot(), new DynamicAxisSweep(), manager);
+
+        pipeline.generateChunkCollisionCandidates(vehicle, List.of(vehicle));
+
+        assertEquals(1, vehicle.collisionChunkPairTests);
+        assertEquals(1, manager.contactCount.get());
+    }
+
     private static SoftBodyVehicle triangleVehicleAtOrigin() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         setNode(vehicle, 0, 0.0f, 0.0f, 0.0f, false);
         setNode(vehicle, 1, 0.0f, 1.0f, 0.0f, false);
         setNode(vehicle, 2, 0.0f, 0.0f, 1.0f, false);
         addTriangle(vehicle, 0, 0, 1, 2);
+        return vehicle;
+    }
+
+    private static SoftBodyVehicle selfCollisionVehicle(int trianglePart, int nodePart) {
+        SoftBodyVehicle vehicle = triangleVehicleAtOrigin();
+        vehicle.triangles.partId[0] = trianglePart;
+        setNode(vehicle, 3, 0.0f, 0.25f, 0.25f, true);
+        vehicle.nodes.partId[3] = nodePart;
+        vehicle.nodes.selfCollision[3] = true;
         return vehicle;
     }
 

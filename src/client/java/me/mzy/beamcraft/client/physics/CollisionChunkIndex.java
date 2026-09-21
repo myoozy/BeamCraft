@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Static collision primitive grouping plus swept bounds for one vehicle.
@@ -27,8 +29,10 @@ final class CollisionChunkIndex {
     private int[] nodeMembers = new int[0];
     private int[] nodeChunkStart = new int[]{0};
     private boolean[] nodeChunkHasSelfCollision = new boolean[0];
+    private int[] nodeChunkPartId = new int[0];
     private int[] triangleMembers = new int[0];
     private int[] triangleMeshletStart = new int[]{0};
+    private int[] triangleMeshletPartId = new int[0];
     private int oversizedTriangleCount;
 
     private double[] nodeMinX = new double[0], nodeMinY = new double[0], nodeMinZ = new double[0];
@@ -72,8 +76,10 @@ final class CollisionChunkIndex {
         Integer[] collidableNodes = collectCollidableNodes();
         List<int[]> nodeLeaves = new ArrayList<>();
         splitNodes(collidableNodes, 0, collidableNodes.length, nodeLeaves);
+        nodeLeaves = refineLeavesByPart(nodeLeaves, false);
         nodeMembers = flatten(nodeLeaves);
         nodeChunkStart = starts(nodeLeaves);
+        nodeChunkPartId = leafPartIds(nodeLeaves, false);
         nodeChunkHasSelfCollision = new boolean[nodeLeaves.size()];
         for (int chunk = 0; chunk < nodeLeaves.size(); chunk++) {
             for (int node : nodeLeaves.get(chunk)) {
@@ -85,8 +91,10 @@ final class CollisionChunkIndex {
         List<int[]> meshlets = new ArrayList<>();
         oversizedTriangleCount = isolateOversizedTriangles(collidableTriangles, meshlets);
         splitTriangles(collidableTriangles, oversizedTriangleCount, collidableTriangles.length, meshlets);
+        meshlets = refineLeavesByPart(meshlets, true);
         triangleMembers = flatten(meshlets);
         triangleMeshletStart = starts(meshlets);
+        triangleMeshletPartId = leafPartIds(meshlets, true);
 
         int nodeCapacity = vehicle.nodes.count;
         nodeMinX = new double[nodeCapacity]; nodeMinY = new double[nodeCapacity]; nodeMinZ = new double[nodeCapacity];
@@ -196,9 +204,16 @@ final class CollisionChunkIndex {
     int oversizedTriangleCount() { return oversizedTriangleCount; }
     int nodeChunkEnd(int chunk) { return nodeChunkStart[chunk + 1]; }
     boolean nodeChunkHasSelfCollision(int chunk) { return nodeChunkHasSelfCollision[chunk]; }
+    int nodeChunkPartId(int chunk) { return nodeChunkPartId[chunk]; }
     int triangleMeshletStart(int meshlet) { return triangleMeshletStart[meshlet]; }
     int triangleMeshletEnd(int meshlet) { return triangleMeshletStart[meshlet + 1]; }
     int triangleAt(int member) { return triangleMembers[member]; }
+    int triangleMeshletPartId(int meshlet) { return triangleMeshletPartId[meshlet]; }
+
+    boolean sameKnownPart(int meshlet, CollisionChunkIndex nodes, int nodeChunk) {
+        int partId = triangleMeshletPartId[meshlet];
+        return partId >= 0 && partId == nodes.nodeChunkPartId[nodeChunk];
+    }
 
     boolean chunksOverlap(int meshlet, CollisionChunkIndex nodes, int nodeChunk) {
         return overlaps(meshletMinX[meshlet], meshletMinY[meshlet], meshletMinZ[meshlet],
@@ -307,6 +322,54 @@ final class CollisionChunkIndex {
         int middle = applySahSplit(indices, start, end, false, MAX_NODES_PER_CHUNK);
         splitNodes(indices, start, middle, leaves);
         splitNodes(indices, middle, end, leaves);
+    }
+
+    /**
+     * Keeps the spatial SAH partition as the outer grouping, then separates a
+     * mixed leaf by part. Child bounds can therefore only shrink relative to
+     * the original leaf, while detached parts cannot stretch one another's
+     * chunk bounds.
+     */
+    private List<int[]> refineLeavesByPart(List<int[]> leaves, boolean triangles) {
+        List<int[]> refined = new ArrayList<>(leaves.size());
+        for (int[] leaf : leaves) {
+            if (leaf.length <= 1) {
+                refined.add(leaf);
+                continue;
+            }
+
+            Map<Integer, List<Integer>> membersByPart = new TreeMap<>();
+            for (int primitive : leaf) {
+                int partId = triangles
+                        ? vehicle.triangles.partId[primitive]
+                        : vehicle.nodes.partId[primitive];
+                membersByPart.computeIfAbsent(partId, ignored -> new ArrayList<>()).add(primitive);
+            }
+            if (membersByPart.size() == 1) {
+                refined.add(leaf);
+                continue;
+            }
+
+            for (List<Integer> partMembers : membersByPart.values()) {
+                int[] child = new int[partMembers.size()];
+                for (int member = 0; member < child.length; member++) {
+                    child[member] = partMembers.get(member);
+                }
+                refined.add(child);
+            }
+        }
+        return refined;
+    }
+
+    private int[] leafPartIds(List<int[]> leaves, boolean triangles) {
+        int[] result = new int[leaves.size()];
+        for (int leaf = 0; leaf < leaves.size(); leaf++) {
+            int primitive = leaves.get(leaf)[0];
+            result[leaf] = triangles
+                    ? vehicle.triangles.partId[primitive]
+                    : vehicle.nodes.partId[primitive];
+        }
+        return result;
     }
 
     private void rebuildNodeChunkSap() {

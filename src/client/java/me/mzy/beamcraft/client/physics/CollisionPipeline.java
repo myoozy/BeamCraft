@@ -497,6 +497,7 @@ public final class CollisionPipeline {
                     if (triangleChunks.nodeChunkStartsAfterMeshlet(meshlet, nodeChunks, sortedChunk)) break;
                     int nodeChunk = triangleChunks.sortedNodeChunkAt(nodeChunks, sortedChunk);
                     if (self && !nodeChunks.nodeChunkHasSelfCollision(nodeChunk)) continue;
+                    if (self && triangleChunks.sameKnownPart(meshlet, nodeChunks, nodeChunk)) continue;
                     buffer.chunkPairTests++;
                     if (!triangleChunks.chunksOverlap(meshlet, nodeChunks, nodeChunk)) continue;
                     buffer.chunkPairOverlaps++;

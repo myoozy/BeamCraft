@@ -921,3 +921,24 @@ same-substep work rather than persistent unique identities. The first initialize
 update can be much larger than steady state and should not be used as the
 representative capture. The instrumentation never appends a shadow identity to
 `SoftBodyCollisionManager`, colors it, or applies a contact response.
+
+## Part-homogeneous spatial leaves
+
+The next isolated experiment keeps the existing bounded-SAH spatial split and
+refines each finished node chunk or triangle meshlet by `partId`. This ordering
+is deliberate: spatial locality remains the outer constraint, and each refined
+child AABB is a subset of its original leaf. A detached part therefore cannot
+stretch the bounds of primitives belonging to another part that happened to be
+nearby at spawn time.
+
+The refinement may create small or singleton children when a spatial leaf
+contains several parts. It does not change the existing 16-node and 8-triangle
+upper bounds, and it does not try to make leaves cubic. As a partial offset for
+the extra leaves, self-collision rejects a node-chunk/triangle-meshlet pair
+before the coarse AABB test when both leaves have the same non-negative
+`partId`. Unknown negative part IDs remain conservative and are never skipped.
+
+This experiment intentionally does not handle separation inside one part, such
+as a breakgroup or arbitrary beam failure. Runtime AABB inflation detection and
+scheduled regrouping remain a separate follow-up so the cost and value of this
+static refinement can be measured independently.
