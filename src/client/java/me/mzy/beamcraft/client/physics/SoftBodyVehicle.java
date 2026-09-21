@@ -82,6 +82,7 @@ public class SoftBodyVehicle {
     int collisionCandidateDropped;
     int collisionChunkPairTests;
     int collisionChunkPairOverlaps;
+    int collisionChunkPairProductive;
     long collisionFinePairTests;
 
     double entityX = 0.0;

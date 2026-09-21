@@ -54,7 +54,7 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[41];
+	public static double[] lastPhysicsMsDetail = new double[42];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
 	private static final int[] ROLLING_TIMING_INDICES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12};
 	private static final double[][] ROLLING_TIMING_SAMPLES =
@@ -245,8 +245,11 @@ public class BeamCraftClient implements ClientModInitializer {
 					timingSummary("color", 12),
 					String.format("last fine AABB hits/stored/dropped: %.0f / %.0f / %.0f",
 							lastPhysicsMsDetail[13], lastPhysicsMsDetail[14], lastPhysicsMsDetail[15]),
-					String.format("last chunk pairs overlap/tested: %.0f / %.0f",
-							lastPhysicsMsDetail[39], lastPhysicsMsDetail[38]),
+					String.format("last chunk pairs productive/overlap/tested: %.0f / %.0f / %.0f (%.2f%% productive)",
+							lastPhysicsMsDetail[41], lastPhysicsMsDetail[39], lastPhysicsMsDetail[38],
+							lastPhysicsMsDetail[39] > 0.0
+									? lastPhysicsMsDetail[41] * 100.0 / lastPhysicsMsDetail[39]
+									: 0.0),
 					String.format("last fine AABB passed/tested: %.0f / %.0f (%.2f%%)",
 							lastPhysicsMsDetail[13], lastPhysicsMsDetail[40],
 							lastPhysicsMsDetail[40] > 0.0

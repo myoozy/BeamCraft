@@ -127,6 +127,7 @@ class CollisionChunkIndexTest {
         assertEquals(1, nodeVehicle.collisionChunks.nodeChunkCount());
         assertEquals(1, triangleVehicle.collisionFinePairTests,
                 "the local SAP should avoid 3D tests for the other fifteen nodes");
+        assertEquals(1, triangleVehicle.collisionChunkPairProductive);
         assertEquals(1, manager.contactCount.get());
         assertEquals(7, manager.contactNodeId[0]);
     }

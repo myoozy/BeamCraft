@@ -472,7 +472,7 @@ public final class CollisionPipeline {
         CollisionChunkIndex triangleChunks = triangleVehicle.collisionChunks;
         TriangleContainer triangles = triangleVehicle.triangles;
         int rawHits = 0, stored = 0, dropped = 0;
-        int chunkPairTests = 0, chunkPairOverlaps = 0;
+        int chunkPairTests = 0, chunkPairOverlaps = 0, chunkPairProductive = 0;
         long finePairTests = 0L;
 
         for (int meshlet = 0; meshlet < triangleChunks.triangleMeshletCount(); meshlet++) {
@@ -490,6 +490,7 @@ public final class CollisionPipeline {
                     if (!triangleChunks.chunksOverlap(meshlet, nodeChunks, nodeChunk)) continue;
                     chunkPairOverlaps++;
                     int localSweepAxis = triangleChunks.localSweepAxis(meshlet, nodeChunk, nodeChunks);
+                    boolean productivePair = false;
 
                     for (int triangleMember = triangleChunks.triangleMeshletStart(meshlet);
                          triangleMember < triangleChunks.triangleMeshletEnd(meshlet); triangleMember++) {
@@ -511,6 +512,7 @@ public final class CollisionPipeline {
                             if (self && !nodeVehicle.nodes.selfCollision[node]) continue;
                             finePairTests++;
                             if (!triangleChunks.triangleOverlapsNode(triangle, nodeChunks, node)) continue;
+                            productivePair = true;
                             rawHits++;
 
                             if (self) {
@@ -527,6 +529,7 @@ public final class CollisionPipeline {
                             }
                         }
                     }
+                    if (productivePair) chunkPairProductive++;
                 }
             }
         }
@@ -536,6 +539,7 @@ public final class CollisionPipeline {
         triangleVehicle.collisionCandidateDropped = dropped;
         triangleVehicle.collisionChunkPairTests = chunkPairTests;
         triangleVehicle.collisionChunkPairOverlaps = chunkPairOverlaps;
+        triangleVehicle.collisionChunkPairProductive = chunkPairProductive;
         triangleVehicle.collisionFinePairTests = finePairTests;
     }
 

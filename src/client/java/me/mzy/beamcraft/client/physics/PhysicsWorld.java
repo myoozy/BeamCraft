@@ -188,7 +188,7 @@ public class PhysicsWorld {
         double candidateGenerationMs = 0.0, colorMs = 0.0;
         long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L, narrowCertificateSkipped = 0L;
         int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
-        int lastChunkPairTests = 0, lastChunkPairOverlaps = 0;
+        int lastChunkPairTests = 0, lastChunkPairOverlaps = 0, lastChunkPairProductive = 0;
         long lastFinePairTests = 0L;
         List<ElectricSnapshot> electricSnapshots = new ArrayList<>(preparedStep.electricSnapshots());
 
@@ -257,6 +257,7 @@ public class PhysicsWorld {
                 lastCandidatesDropped = 0;
                 lastChunkPairTests = 0;
                 lastChunkPairOverlaps = 0;
+                lastChunkPairProductive = 0;
                 lastFinePairTests = 0L;
                 for (SoftBodyVehicle vehicle : activeVehicles) {
                     lastSapHits += vehicle.collisionCandidateSapHits;
@@ -264,6 +265,7 @@ public class PhysicsWorld {
                     lastCandidatesDropped += vehicle.collisionCandidateDropped;
                     lastChunkPairTests += vehicle.collisionChunkPairTests;
                     lastChunkPairOverlaps += vehicle.collisionChunkPairOverlaps;
+                    lastChunkPairProductive += vehicle.collisionChunkPairProductive;
                     lastFinePairTests += vehicle.collisionFinePairTests;
                 }
 
@@ -344,7 +346,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[41];
+        double[] timings = new double[42];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -364,6 +366,7 @@ public class PhysicsWorld {
         timings[38] = lastChunkPairTests;
         timings[39] = lastChunkPairOverlaps;
         timings[40] = lastFinePairTests;
+        timings[41] = lastChunkPairProductive;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {

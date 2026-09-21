@@ -1,8 +1,8 @@
 # Vehicle-to-Vehicle Collision Broadphase Notes
 
-This document records the September 2026 design discussion around BeamCraft's
-vehicle-to-vehicle collision broadphase. It is a design note, not a description
-of code that has already been implemented. The purpose is to preserve the
+This document records the September 2026 design discussion and experiments
+around BeamCraft's vehicle-to-vehicle collision broadphase. It includes both
+design proposals and measured implementations. The purpose is to preserve the
 measurements, failed experiments, constraints, and promising directions so a
 future implementation does not have to rediscover them.
 
@@ -24,16 +24,22 @@ instead of being teleported out.
 
 ## Current pipeline
 
-The current vehicle-to-vehicle path is node versus triangle:
+The current prototype vehicle-to-vehicle path is node versus triangle through
+stable node chunks and whole-triangle meshlets:
 
-1. Every collidable node receives a swept AABB.
-2. `DynamicAxisSweep` sorts nodes and answers triangle-AABB queries.
-3. Every collidable, unbroken triangle queries the node SAP.
-4. Candidate contacts are greedily colored so contacts in one normal batch do
+1. Static collision membership is partitioned into node chunks and triangle
+   meshlets. Complete triangles are never split between meshlets.
+2. Every collidable node and triangle receives a swept AABB. Chunk and meshlet
+   AABBs are refitted from those primitive bounds.
+3. A node-chunk SAP rejects coarse meshlet/chunk pairs.
+4. Each surviving node chunk maintains X/Y/Z node orders. A meshlet/chunk pair
+   selects the order with the smallest predicted scan, then each triangle runs
+   a local one-dimensional query followed by the complete three-axis AABB test.
+5. Candidate contacts are greedily colored so contacts in one normal batch do
    not write the same node concurrently. The last batch is a serial overflow.
-5. Cached candidates are tested every substep. Separation certificates skip
+6. Cached candidates are tested every substep. Separation certificates skip
    most pairs whose relative geometry has not consumed their known clearance.
-6. The narrow phase performs position correction, normal impulse, and friction.
+7. The narrow phase performs position correction, normal impulse, and friction.
 
 The broadphase is rebuilt every ten 2000 Hz substeps, or approximately every
 5 ms. Node and triangle swept bounds include previous/current positions and a
@@ -42,6 +48,7 @@ linear future prediction over that interval.
 Relevant classes:
 
 - `src/client/java/me/mzy/beamcraft/client/physics/PhysicsWorld.java`
+- `src/client/java/me/mzy/beamcraft/client/physics/CollisionChunkIndex.java`
 - `src/client/java/me/mzy/beamcraft/client/physics/DynamicAxisSweep.java`
 - `src/client/java/me/mzy/beamcraft/client/physics/CollisionPipeline.java`
 - `src/client/java/me/mzy/beamcraft/client/physics/SoftBodyCollisionManager.java`
@@ -375,6 +382,113 @@ subtree can be rebuilt when a quality metric degrades. Nevertheless, BVH
 complexity is not justified until direct chunk-pair checks or chunk SAP are
 measured to be too expensive.
 
+## Implemented chunk experiments
+
+The prototype was implemented on `codex/collision-chunk-broadphase`. All times
+below are rolling in-game averages from two deliberately overlapping copies of
+the same vehicle. Later parameter-grid runs used matching vehicle orientation
+near a worst-case 45-degree horizontal angle. They are useful comparative
+measurements, not a deterministic benchmark: vehicle pose, solver state, JIT,
+and especially internal-force time varied between captures.
+
+The preceding whole-vehicle SAP capture used for the closest comparison showed
+approximately:
+
+| Stage | Average |
+| --- | ---: |
+| Total physics | 24.00 ms |
+| Global node SAP | 1.49 ms |
+| Candidate wall | 4.77 ms |
+| Global SAP + candidate wall | 6.26 ms |
+
+### Direct chunk Cartesian product
+
+The first implementation compared every node-chunk AABB with every triangle
+meshlet AABB and ran a direct node/triangle loop inside overlapping pairs. A
+96-triangle meshlet limit was clearly too coarse: candidate wall reached about
+25.14 ms and total physics about 43.27 ms. Reducing the triangle limit to 16
+improved candidate wall to about 12.27 ms and total physics to 31.50 ms. This
+confirmed that large meshlet AABBs were retaining too much empty space.
+
+A controlled size grid then produced:
+
+| Node/triangle limit | Refit | Candidate wall | Chunk overlap/tested | Fine tested | Total physics |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 16 / 8 | 0.45 ms | 8.35 ms | 3,013 / 29,980 | 81,810 | 26.80 ms |
+| 16 / 4 | 0.44 ms | 8.43 ms | 2,463 / 46,116 | 65,342 | 27.67 ms |
+| 8 / 8 | 0.45 ms | 8.67 ms | 2,452 / 55,454 | 54,944 | 26.38 ms |
+| 8 / 4 | 0.46 ms | 9.25 ms | 2,914 / 85,270 | 43,352 | 27.53 ms |
+
+Smaller leaves reduced fine tests but increased chunk-pair bookkeeping enough
+to lose overall. The selected working limit remained 16 nodes / 8 triangles.
+
+### Hierarchical local SAP
+
+A node-chunk SAP replaced the coarse Cartesian product, and each overlapping
+chunk pair used a small node SAP before the full three-axis AABB test:
+
+| Node/triangle limit | Refit | Candidate wall | Chunk overlap/tested | Fine passed/tested | Total physics |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 16 / 8 | 0.77 ms | 6.61 ms | 1,996 / 9,941 | 4,292 / 25,060 | 24.60 ms |
+| 32 / 16 | 0.73 ms | 6.98 ms | 1,068 / 3,261 | 4,298 / 35,768 | 26.16 ms |
+
+The larger leaves reduced coarse pair count but increased fine scans, so 16/8
+remained better. The approximately 4,300 final AABB passes stayed stable across
+correct implementations and are an important lower-bound signal in this fully
+overlapped scene.
+
+A joint local endpoint sweep was also tested. It pre-sorted triangle endpoints,
+merged four endpoint streams, wrote pair bitmasks, and consumed them in a second
+pass. It did not reduce the final scan counts but raised refit to 1.44 ms and
+candidate wall to 7.46 ms (about 27.01 ms total), so it was discarded.
+
+### Adaptive local axes and SAH membership
+
+Maintaining X/Y/Z node orders per chunk and selecting the narrowest predicted
+scan for each meshlet/chunk pair reduced fine tests from 25,060 to 13,664:
+
+| Variant | Refit | Candidate wall | Chunk overlap/tested | Fine passed/tested | Total physics |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fixed local axis | 0.77 ms | 6.61 ms | 1,996 / 9,941 | 4,292 / 25,060 | 24.60 ms |
+| Adaptive X/Y/Z | 1.10 ms | 5.73 ms | 1,961 / 10,546 | 4,306 / 13,664 | 25.56 ms |
+| Adaptive + bounded SAH | 1.34 ms | 5.12 ms | 1,372 / 9,140 | 4,309 / 11,846 | 24.54 ms |
+
+The adaptive orders saved 0.88 ms of candidate time but added 0.33 ms of refit
+time. Bounded build-time SAH then replaced longest-axis median membership. It
+evaluates complete primitive bounds on all axes and prevents children smaller
+than half a full leaf. SAH reduced chunk overlaps by about 30% relative to the
+adaptive median split, but increased refit cost because the resulting leaf
+population and distribution changed. Its net `refit + candidate wall` result
+was about 6.46 ms, close to but still above the old whole-vehicle SAP's 6.26 ms.
+
+The SAH capture added a productive-pair counter. Of 1,372 overlapping chunk
+pairs, 874 (63.70%) produced at least one complete node/triangle AABB pass.
+Consequently 36.30% of coarse overlaps were empty, but most overlaps represented
+real fine candidates. Better grouping still has room to help, but cannot remove
+the approximately 4,300 irreducible AABB candidates in this test.
+
+### Conclusions from the chunk prototype
+
+- Primitive budget alone is not enough: oversized or spatially incoherent
+  meshlets can dominate candidate cost.
+- Smaller chunks are not monotonically faster because chunk-pair dispatch and
+  local query overhead eventually exceed the saved fine AABB tests.
+- SAH membership and adaptive axes both work, but their gains are modest after
+  refit overhead is included.
+- A custom joint sweep added machinery without reducing candidates and should
+  remain discarded.
+- Total-physics averages must not be compared without stage times; internal
+  force varied by around a millisecond between several captures.
+- The current implementation still rebuilds the broadphase every ten substeps.
+  It has not yet implemented the original proposal to check chunk AABBs every
+  substep.
+- Merely moving all primitive maintenance to every substep is unlikely to work.
+  The earlier persistent SAP showed that insertion sorting does not eliminate
+  the cost of scanning every node, triangle, and triangle vertex.
+- A future per-substep design should update only coarse chunk bounds frequently
+  and reuse conservative fine-candidate supersets until a chunk pair is new or
+  its fat/swept validity bound is escaped.
+
 ## Narrow-phase tunnelling gaps
 
 Broadphase completeness alone does not prevent tunnelling. The current swept
@@ -421,38 +535,46 @@ Useful counters include:
 
 ## Recommended investigation order
 
-The discussion converged on the following staged approach rather than an
-immediate rewrite:
+The direct chunk, hierarchical SAP, joint-sweep, adaptive-axis, and bounded-SAH
+experiments have now been measured. The next work should avoid another broad
+rewrite and proceed in this order:
 
-1. Remove avoidable fixed overhead from the current SAP: static node/part
-   mapping, vehicle early reject, conditional self data, and cached coarse gates.
-2. Improve the current CCD trigger so broadphase candidates that genuinely cross
+1. Split the current chunk-refit timing into node swept bounds, node-chunk
+   reduction, chunk/local sorting and prefix maxima, triangle bounds, and
+   meshlet reduction. Do not assume sorting is dominant.
+2. Decide whether bounded SAH's modest net gain justifies its changed leaf
+   distribution. If retained, constrain leaf count closer to the median split
+   only if refit measurements show leaf proliferation is the cause of the
+   regression.
+3. Measure a coarse-only per-substep path separately. It should update chunk
+   bounds and detect new chunk-pair overlap without rebuilding all fine
+   node/triangle candidates.
+4. Cache a conservative fine-candidate superset per chunk pair. Rebuild only
+   when the pair is new, a primitive escapes its fat/swept validity bounds, or a
+   fracture/regroup event invalidates membership.
+5. Improve the CCD trigger so cached broadphase candidates that genuinely cross
    a face are not lost in narrow phase.
-3. Re-measure the exact two-vehicle scene in a separate run.
-4. If repeated per-triangle queries still dominate, test a from-scratch joint
-   node/triangle sweep at each broadphase rebuild, using optimized primitive
-   sorting and no persistent pair hash.
-5. Separately prototype coarse collision chunks/triangle meshlets with direct
-   chunk-pair checks. Keep nodes and whole triangles in independent groupings.
-6. Add per-substep chunk maintenance only if it demonstrably reduces fine
-   candidate scans. Use chunk SAP or BVH only after direct checks are measured.
-7. Add local/event-driven regrouping for fracture-induced bound inflation.
-8. Consider virtual subdivision of only demonstrably oversized triangles or
-   selected edge collision only after real data shows they are necessary.
+6. Add local/event-driven regrouping for fracture-induced bound inflation.
+7. Consider virtual subdivision only for measured oversized-triangle hot spots,
+   and selected edge collision only after data shows it is necessary.
+
+Do not retry the full primitive persistent SAP or the joint local endpoint
+sweep without materially different evidence. Both already paid substantial
+linear scan/bookkeeping cost without improving the measured result.
 
 ## Open questions
 
-- How much of the current 4.62 ms candidate wall is repeated authored-part
-  gating versus binary query/scanning versus atomic candidate insertion?
+- How much of chunk refit is primitive-bound construction, chunk/meshlet
+  reduction, sorting, and prefix-max construction?
 - How many self-collision nodes and candidates exist in representative vehicles?
 - What is the distribution of collision triangle size, aspect ratio, and unique
   node reuse, especially for pressure wheels?
-- What chunk primitive budgets minimize total coarse-update plus fine-candidate
-  time on real vehicles?
+- Do vehicles other than the tested Bastion favor the current 16/8 budgets and
+  bounded SAH membership?
 - How often would fat bounds invalidate during ordinary driving, suspension
   movement, wheel rotation, and actual crashes?
-- Does a joint rebuild sweep outperform repeated triangle queries after the
-  current separation and part-gating improvements?
+- Can a per-substep coarse chunk pass plus cached fine-candidate supersets avoid
+  tunnelling without repeating the full primitive scan?
 - How frequently are observed tunnelling events broadphase misses, narrow CCD
   misses, edge-edge cases, or contact-capacity/order effects?
 

@@ -275,9 +275,7 @@ final class CollisionChunkIndex {
             leaves.add(copy(indices, start, end));
             return;
         }
-        int axis = longestNodeAxis(indices, start, end);
-        Arrays.sort(indices, start, end, Comparator.comparingDouble(node -> nodeCoordinate(node, axis)));
-        int middle = (start + end) >>> 1;
+        int middle = applySahSplit(indices, start, end, false, MAX_NODES_PER_CHUNK);
         splitNodes(indices, start, middle, leaves);
         splitNodes(indices, middle, end, leaves);
     }
@@ -335,11 +333,81 @@ final class CollisionChunkIndex {
             leaves.add(copy(indices, start, end));
             return;
         }
-        int axis = longestTriangleCentroidAxis(indices, start, end);
-        Arrays.sort(indices, start, end, Comparator.comparingDouble(triangle -> triangleCentroidCoordinate(triangle, axis)));
-        int middle = (start + end) >>> 1;
+        int middle = applySahSplit(indices, start, end, true, MAX_TRIANGLES_PER_MESHLET);
         splitTriangles(indices, start, middle, leaves);
         splitTriangles(indices, middle, end, leaves);
+    }
+
+    /**
+     * Applies a build-time surface-area split using complete primitive bounds.
+     * Requiring each child to contain at least half a full leaf prevents SAH
+     * from trading runtime overlap for a long tail of singleton chunks.
+     */
+    private int applySahSplit(Integer[] indices, int start, int end,
+                              boolean triangles, int maxLeafSize) {
+        int count = end - start;
+        int minChildSize = Math.max(1, maxLeafSize >>> 1);
+        Integer[] source = Arrays.copyOfRange(indices, start, end);
+        Integer[] bestOrder = null;
+        int bestLeftCount = -1;
+        double bestCost = Double.POSITIVE_INFINITY;
+        int bestImbalance = Integer.MAX_VALUE;
+
+        double[] prefixArea = new double[count];
+        double[] suffixArea = new double[count];
+        for (int axis = 0; axis < 3; axis++) {
+            final int sortAxis = axis;
+            Integer[] order = source.clone();
+            Arrays.sort(order, Comparator.comparingDouble(index -> triangles
+                    ? triangleCentroidCoordinate(index, sortAxis)
+                    : nodeCoordinate(index, sortAxis)));
+            fillPrimitiveUnionAreas(order, prefixArea, triangles, false);
+            fillPrimitiveUnionAreas(order, suffixArea, triangles, true);
+
+            for (int leftCount = minChildSize; leftCount <= count - minChildSize; leftCount++) {
+                double cost = prefixArea[leftCount - 1] * leftCount
+                        + suffixArea[leftCount] * (count - leftCount);
+                int imbalance = Math.abs(count - (leftCount << 1));
+                if (cost < bestCost || (cost == bestCost && imbalance < bestImbalance)) {
+                    bestCost = cost;
+                    bestImbalance = imbalance;
+                    bestLeftCount = leftCount;
+                    bestOrder = order.clone();
+                }
+            }
+        }
+
+        if (bestOrder == null) {
+            throw new IllegalStateException("No valid collision chunk SAH split for " + count + " primitives");
+        }
+        System.arraycopy(bestOrder, 0, indices, start, count);
+        return start + bestLeftCount;
+    }
+
+    private void fillPrimitiveUnionAreas(Integer[] order, double[] areas,
+                                         boolean triangles, boolean reverse) {
+        double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+        for (int step = 0; step < order.length; step++) {
+            int position = reverse ? order.length - 1 - step : step;
+            int primitive = order[position];
+            minX = Math.min(minX, primitiveBaseMin(primitive, 0, triangles));
+            minY = Math.min(minY, primitiveBaseMin(primitive, 1, triangles));
+            minZ = Math.min(minZ, primitiveBaseMin(primitive, 2, triangles));
+            maxX = Math.max(maxX, primitiveBaseMax(primitive, 0, triangles));
+            maxY = Math.max(maxY, primitiveBaseMax(primitive, 1, triangles));
+            maxZ = Math.max(maxZ, primitiveBaseMax(primitive, 2, triangles));
+            double dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
+            areas[position] = 2.0 * (dx * dy + dy * dz + dz * dx);
+        }
+    }
+
+    private double primitiveBaseMin(int primitive, int axis, boolean triangles) {
+        return triangles ? triangleBaseMin(primitive, axis) : nodeCoordinate(primitive, axis);
+    }
+
+    private double primitiveBaseMax(int primitive, int axis, boolean triangles) {
+        return triangles ? triangleBaseMax(primitive, axis) : nodeCoordinate(primitive, axis);
     }
 
     /** Moves large spatial outliers to the front and emits singleton meshlets for them. */
@@ -378,33 +446,6 @@ final class CollisionChunkIndex {
         }
         for (int i = 0; i < oversized; i++) leaves.add(new int[]{indices[i]});
         return oversized;
-    }
-
-    private int longestNodeAxis(Integer[] indices, int start, int end) {
-        double[] range = ranges(indices, start, end, false);
-        return longestAxis(range);
-    }
-
-    private int longestTriangleCentroidAxis(Integer[] indices, int start, int end) {
-        double[] range = ranges(indices, start, end, true);
-        return longestAxis(range);
-    }
-
-    private double[] ranges(Integer[] indices, int start, int end, boolean triangles) {
-        double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
-        double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
-        for (int i = start; i < end; i++) {
-            double x = triangles ? triangleCentroidCoordinate(indices[i], 0) : nodeCoordinate(indices[i], 0);
-            double y = triangles ? triangleCentroidCoordinate(indices[i], 1) : nodeCoordinate(indices[i], 1);
-            double z = triangles ? triangleCentroidCoordinate(indices[i], 2) : nodeCoordinate(indices[i], 2);
-            minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
-            maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
-        }
-        return new double[]{maxX - minX, maxY - minY, maxZ - minZ};
-    }
-
-    private static int longestAxis(double[] range) {
-        return longestAxis(range[0], range[1], range[2]);
     }
 
     private static int longestAxis(double x, double y, double z) {
