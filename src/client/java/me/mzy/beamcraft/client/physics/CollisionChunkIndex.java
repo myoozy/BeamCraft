@@ -42,14 +42,13 @@ final class CollisionChunkIndex {
     private double[] meshletMaxX = new double[0], meshletMaxY = new double[0], meshletMaxZ = new double[0];
 
     // Rebuilt with the swept bounds. The first SAP prunes node chunks for a
-    // meshlet; the second independently sorts the at-most-16 nodes in each
-    // surviving chunk for individual triangle queries.
+    // meshlet. Each at-most-16-node chunk is sorted independently on all three
+    // axes so an overlapping meshlet/chunk pair can use its narrowest scan.
     private long[] sortedNodeChunkKeys = new long[0];
     private double[] sortedNodeChunkPrefixMax = new double[0];
     private byte nodeChunkSweepAxis;
     private long[] sortedNodeKeys = new long[0];
     private double[] sortedNodePrefixMax = new double[0];
-    private byte[] nodeChunkNodeSweepAxis = new byte[0];
 
     CollisionChunkIndex(SoftBodyVehicle vehicle) {
         this.vehicle = vehicle;
@@ -90,9 +89,8 @@ final class CollisionChunkIndex {
         nodeChunkMaxX = new double[nodeChunkCount]; nodeChunkMaxY = new double[nodeChunkCount]; nodeChunkMaxZ = new double[nodeChunkCount];
         sortedNodeChunkKeys = new long[nodeChunkCount];
         sortedNodeChunkPrefixMax = new double[nodeChunkCount];
-        nodeChunkNodeSweepAxis = new byte[nodeChunkCount];
-        sortedNodeKeys = new long[nodeMembers.length];
-        sortedNodePrefixMax = new double[nodeMembers.length];
+        sortedNodeKeys = new long[nodeMembers.length * 3];
+        sortedNodePrefixMax = new double[nodeMembers.length * 3];
         int meshletCount = meshlets.size();
         meshletMinX = new double[meshletCount]; meshletMinY = new double[meshletCount]; meshletMinZ = new double[meshletCount];
         meshletMaxX = new double[meshletCount]; meshletMaxY = new double[meshletCount]; meshletMaxZ = new double[meshletCount];
@@ -201,21 +199,45 @@ final class CollisionChunkIndex {
         return nodes.sortedNodeChunkKeys[sortedPosition] > sortableLimit(targetMax);
     }
 
+    /** Axis whose meshlet query scans the fewest sorted node positions. */
+    int localSweepAxis(int meshlet, int nodeChunk, CollisionChunkIndex nodes) {
+        int bestAxis = 0;
+        int bestSpan = Integer.MAX_VALUE;
+        for (int axis = 0; axis < 3; axis++) {
+            int start = nodes.axisOffset(axis) + nodes.nodeChunkStart[nodeChunk];
+            int end = nodes.axisOffset(axis) + nodes.nodeChunkStart[nodeChunk + 1];
+            double targetMin = axisValue(meshletMinX[meshlet], meshletMinY[meshlet], meshletMinZ[meshlet], axis);
+            double targetMax = axisValue(meshletMaxX[meshlet], meshletMaxY[meshlet], meshletMaxZ[meshlet], axis);
+            int first = firstPrefixCandidate(nodes.sortedNodePrefixMax, start, end, targetMin);
+            int pastLast = firstKeyAfter(nodes.sortedNodeKeys, first, end, sortableLimit(targetMax));
+            int span = pastLast - first;
+            if (span < bestSpan) {
+                bestSpan = span;
+                bestAxis = axis;
+            }
+        }
+        return bestAxis;
+    }
+
     /** First sorted node position whose prefix maximum can reach the triangle. */
-    int firstNodeCandidate(int triangle, int nodeChunk, CollisionChunkIndex nodes) {
-        int axis = nodes.nodeChunkNodeSweepAxis[nodeChunk];
+    int firstNodeCandidate(int triangle, int nodeChunk, CollisionChunkIndex nodes, int axis) {
         double targetMin = axisValue(triangleMinX[triangle], triangleMinY[triangle], triangleMinZ[triangle], axis);
+        int axisOffset = nodes.axisOffset(axis);
         return firstPrefixCandidate(nodes.sortedNodePrefixMax,
-                nodes.nodeChunkStart[nodeChunk], nodes.nodeChunkStart[nodeChunk + 1], targetMin);
+                axisOffset + nodes.nodeChunkStart[nodeChunk],
+                axisOffset + nodes.nodeChunkStart[nodeChunk + 1], targetMin);
     }
 
     int sortedNodeAt(CollisionChunkIndex nodes, int sortedPosition) {
         return (int) nodes.sortedNodeKeys[sortedPosition];
     }
 
-    boolean nodeStartsAfterTriangle(int triangle, int nodeChunk,
-                                    CollisionChunkIndex nodes, int sortedPosition) {
-        int axis = nodes.nodeChunkNodeSweepAxis[nodeChunk];
+    int sortedNodeEnd(int nodeChunk, CollisionChunkIndex nodes, int axis) {
+        return nodes.axisOffset(axis) + nodes.nodeChunkStart[nodeChunk + 1];
+    }
+
+    boolean nodeStartsAfterTriangle(int triangle, CollisionChunkIndex nodes,
+                                    int sortedPosition, int axis) {
         double targetMax = axisValue(triangleMaxX[triangle], triangleMaxY[triangle], triangleMaxZ[triangle], axis);
         return nodes.sortedNodeKeys[sortedPosition] > sortableLimit(targetMax);
     }
@@ -287,23 +309,22 @@ final class CollisionChunkIndex {
     }
 
     private void rebuildNodeSaps() {
-        for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
-            int axis = longestAxis(
-                    nodeChunkMaxX[chunk] - nodeChunkMinX[chunk],
-                    nodeChunkMaxY[chunk] - nodeChunkMinY[chunk],
-                    nodeChunkMaxZ[chunk] - nodeChunkMinZ[chunk]);
-            nodeChunkNodeSweepAxis[chunk] = (byte) axis;
-            int start = nodeChunkStart[chunk], end = nodeChunkStart[chunk + 1];
-            for (int member = start; member < end; member++) {
-                int node = nodeMembers[member];
-                sortedNodeKeys[member] = sortKey(axisNodeMin(node, axis), node);
-            }
-            Arrays.sort(sortedNodeKeys, start, end);
-            double prefixMax = Double.NEGATIVE_INFINITY;
-            for (int sorted = start; sorted < end; sorted++) {
-                int node = (int) sortedNodeKeys[sorted];
-                prefixMax = Math.max(prefixMax, axisNodeMax(node, axis));
-                sortedNodePrefixMax[sorted] = prefixMax;
+        for (int axis = 0; axis < 3; axis++) {
+            int axisOffset = axisOffset(axis);
+            for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+                int start = axisOffset + nodeChunkStart[chunk];
+                int end = axisOffset + nodeChunkStart[chunk + 1];
+                for (int member = nodeChunkStart[chunk]; member < nodeChunkStart[chunk + 1]; member++) {
+                    int node = nodeMembers[member];
+                    sortedNodeKeys[axisOffset + member] = sortKey(axisNodeMin(node, axis), node);
+                }
+                Arrays.sort(sortedNodeKeys, start, end);
+                double prefixMax = Double.NEGATIVE_INFINITY;
+                for (int sorted = start; sorted < end; sorted++) {
+                    int node = (int) sortedNodeKeys[sorted];
+                    prefixMax = Math.max(prefixMax, axisNodeMax(node, axis));
+                    sortedNodePrefixMax[sorted] = prefixMax;
+                }
             }
         }
     }
@@ -487,6 +508,10 @@ final class CollisionChunkIndex {
         return axisValue(nodeMaxX[node], nodeMaxY[node], nodeMaxZ[node], axis);
     }
 
+    private int axisOffset(int axis) {
+        return axis * nodeMembers.length;
+    }
+
     private static double axisValue(double x, double y, double z, int axis) {
         return axis == 0 ? x : axis == 1 ? y : z;
     }
@@ -496,6 +521,20 @@ final class CollisionChunkIndex {
         while (left <= right) {
             int middle = (left + right) >>> 1;
             if (prefixMaxima[middle] >= targetMin) {
+                result = middle;
+                right = middle - 1;
+            } else {
+                left = middle + 1;
+            }
+        }
+        return result;
+    }
+
+    private static int firstKeyAfter(long[] keys, int start, int end, long limit) {
+        int left = start, right = end - 1, result = end;
+        while (left <= right) {
+            int middle = (left + right) >>> 1;
+            if (keys[middle] > limit) {
                 result = middle;
                 right = middle - 1;
             } else {

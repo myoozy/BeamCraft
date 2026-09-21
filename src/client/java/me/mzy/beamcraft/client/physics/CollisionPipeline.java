@@ -489,6 +489,7 @@ public final class CollisionPipeline {
                     chunkPairTests++;
                     if (!triangleChunks.chunksOverlap(meshlet, nodeChunks, nodeChunk)) continue;
                     chunkPairOverlaps++;
+                    int localSweepAxis = triangleChunks.localSweepAxis(meshlet, nodeChunk, nodeChunks);
 
                     for (int triangleMember = triangleChunks.triangleMeshletStart(meshlet);
                          triangleMember < triangleChunks.triangleMeshletEnd(meshlet); triangleMember++) {
@@ -499,11 +500,13 @@ public final class CollisionPipeline {
                         int nC = triangles.node3[triangle];
                         int trianglePart = triangles.partId[triangle];
 
-                        int firstNode = triangleChunks.firstNodeCandidate(triangle, nodeChunk, nodeChunks);
+                        int firstNode = triangleChunks.firstNodeCandidate(
+                                triangle, nodeChunk, nodeChunks, localSweepAxis);
                         for (int sortedNode = firstNode;
-                             sortedNode < nodeChunks.nodeChunkEnd(nodeChunk); sortedNode++) {
+                             sortedNode < triangleChunks.sortedNodeEnd(
+                                     nodeChunk, nodeChunks, localSweepAxis); sortedNode++) {
                             if (triangleChunks.nodeStartsAfterTriangle(
-                                    triangle, nodeChunk, nodeChunks, sortedNode)) break;
+                                    triangle, nodeChunks, sortedNode, localSweepAxis)) break;
                             int node = triangleChunks.sortedNodeAt(nodeChunks, sortedNode);
                             if (self && !nodeVehicle.nodes.selfCollision[node]) continue;
                             finePairTests++;

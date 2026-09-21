@@ -131,6 +131,33 @@ class CollisionChunkIndexTest {
         assertEquals(7, manager.contactNodeId[0]);
     }
 
+    @Test
+    void localNodeSapChoosesTheNarrowestAxisForEachMeshletChunkPair() {
+        SoftBodyVehicle triangleVehicle = new SoftBodyVehicle(null);
+        setNode(triangleVehicle, 0, -500.0f, 0.0f, 0.0f, false);
+        setNode(triangleVehicle, 1, 500.0f, 0.0f, 0.0f, false);
+        setNode(triangleVehicle, 2, 0.0f, 1.0f, 0.0f, false);
+        addTriangle(triangleVehicle, 0, 0, 1, 2);
+
+        SoftBodyVehicle nodeVehicle = new SoftBodyVehicle(null);
+        for (int node = 0; node < 16; node++) {
+            float y = node == 7 ? 0.25f : 100.0f + node;
+            setNode(nodeVehicle, node, node * 30.0f, y, 0.0f, true);
+        }
+
+        refit(triangleVehicle, nodeVehicle);
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        CollisionPipeline pipeline = new CollisionPipeline(new VoxelSnapshot(), new DynamicAxisSweep(), manager);
+
+        pipeline.generateChunkCollisionCandidates(triangleVehicle, List.of(nodeVehicle));
+
+        assertEquals(1, nodeVehicle.collisionChunks.nodeChunkCount());
+        assertEquals(1, triangleVehicle.collisionFinePairTests,
+                "the pair should choose Y instead of scanning every node on the chunk's longest X axis");
+        assertEquals(1, manager.contactCount.get());
+        assertEquals(7, manager.contactNodeId[0]);
+    }
+
     private static SoftBodyVehicle triangleVehicleAtOrigin() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         setNode(vehicle, 0, 0.0f, 0.0f, 0.0f, false);
