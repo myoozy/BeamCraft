@@ -16,10 +16,10 @@ class SoftBodyCollisionManagerTest {
         CollisionCandidateBuffer second = new CollisionCandidateBuffer();
 
         first.reset(triangleVehicle);
-        first.add(nodeVehicle, 7, triangleVehicle, 0, 10, 11, 12);
-        first.add(nodeVehicle, 8, triangleVehicle, 1, 20, 21, 22);
+        first.add(nodeVehicle, 7, triangleVehicle, 10, 11, 12);
+        first.add(nodeVehicle, 8, triangleVehicle, 20, 21, 22);
         second.reset(triangleVehicle);
-        second.add(nodeVehicle, 9, triangleVehicle, 2, 30, 31, 32);
+        second.add(nodeVehicle, 9, triangleVehicle, 30, 31, 32);
 
         assertEquals(2, manager.appendContacts(first));
         assertEquals(1, manager.appendContacts(second));

@@ -742,17 +742,17 @@ reconstructing the sequence from screenshots or chat history.
 ### Repository state
 
 - Branch: `codex/collision-chunk-broadphase`.
-- Current committed base: `b29346e Parallelize collision candidate generation`.
-- The per-substep coarse/fat-pair experiment is currently **uncommitted**.
-- Relevant modified/new files are `BeamCraftClient.java`,
-  `CollisionChunkIndex.java`, `CollisionChunkPairState.java`,
-  `PhysicsWorld.java`, and `CollisionChunkIndexTest.java`.
+- Stable implementation base: `b29346e Parallelize collision candidate generation`.
+- The complete per-substep coarse/fat-pair and shadow exception experiment is
+  preserved in `fa1e80c Record per-substep collision broadphase experiment`.
+- The follow-up revert removes that experiment from the running code while
+  intentionally retaining this document and its measurements. The active code
+  therefore uses the fixed ten-substep predicted chunk broadphase from
+  `b29346e`; it does not run the per-substep fat/shadow path described below.
 - The unrelated untracked `.claude/` directory belongs to the user and must not
   be added, modified, or removed.
 
-After the failed formal candidate-cache experiment described below, the code
-was restored to the last usable configuration and the targeted
-`CollisionChunkIndexTest` passed. The intended current behavior is therefore:
+The archived `fa1e80c` experiment behaved as follows:
 
 1. The original predicted fine broadphase still rebuilds every ten substeps.
 2. Every substep computes previous-to-current node bounds, node-chunk bounds,
@@ -766,10 +766,10 @@ was restored to the last usable configuration and the targeted
    meshlet/chunk overlap bit set. Dirty meshlets are compared with all node
    chunks; dirty node chunks are compared with non-dirty meshlets so no pair is
    tested twice in one update.
-7. This pair state is still an **instrumented shadow coarse broadphase**. It
+7. This pair state was an **instrumented shadow coarse broadphase**. It
    does not replace or add contacts to the formal fine candidate set.
 
-The HUD fields added for this configuration are:
+The HUD fields used by that archived configuration were:
 
 - `substep coarse CPU node/chunk/meshlet`;
 - `dirty pair wall`;
@@ -902,9 +902,11 @@ and re-probed it every substep. A moving two-car capture reached about 31,500
 tracked identities and 1.295 million probes per Minecraft tick, while zero passed
 the tight AABB or narrow test. The probe alone averaged roughly 26 ms and made the
 client unusable. Persistent shadow tracking was therefore removed immediately;
-the current instrumentation performs only the gated, same-substep checks above.
+the second iteration in archived commit `fa1e80c` performed only the gated,
+same-substep checks above. The follow-up revert removes both iterations from
+active code.
 
-The additional HUD fields are:
+The additional HUD fields in the archived experiment were:
 
 - `shadow coarse fat/tight`: dirty pairs that remained fat-overlapping and the
   subset that also passed the current tight meshlet/chunk AABB;

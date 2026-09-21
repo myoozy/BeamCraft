@@ -16,7 +16,6 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,8 +57,6 @@ public class PhysicsWorld {
     private SoftBodyVehicle[] candidateTaskVehicles = new SoftBodyVehicle[0];
     private int[] candidateTaskMeshletStarts = new int[0];
     private int[] candidateTaskMeshletEnds = new int[0];
-    private final IdentityHashMap<SoftBodyVehicle, IdentityHashMap<SoftBodyVehicle, CollisionChunkPairState>>
-            coarsePairStates = new IdentityHashMap<>();
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -188,7 +185,6 @@ public class PhysicsWorld {
      */
     public StepResult simulatePreparedStep(PreparedStep preparedStep) {
         List<SoftBodyVehicle> activeVehicles = preparedStep.activeVehicles();
-        pruneCoarsePairStates(activeVehicles);
         double dt = preparedStep.dt();
         int subSteps = preparedStep.subSteps();
         float subDt = (float) (dt / subSteps);
@@ -201,15 +197,6 @@ public class PhysicsWorld {
         double refitNodeBoundsMs = 0.0, refitNodeChunkBoundsMs = 0.0, refitChunkSapMs = 0.0;
         double refitLocalSapsMs = 0.0, refitTriangleBoundsMs = 0.0, refitMeshletBoundsMs = 0.0;
         double refitLocalKeyFillMs = 0.0, refitLocalSortMs = 0.0, refitLocalPrefixMs = 0.0;
-        double coarseSubstepNodeMs = 0.0, coarseSubstepNodeChunkMs = 0.0, coarseSubstepMeshletMs = 0.0;
-        double dirtyPairMs = 0.0;
-        long dirtyNodeChunks = 0L, dirtyMeshlets = 0L, dirtyPairTests = 0L;
-        long dirtyPairsAdded = 0L, dirtyPairsRemoved = 0L;
-        int activeFatPairOverlaps = 0;
-        long shadowFatCoarsePairs = 0L, shadowTightCoarsePairs = 0L;
-        long shadowFinePairs = 0L, shadowTightFinePairs = 0L;
-        long shadowMissingCandidates = 0L, shadowNarrowHits = 0L;
-        double shadowFineFilterMs = 0.0;
         long narrowChecks = 0L, narrowAabbPassed = 0L, narrowResolved = 0L, narrowCertificateSkipped = 0L;
         int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
         int lastChunkPairTests = 0, lastChunkPairOverlaps = 0, lastChunkPairProductive = 0;
@@ -240,45 +227,14 @@ public class PhysicsWorld {
 
             long ti1 = System.nanoTime();
 
-            IntStream.range(0, activeVehicles.size()).parallel().forEach(index -> {
-                SoftBodyVehicle vehicle = activeVehicles.get(index);
-                vehicle.solveInternalForces(subDt, plasticRelaxation, electricSnapshots.get(index));
-                vehicle.collisionChunks.refitCoarseSwept();
-            });
+            IntStream.range(0, activeVehicles.size()).parallel().forEach(index ->
+                    activeVehicles.get(index).solveInternalForces(
+                            subDt, plasticRelaxation, electricSnapshots.get(index)));
 
             long ti2 = System.nanoTime();
             long substepInternalNs = ti2 - ti1;
             internalForceMs += substepInternalNs / 1_000_000.0;
             long substepSapNs = 0L, substepCandidateNs = 0L, substepColorNs = 0L;
-
-            for (SoftBodyVehicle vehicle : activeVehicles) {
-                coarseSubstepNodeMs += vehicle.collisionChunks.coarseNodeBoundsNanos / 1_000_000.0;
-                coarseSubstepNodeChunkMs += vehicle.collisionChunks.coarseNodeChunkBoundsNanos / 1_000_000.0;
-                coarseSubstepMeshletMs += vehicle.collisionChunks.coarseMeshletBoundsNanos / 1_000_000.0;
-                dirtyNodeChunks += vehicle.collisionChunks.dirtyNodeChunkCount();
-                dirtyMeshlets += vehicle.collisionChunks.dirtyMeshletCount();
-            }
-            long coarsePairStarted = System.nanoTime();
-            int currentActiveOverlaps = 0;
-            for (SoftBodyVehicle triangleVehicle : activeVehicles) {
-                for (SoftBodyVehicle nodeVehicle : activeVehicles) {
-                    CollisionChunkPairState state = coarsePairState(triangleVehicle, nodeVehicle);
-                    state.update(triangleVehicle, nodeVehicle);
-                    dirtyPairTests += state.lastTests;
-                    dirtyPairsAdded += state.lastAdded;
-                    dirtyPairsRemoved += state.lastRemoved;
-                    currentActiveOverlaps += state.activeOverlaps;
-                    shadowFatCoarsePairs += state.lastCoarsePairsExpanded;
-                    shadowTightCoarsePairs += state.lastTightCoarsePairs;
-                    shadowFinePairs += state.lastFinePairsExpanded;
-                    shadowTightFinePairs += state.lastTightFinePairs;
-                    shadowMissingCandidates += state.lastMissingCandidates;
-                    shadowNarrowHits += state.lastNarrowHits;
-                    shadowFineFilterMs += state.lastFineFilterNanos / 1_000_000.0;
-                }
-            }
-            activeFatPairOverlaps = currentActiveOverlaps;
-            dirtyPairMs += (System.nanoTime() - coarsePairStarted) / 1_000_000.0;
 
             if (s % broadphaseRate == 0) {
                 long tii1 = System.nanoTime();
@@ -316,11 +272,9 @@ public class PhysicsWorld {
                                 candidateTaskMeshletStarts[task], candidateTaskMeshletEnds[task],
                                 candidateTaskBuffers[task]));
                 long candidateParallelFinished = System.nanoTime();
-                beginCoarsePairFormalWindow(activeVehicles);
                 for (int task = 0; task < candidateTaskCount; task++) {
                     CollisionCandidateBuffer buffer = candidateTaskBuffers[task];
                     int stored = collisionManager.appendContacts(buffer);
-                    recordFormalCandidates(buffer, stored);
                     collisionPipeline.applyCandidateStats(
                             buffer, stored, buffer.dropped + buffer.count - stored);
                 }
@@ -425,7 +379,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[72];
+        double[] timings = new double[54];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -458,24 +412,6 @@ public class PhysicsWorld {
         timings[51] = lastCandidateTaskCount;
         timings[52] = candidateParallelMs;
         timings[53] = candidateMergeMs;
-        timings[54] = coarseSubstepNodeMs;
-        timings[55] = coarseSubstepNodeChunkMs;
-        timings[56] = coarseSubstepMeshletMs;
-        timings[57] = dirtyPairMs;
-        timings[58] = dirtyNodeChunks;
-        timings[59] = dirtyMeshlets;
-        timings[60] = dirtyPairTests;
-        timings[61] = activeFatPairOverlaps;
-        timings[62] = dirtyPairsAdded;
-        timings[63] = dirtyPairsRemoved;
-        timings[64] = shadowFatCoarsePairs;
-        timings[65] = shadowTightCoarsePairs;
-        timings[66] = shadowFinePairs;
-        timings[67] = shadowTightFinePairs;
-        timings[68] = shadowMissingCandidates;
-        timings[69] = shadowNarrowHits;
-        timings[70] = 0.0;
-        timings[71] = shadowFineFilterMs;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {
@@ -558,37 +494,6 @@ public class PhysicsWorld {
             }
         }
         return taskCount;
-    }
-
-    private CollisionChunkPairState coarsePairState(SoftBodyVehicle triangleVehicle,
-                                                     SoftBodyVehicle nodeVehicle) {
-        return coarsePairStates
-                .computeIfAbsent(triangleVehicle, ignored -> new IdentityHashMap<>())
-                .computeIfAbsent(nodeVehicle, ignored -> new CollisionChunkPairState());
-    }
-
-    private void beginCoarsePairFormalWindow(List<SoftBodyVehicle> activeVehicles) {
-        for (SoftBodyVehicle triangleVehicle : activeVehicles) {
-            for (SoftBodyVehicle nodeVehicle : activeVehicles) {
-                coarsePairState(triangleVehicle, nodeVehicle).beginFormalWindow();
-            }
-        }
-    }
-
-    private void recordFormalCandidates(CollisionCandidateBuffer buffer, int stored) {
-        for (int candidate = 0; candidate < stored; candidate++) {
-            coarsePairState(buffer.triangleVehicle, buffer.nodeVehicles[candidate])
-                    .recordFormalCandidate(buffer.triangleIds[candidate], buffer.nodeIds[candidate]);
-        }
-    }
-
-    private void pruneCoarsePairStates(List<SoftBodyVehicle> activeVehicles) {
-        IdentityHashMap<SoftBodyVehicle, Boolean> active = new IdentityHashMap<>();
-        for (SoftBodyVehicle vehicle : activeVehicles) active.put(vehicle, Boolean.TRUE);
-        coarsePairStates.keySet().removeIf(vehicle -> !active.containsKey(vehicle));
-        for (IdentityHashMap<SoftBodyVehicle, CollisionChunkPairState> states : coarsePairStates.values()) {
-            states.keySet().removeIf(vehicle -> !active.containsKey(vehicle));
-        }
     }
 
     private void ensureCandidateTaskCapacity(int required) {
