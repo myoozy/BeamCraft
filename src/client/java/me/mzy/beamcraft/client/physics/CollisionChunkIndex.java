@@ -16,6 +16,7 @@ import java.util.List;
 final class CollisionChunkIndex {
     static final int MAX_NODES_PER_CHUNK = 16;
     static final int MAX_TRIANGLES_PER_MESHLET = 8;
+    private static final double FAT_COARSE_MARGIN = 0.05;
     private static final double LARGE_TRIANGLE_MEDIAN_MULTIPLIER = 4.0;
     private static final double LARGE_TRIANGLE_VEHICLE_DIAGONAL_FRACTION = 0.5;
 
@@ -26,9 +27,14 @@ final class CollisionChunkIndex {
 
     private int[] nodeMembers = new int[0];
     private int[] nodeChunkStart = new int[]{0};
+    private int[] nodePrimaryChunk = new int[0];
     private boolean[] nodeChunkHasSelfCollision = new boolean[0];
     private int[] triangleMembers = new int[0];
     private int[] triangleMeshletStart = new int[]{0};
+    private int[] meshletNodeMembers = new int[0];
+    private int[] meshletNodeStart = new int[]{0};
+    private int[] nodeMeshletMembers = new int[0];
+    private int[] nodeMeshletStart = new int[]{0};
     private int oversizedTriangleCount;
 
     private double[] nodeMinX = new double[0], nodeMinY = new double[0], nodeMinZ = new double[0];
@@ -40,6 +46,14 @@ final class CollisionChunkIndex {
     private double[] nodeChunkMaxX = new double[0], nodeChunkMaxY = new double[0], nodeChunkMaxZ = new double[0];
     private double[] meshletMinX = new double[0], meshletMinY = new double[0], meshletMinZ = new double[0];
     private double[] meshletMaxX = new double[0], meshletMaxY = new double[0], meshletMaxZ = new double[0];
+    private double[] fatNodeChunkMinX = new double[0], fatNodeChunkMinY = new double[0], fatNodeChunkMinZ = new double[0];
+    private double[] fatNodeChunkMaxX = new double[0], fatNodeChunkMaxY = new double[0], fatNodeChunkMaxZ = new double[0];
+    private double[] fatMeshletMinX = new double[0], fatMeshletMinY = new double[0], fatMeshletMinZ = new double[0];
+    private double[] fatMeshletMaxX = new double[0], fatMeshletMaxY = new double[0], fatMeshletMaxZ = new double[0];
+    private int[] dirtyNodeChunks = new int[0], dirtyMeshlets = new int[0];
+    private boolean[] nodeChunkDirty = new boolean[0], meshletDirty = new boolean[0];
+    private int dirtyNodeChunkCount, dirtyMeshletCount;
+    private boolean fatBoundsInitialized;
 
     // Rebuilt with the swept bounds. The first SAP prunes node chunks for a
     // meshlet. Each at-most-16-node chunk is sorted independently on all three
@@ -60,10 +74,15 @@ final class CollisionChunkIndex {
     long refitLocalPrefixNanos;
     long refitTriangleBoundsNanos;
     long refitMeshletBoundsNanos;
+    long coarseNodeBoundsNanos;
+    long coarseNodeChunkBoundsNanos;
+    long coarseMeshletBoundsNanos;
 
     CollisionChunkIndex(SoftBodyVehicle vehicle) {
         this.vehicle = vehicle;
     }
+
+    SoftBodyVehicle vehicle() { return vehicle; }
 
     void rebuild() {
         builtNodeCount = vehicle.nodes.count;
@@ -74,9 +93,12 @@ final class CollisionChunkIndex {
         splitNodes(collidableNodes, 0, collidableNodes.length, nodeLeaves);
         nodeMembers = flatten(nodeLeaves);
         nodeChunkStart = starts(nodeLeaves);
+        nodePrimaryChunk = new int[vehicle.nodes.count];
+        Arrays.fill(nodePrimaryChunk, -1);
         nodeChunkHasSelfCollision = new boolean[nodeLeaves.size()];
         for (int chunk = 0; chunk < nodeLeaves.size(); chunk++) {
             for (int node : nodeLeaves.get(chunk)) {
+                nodePrimaryChunk[node] = chunk;
                 nodeChunkHasSelfCollision[chunk] |= vehicle.nodes.selfCollision[node];
             }
         }
@@ -87,6 +109,7 @@ final class CollisionChunkIndex {
         splitTriangles(collidableTriangles, oversizedTriangleCount, collidableTriangles.length, meshlets);
         triangleMembers = flatten(meshlets);
         triangleMeshletStart = starts(meshlets);
+        buildMeshletNodeIndices(meshlets, vehicle.nodes.count);
 
         int nodeCapacity = vehicle.nodes.count;
         nodeMinX = new double[nodeCapacity]; nodeMinY = new double[nodeCapacity]; nodeMinZ = new double[nodeCapacity];
@@ -98,6 +121,10 @@ final class CollisionChunkIndex {
         int nodeChunkCount = nodeLeaves.size();
         nodeChunkMinX = new double[nodeChunkCount]; nodeChunkMinY = new double[nodeChunkCount]; nodeChunkMinZ = new double[nodeChunkCount];
         nodeChunkMaxX = new double[nodeChunkCount]; nodeChunkMaxY = new double[nodeChunkCount]; nodeChunkMaxZ = new double[nodeChunkCount];
+        fatNodeChunkMinX = new double[nodeChunkCount]; fatNodeChunkMinY = new double[nodeChunkCount]; fatNodeChunkMinZ = new double[nodeChunkCount];
+        fatNodeChunkMaxX = new double[nodeChunkCount]; fatNodeChunkMaxY = new double[nodeChunkCount]; fatNodeChunkMaxZ = new double[nodeChunkCount];
+        dirtyNodeChunks = new int[nodeChunkCount];
+        nodeChunkDirty = new boolean[nodeChunkCount];
         sortedNodeChunkKeys = new long[nodeChunkCount];
         sortedNodeChunkPrefixMax = new double[nodeChunkCount];
         sortedNodeKeys = new long[nodeMembers.length * 3];
@@ -106,6 +133,49 @@ final class CollisionChunkIndex {
         int meshletCount = meshlets.size();
         meshletMinX = new double[meshletCount]; meshletMinY = new double[meshletCount]; meshletMinZ = new double[meshletCount];
         meshletMaxX = new double[meshletCount]; meshletMaxY = new double[meshletCount]; meshletMaxZ = new double[meshletCount];
+        fatMeshletMinX = new double[meshletCount]; fatMeshletMinY = new double[meshletCount]; fatMeshletMinZ = new double[meshletCount];
+        fatMeshletMaxX = new double[meshletCount]; fatMeshletMaxY = new double[meshletCount]; fatMeshletMaxZ = new double[meshletCount];
+        dirtyMeshlets = new int[meshletCount];
+        meshletDirty = new boolean[meshletCount];
+        fatBoundsInitialized = false;
+    }
+
+    private void buildMeshletNodeIndices(List<int[]> meshlets, int nodeCount) {
+        List<int[]> uniqueNodes = new ArrayList<>(meshlets.size());
+        int[] marks = new int[nodeCount];
+        Arrays.fill(marks, -1);
+        TriangleContainer triangles = vehicle.triangles;
+        int[] scratch = new int[MAX_TRIANGLES_PER_MESHLET * 3];
+
+        for (int meshlet = 0; meshlet < meshlets.size(); meshlet++) {
+            int uniqueCount = 0;
+            for (int triangle : meshlets.get(meshlet)) {
+                int a = triangles.node1[triangle];
+                int b = triangles.node2[triangle];
+                int c = triangles.node3[triangle];
+                if (marks[a] != meshlet) { marks[a] = meshlet; scratch[uniqueCount++] = a; }
+                if (marks[b] != meshlet) { marks[b] = meshlet; scratch[uniqueCount++] = b; }
+                if (marks[c] != meshlet) { marks[c] = meshlet; scratch[uniqueCount++] = c; }
+            }
+            uniqueNodes.add(Arrays.copyOf(scratch, uniqueCount));
+        }
+
+        meshletNodeMembers = flatten(uniqueNodes);
+        meshletNodeStart = starts(uniqueNodes);
+        int[] counts = new int[nodeCount];
+        for (int node : meshletNodeMembers) counts[node]++;
+        nodeMeshletStart = new int[nodeCount + 1];
+        for (int node = 0; node < nodeCount; node++) {
+            nodeMeshletStart[node + 1] = nodeMeshletStart[node] + counts[node];
+        }
+        nodeMeshletMembers = new int[meshletNodeMembers.length];
+        int[] write = Arrays.copyOf(nodeMeshletStart, nodeCount);
+        for (int meshlet = 0; meshlet < meshlets.size(); meshlet++) {
+            for (int member = meshletNodeStart[meshlet]; member < meshletNodeStart[meshlet + 1]; member++) {
+                int node = meshletNodeMembers[member];
+                nodeMeshletMembers[write[node]++] = meshlet;
+            }
+        }
     }
 
     void refit(double dtPredict) {
@@ -191,14 +261,123 @@ final class CollisionChunkIndex {
         refitMeshletBoundsNanos = System.nanoTime() - stageStarted;
     }
 
+    /** Updates only tight previous-to-current coarse bounds for a non-broadphase substep. */
+    void refitCoarseSwept() {
+        if (builtNodeCount != vehicle.nodes.count || builtTriangleCount != vehicle.triangles.count) rebuild();
+
+        long stageStarted = System.nanoTime();
+        NodeContainer nodes = vehicle.nodes;
+        double entityX = vehicle.entityX, entityY = vehicle.entityY, entityZ = vehicle.entityZ;
+        for (int node = 0; node < nodes.count; node++) {
+            double previousX = entityX + nodes.prevPosX[node];
+            double previousY = entityY + nodes.prevPosY[node];
+            double previousZ = entityZ + nodes.prevPosZ[node];
+            double currentX = entityX + nodes.posX[node];
+            double currentY = entityY + nodes.posY[node];
+            double currentZ = entityZ + nodes.posZ[node];
+            nodeMinX[node] = Math.min(previousX, currentX);
+            nodeMinY[node] = Math.min(previousY, currentY);
+            nodeMinZ[node] = Math.min(previousZ, currentZ);
+            nodeMaxX[node] = Math.max(previousX, currentX);
+            nodeMaxY[node] = Math.max(previousY, currentY);
+            nodeMaxZ[node] = Math.max(previousZ, currentZ);
+        }
+        long stageFinished = System.nanoTime();
+        coarseNodeBoundsNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
+
+        for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+            resetBounds(nodeChunkMinX, nodeChunkMinY, nodeChunkMinZ,
+                    nodeChunkMaxX, nodeChunkMaxY, nodeChunkMaxZ, chunk);
+            for (int member = nodeChunkStart[chunk]; member < nodeChunkStart[chunk + 1]; member++) {
+                includeNodeBounds(nodeChunkMinX, nodeChunkMinY, nodeChunkMinZ,
+                        nodeChunkMaxX, nodeChunkMaxY, nodeChunkMaxZ, chunk, nodeMembers[member]);
+            }
+        }
+        stageFinished = System.nanoTime();
+        coarseNodeChunkBoundsNanos = stageFinished - stageStarted;
+        stageStarted = stageFinished;
+        double margin = CollisionPipeline.SOFT_BROADPHASE_MARGIN;
+        for (int meshlet = 0; meshlet < triangleMeshletCount(); meshlet++) {
+            resetBounds(meshletMinX, meshletMinY, meshletMinZ,
+                    meshletMaxX, meshletMaxY, meshletMaxZ, meshlet);
+            for (int member = meshletNodeStart[meshlet]; member < meshletNodeStart[meshlet + 1]; member++) {
+                includeNodeBounds(meshletMinX, meshletMinY, meshletMinZ,
+                        meshletMaxX, meshletMaxY, meshletMaxZ, meshlet,
+                        meshletNodeMembers[member]);
+            }
+            meshletMinX[meshlet] -= margin;
+            meshletMinY[meshlet] -= margin;
+            meshletMinZ[meshlet] -= margin;
+            meshletMaxX[meshlet] += margin;
+            meshletMaxY[meshlet] += margin;
+            meshletMaxZ[meshlet] += margin;
+        }
+        coarseMeshletBoundsNanos = System.nanoTime() - stageStarted;
+        updateFatBounds();
+    }
+
+    private void updateFatBounds() {
+        Arrays.fill(nodeChunkDirty, false);
+        Arrays.fill(meshletDirty, false);
+        dirtyNodeChunkCount = 0;
+        dirtyMeshletCount = 0;
+
+        for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+            if (!fatBoundsInitialized || !containsBounds(
+                    fatNodeChunkMinX[chunk], fatNodeChunkMinY[chunk], fatNodeChunkMinZ[chunk],
+                    fatNodeChunkMaxX[chunk], fatNodeChunkMaxY[chunk], fatNodeChunkMaxZ[chunk],
+                    nodeChunkMinX[chunk], nodeChunkMinY[chunk], nodeChunkMinZ[chunk],
+                    nodeChunkMaxX[chunk], nodeChunkMaxY[chunk], nodeChunkMaxZ[chunk])) {
+                setExpandedBounds(fatNodeChunkMinX, fatNodeChunkMinY, fatNodeChunkMinZ,
+                        fatNodeChunkMaxX, fatNodeChunkMaxY, fatNodeChunkMaxZ, chunk,
+                        nodeChunkMinX[chunk], nodeChunkMinY[chunk], nodeChunkMinZ[chunk],
+                        nodeChunkMaxX[chunk], nodeChunkMaxY[chunk], nodeChunkMaxZ[chunk]);
+                nodeChunkDirty[chunk] = true;
+                dirtyNodeChunks[dirtyNodeChunkCount++] = chunk;
+            }
+        }
+        for (int meshlet = 0; meshlet < triangleMeshletCount(); meshlet++) {
+            if (!fatBoundsInitialized || !containsBounds(
+                    fatMeshletMinX[meshlet], fatMeshletMinY[meshlet], fatMeshletMinZ[meshlet],
+                    fatMeshletMaxX[meshlet], fatMeshletMaxY[meshlet], fatMeshletMaxZ[meshlet],
+                    meshletMinX[meshlet], meshletMinY[meshlet], meshletMinZ[meshlet],
+                    meshletMaxX[meshlet], meshletMaxY[meshlet], meshletMaxZ[meshlet])) {
+                setExpandedBounds(fatMeshletMinX, fatMeshletMinY, fatMeshletMinZ,
+                        fatMeshletMaxX, fatMeshletMaxY, fatMeshletMaxZ, meshlet,
+                        meshletMinX[meshlet], meshletMinY[meshlet], meshletMinZ[meshlet],
+                        meshletMaxX[meshlet], meshletMaxY[meshlet], meshletMaxZ[meshlet]);
+                meshletDirty[meshlet] = true;
+                dirtyMeshlets[dirtyMeshletCount++] = meshlet;
+            }
+        }
+        fatBoundsInitialized = true;
+    }
+
     int nodeChunkCount() { return nodeChunkStart.length - 1; }
     int triangleMeshletCount() { return triangleMeshletStart.length - 1; }
     int oversizedTriangleCount() { return oversizedTriangleCount; }
     int nodeChunkEnd(int chunk) { return nodeChunkStart[chunk + 1]; }
+    int nodeChunkStart(int chunk) { return nodeChunkStart[chunk]; }
+    int nodeAt(int member) { return nodeMembers[member]; }
     boolean nodeChunkHasSelfCollision(int chunk) { return nodeChunkHasSelfCollision[chunk]; }
     int triangleMeshletStart(int meshlet) { return triangleMeshletStart[meshlet]; }
     int triangleMeshletEnd(int meshlet) { return triangleMeshletStart[meshlet + 1]; }
     int triangleAt(int member) { return triangleMembers[member]; }
+    int meshletUniqueNodeCount(int meshlet) { return meshletNodeStart[meshlet + 1] - meshletNodeStart[meshlet]; }
+    int nodeMeshletCount(int node) { return nodeMeshletStart[node + 1] - nodeMeshletStart[node]; }
+    int dirtyNodeChunkCount() { return dirtyNodeChunkCount; }
+    int dirtyNodeChunkAt(int dirtyIndex) { return dirtyNodeChunks[dirtyIndex]; }
+    int dirtyMeshletCount() { return dirtyMeshletCount; }
+    int dirtyMeshletAt(int dirtyIndex) { return dirtyMeshlets[dirtyIndex]; }
+    boolean meshletDirty(int meshlet) { return meshletDirty[meshlet]; }
+
+    boolean fatChunksOverlap(int meshlet, CollisionChunkIndex nodes, int nodeChunk) {
+        return overlaps(fatMeshletMinX[meshlet], fatMeshletMinY[meshlet], fatMeshletMinZ[meshlet],
+                fatMeshletMaxX[meshlet], fatMeshletMaxY[meshlet], fatMeshletMaxZ[meshlet],
+                nodes.fatNodeChunkMinX[nodeChunk], nodes.fatNodeChunkMinY[nodeChunk], nodes.fatNodeChunkMinZ[nodeChunk],
+                nodes.fatNodeChunkMaxX[nodeChunk], nodes.fatNodeChunkMaxY[nodeChunk], nodes.fatNodeChunkMaxZ[nodeChunk]);
+    }
 
     boolean chunksOverlap(int meshlet, CollisionChunkIndex nodes, int nodeChunk) {
         return overlaps(meshletMinX[meshlet], meshletMinY[meshlet], meshletMinZ[meshlet],
@@ -246,6 +425,23 @@ final class CollisionChunkIndex {
             }
         }
         return bestAxis;
+    }
+
+    boolean coarseTriangleOverlapsNode(int triangle, CollisionChunkIndex nodes, int node) {
+        TriangleContainer triangles = vehicle.triangles;
+        int nA = triangles.node1[triangle];
+        int nB = triangles.node2[triangle];
+        int nC = triangles.node3[triangle];
+        double margin = CollisionPipeline.SOFT_BROADPHASE_MARGIN;
+        double minX = Math.min(nodeMinX[nA], Math.min(nodeMinX[nB], nodeMinX[nC])) - margin;
+        double minY = Math.min(nodeMinY[nA], Math.min(nodeMinY[nB], nodeMinY[nC])) - margin;
+        double minZ = Math.min(nodeMinZ[nA], Math.min(nodeMinZ[nB], nodeMinZ[nC])) - margin;
+        double maxX = Math.max(nodeMaxX[nA], Math.max(nodeMaxX[nB], nodeMaxX[nC])) + margin;
+        double maxY = Math.max(nodeMaxY[nA], Math.max(nodeMaxY[nB], nodeMaxY[nC])) + margin;
+        double maxZ = Math.max(nodeMaxZ[nA], Math.max(nodeMaxZ[nB], nodeMaxZ[nC])) + margin;
+        return overlaps(minX, minY, minZ, maxX, maxY, maxZ,
+                nodes.nodeMinX[node], nodes.nodeMinY[node], nodes.nodeMinZ[node],
+                nodes.nodeMaxX[node], nodes.nodeMaxY[node], nodes.nodeMaxZ[node]);
     }
 
     /** First sorted node position whose prefix maximum can reach the triangle. */
@@ -578,6 +774,26 @@ final class CollisionChunkIndex {
         maxX[target] = Math.max(maxX[target], sourceMaxX);
         maxY[target] = Math.max(maxY[target], sourceMaxY);
         maxZ[target] = Math.max(maxZ[target], sourceMaxZ);
+    }
+
+    private static boolean containsBounds(double outerMinX, double outerMinY, double outerMinZ,
+                                          double outerMaxX, double outerMaxY, double outerMaxZ,
+                                          double innerMinX, double innerMinY, double innerMinZ,
+                                          double innerMaxX, double innerMaxY, double innerMaxZ) {
+        return innerMinX >= outerMinX && innerMinY >= outerMinY && innerMinZ >= outerMinZ
+                && innerMaxX <= outerMaxX && innerMaxY <= outerMaxY && innerMaxZ <= outerMaxZ;
+    }
+
+    private static void setExpandedBounds(double[] minX, double[] minY, double[] minZ,
+                                          double[] maxX, double[] maxY, double[] maxZ, int target,
+                                          double sourceMinX, double sourceMinY, double sourceMinZ,
+                                          double sourceMaxX, double sourceMaxY, double sourceMaxZ) {
+        minX[target] = sourceMinX - FAT_COARSE_MARGIN;
+        minY[target] = sourceMinY - FAT_COARSE_MARGIN;
+        minZ[target] = sourceMinZ - FAT_COARSE_MARGIN;
+        maxX[target] = sourceMaxX + FAT_COARSE_MARGIN;
+        maxY[target] = sourceMaxY + FAT_COARSE_MARGIN;
+        maxZ[target] = sourceMaxZ + FAT_COARSE_MARGIN;
     }
 
     private static boolean overlaps(double aMinX, double aMinY, double aMinZ,

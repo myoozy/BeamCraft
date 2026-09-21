@@ -54,10 +54,10 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[54];
+	public static double[] lastPhysicsMsDetail = new double[72];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
 	private static final int[] ROLLING_TIMING_INDICES = {
-			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53, 54, 55, 56, 57, 71
 	};
 	private static final double[][] ROLLING_TIMING_SAMPLES =
 			new double[ROLLING_TIMING_INDICES.length][PHYSICS_TIMING_WINDOW];
@@ -245,6 +245,18 @@ public class BeamCraftClient implements ClientModInitializer {
 					timingBreakdown("refit node/chunk/coarseSAP", 42, 43, 44),
 					timingBreakdown("refit localSAP/triangle/meshlet", 45, 46, 47),
 					timingBreakdown("localSAP key/sort/prefix", 48, 49, 50),
+					timingBreakdown("substep coarse CPU node/chunk/meshlet", 54, 55, 56),
+					timingSummary("dirty pair wall", 57),
+					String.format("fat dirty nodeChunks/meshlets/tests: %.0f / %.0f / %.0f",
+							lastPhysicsMsDetail[58], lastPhysicsMsDetail[59], lastPhysicsMsDetail[60]),
+					String.format("fat pairs active/added/removed: %.0f / %.0f / %.0f",
+							lastPhysicsMsDetail[61], lastPhysicsMsDetail[62], lastPhysicsMsDetail[63]),
+					String.format("shadow coarse fat/tight: %.0f / %.0f",
+							lastPhysicsMsDetail[64], lastPhysicsMsDetail[65]),
+					String.format("shadow fine tested/tight/new/narrow: %.0f / %.0f / %.0f / %.0f",
+							lastPhysicsMsDetail[66], lastPhysicsMsDetail[67],
+							lastPhysicsMsDetail[68], lastPhysicsMsDetail[69]),
+					timingSummary("shadow fine filter", 71),
 					timingSummary("candidate+color", 4),
 					timingSummary("candidate wall", 9),
 					String.format("candidate tasks: %.0f | %s", lastPhysicsMsDetail[51],

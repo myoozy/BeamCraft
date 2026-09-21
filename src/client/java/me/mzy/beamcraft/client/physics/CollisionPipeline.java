@@ -533,7 +533,7 @@ public final class CollisionPipeline {
                                         && triangleVehicle.nodeInPartMatrix[
                                         node * triangleVehicle.matrixPartStride + trianglePart]) continue;
                             }
-                            buffer.add(nodeVehicle, node, triangleVehicle, nA, nB, nC);
+                            buffer.add(nodeVehicle, node, triangleVehicle, triangle, nA, nB, nC);
                         }
                     }
                     if (productivePair) buffer.chunkPairProductive++;
@@ -562,6 +562,104 @@ public final class CollisionPipeline {
         vehicle.collisionChunkPairOverlaps += buffer.chunkPairOverlaps;
         vehicle.collisionChunkPairProductive += buffer.chunkPairProductive;
         vehicle.collisionFinePairTests += buffer.finePairTests;
+    }
+
+    /** Pure narrow-phase probe used by the shadow coarse-broadphase instrumentation. */
+    static boolean shadowCandidateNarrowHit(SoftBodyVehicle nodeVehicle, int node,
+                                            SoftBodyVehicle triangleVehicle, int triangle) {
+        TriangleContainer triangles = triangleVehicle.triangles;
+        if (triangle < 0 || triangle >= triangles.count || triangles.broken[triangle]) return false;
+        int nA = triangles.node1[triangle];
+        int nB = triangles.node2[triangle];
+        int nC = triangles.node3[triangle];
+
+        float entityDeltaX = (float) (nodeVehicle.entityX - triangleVehicle.entityX);
+        float entityDeltaY = (float) (nodeVehicle.entityY - triangleVehicle.entityY);
+        float entityDeltaZ = (float) (nodeVehicle.entityZ - triangleVehicle.entityZ);
+        float ax = triangleVehicle.nodes.posX[nA];
+        float ay = triangleVehicle.nodes.posY[nA];
+        float az = triangleVehicle.nodes.posZ[nA];
+        float bx = triangleVehicle.nodes.posX[nB];
+        float by = triangleVehicle.nodes.posY[nB];
+        float bz = triangleVehicle.nodes.posZ[nB];
+        float cx = triangleVehicle.nodes.posX[nC];
+        float cy = triangleVehicle.nodes.posY[nC];
+        float cz = triangleVehicle.nodes.posZ[nC];
+        float px = entityDeltaX + nodeVehicle.nodes.posX[node];
+        float py = entityDeltaY + nodeVehicle.nodes.posY[node];
+        float pz = entityDeltaZ + nodeVehicle.nodes.posZ[node];
+
+        float minX = Math.min(ax, Math.min(bx, cx)) - SOFT_CONTACT_THICKNESS;
+        float maxX = Math.max(ax, Math.max(bx, cx)) + SOFT_CONTACT_THICKNESS;
+        float minY = Math.min(ay, Math.min(by, cy)) - SOFT_CONTACT_THICKNESS;
+        float maxY = Math.max(ay, Math.max(by, cy)) + SOFT_CONTACT_THICKNESS;
+        float minZ = Math.min(az, Math.min(bz, cz)) - SOFT_CONTACT_THICKNESS;
+        float maxZ = Math.max(az, Math.max(bz, cz)) + SOFT_CONTACT_THICKNESS;
+        boolean currentAabbPassed = px >= minX && px <= maxX
+                && py >= minY && py <= maxY && pz >= minZ && pz <= maxZ;
+        float sweptHitTime = -1.0f;
+        if (!currentAabbPassed) {
+            sweptHitTime = sweptPointTriangleHitTime(
+                    entityDeltaX + nodeVehicle.nodes.prevPosX[node],
+                    entityDeltaY + nodeVehicle.nodes.prevPosY[node],
+                    entityDeltaZ + nodeVehicle.nodes.prevPosZ[node],
+                    triangleVehicle.nodes.prevPosX[nA], triangleVehicle.nodes.prevPosY[nA],
+                    triangleVehicle.nodes.prevPosZ[nA], triangleVehicle.nodes.prevPosX[nB],
+                    triangleVehicle.nodes.prevPosY[nB], triangleVehicle.nodes.prevPosZ[nB],
+                    triangleVehicle.nodes.prevPosX[nC], triangleVehicle.nodes.prevPosY[nC],
+                    triangleVehicle.nodes.prevPosZ[nC], px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz);
+        }
+        if (!currentAabbPassed) return sweptHitTime >= 0.0f;
+
+        float abx = bx - ax, aby = by - ay, abz = bz - az;
+        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float apx = px - ax, apy = py - ay, apz = pz - az;
+        float nx = aby * acz - abz * acy;
+        float ny = abz * acx - abx * acz;
+        float nz = abx * acy - aby * acx;
+        float normalLengthSq = nx * nx + ny * ny + nz * nz;
+        if (normalLengthSq < PhysicsWorld.KINDA_SMALL_NUMBER) return false;
+        float inverseNormalLength = 1.0f / (float) Math.sqrt(normalLengthSq);
+        nx *= inverseNormalLength;
+        ny *= inverseNormalLength;
+        nz *= inverseNormalLength;
+        float distance = apx * nx + apy * ny + apz * nz;
+
+        float previousAx = triangleVehicle.nodes.prevPosX[nA];
+        float previousAy = triangleVehicle.nodes.prevPosY[nA];
+        float previousAz = triangleVehicle.nodes.prevPosZ[nA];
+        float previousAbx = triangleVehicle.nodes.prevPosX[nB] - previousAx;
+        float previousAby = triangleVehicle.nodes.prevPosY[nB] - previousAy;
+        float previousAbz = triangleVehicle.nodes.prevPosZ[nB] - previousAz;
+        float previousAcx = triangleVehicle.nodes.prevPosX[nC] - previousAx;
+        float previousAcy = triangleVehicle.nodes.prevPosY[nC] - previousAy;
+        float previousAcz = triangleVehicle.nodes.prevPosZ[nC] - previousAz;
+        float previousNx = previousAby * previousAcz - previousAbz * previousAcy;
+        float previousNy = previousAbz * previousAcx - previousAbx * previousAcz;
+        float previousNz = previousAbx * previousAcy - previousAby * previousAcx;
+        float previousApx = entityDeltaX + nodeVehicle.nodes.prevPosX[node] - previousAx;
+        float previousApy = entityDeltaY + nodeVehicle.nodes.prevPosY[node] - previousAy;
+        float previousApz = entityDeltaZ + nodeVehicle.nodes.prevPosZ[node] - previousAz;
+        float previousSide = previousApx * previousNx + previousApy * previousNy + previousApz * previousNz;
+        float pushDirection = previousSide >= 0.0f ? 1.0f : -1.0f;
+        if (SOFT_CONTACT_THICKNESS - distance * pushDirection <= 0.0f) return false;
+
+        float projectedX = apx - distance * nx;
+        float projectedY = apy - distance * ny;
+        float projectedZ = apz - distance * nz;
+        float d00 = abx * abx + aby * aby + abz * abz;
+        float d01 = abx * acx + aby * acy + abz * acz;
+        float d11 = acx * acx + acy * acy + acz * acz;
+        float d20 = projectedX * abx + projectedY * aby + projectedZ * abz;
+        float d21 = projectedX * acx + projectedY * acy + projectedZ * acz;
+        float denominator = d00 * d11 - d01 * d01;
+        if (denominator < PhysicsWorld.KINDA_SMALL_NUMBER) return false;
+        float inverse = 1.0f / denominator;
+        float weightB = (d11 * d20 - d01 * d21) * inverse;
+        float weightC = (d00 * d21 - d01 * d20) * inverse;
+        float weightA = 1.0f - weightB - weightC;
+        float tolerance = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
+        return weightA >= tolerance && weightB >= tolerance && weightC >= tolerance;
     }
 
     private void recordGeometricSeparation(int contactId,

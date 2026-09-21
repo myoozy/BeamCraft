@@ -10,6 +10,7 @@ final class CollisionCandidateBuffer {
     SoftBodyVehicle[] nodeVehicles = new SoftBodyVehicle[INITIAL_CAPACITY];
     int[] nodeIds = new int[INITIAL_CAPACITY];
     SoftBodyVehicle[] triangleVehicles = new SoftBodyVehicle[INITIAL_CAPACITY];
+    int[] triangleIds = new int[INITIAL_CAPACITY];
     int[] triangleA = new int[INITIAL_CAPACITY];
     int[] triangleB = new int[INITIAL_CAPACITY];
     int[] triangleC = new int[INITIAL_CAPACITY];
@@ -33,7 +34,7 @@ final class CollisionCandidateBuffer {
     }
 
     boolean add(SoftBodyVehicle nodeVehicle, int nodeId,
-                SoftBodyVehicle triangleVehicle, int nA, int nB, int nC) {
+                SoftBodyVehicle triangleVehicle, int triangleId, int nA, int nB, int nC) {
         if (count >= SoftBodyCollisionManager.MAX_CONTACTS) {
             dropped++;
             return false;
@@ -42,6 +43,7 @@ final class CollisionCandidateBuffer {
         nodeVehicles[count] = nodeVehicle;
         nodeIds[count] = nodeId;
         triangleVehicles[count] = triangleVehicle;
+        triangleIds[count] = triangleId;
         triangleA[count] = nA;
         triangleB[count] = nB;
         triangleC[count] = nC;
@@ -56,6 +58,7 @@ final class CollisionCandidateBuffer {
         nodeVehicles = Arrays.copyOf(nodeVehicles, capacity);
         nodeIds = Arrays.copyOf(nodeIds, capacity);
         triangleVehicles = Arrays.copyOf(triangleVehicles, capacity);
+        triangleIds = Arrays.copyOf(triangleIds, capacity);
         triangleA = Arrays.copyOf(triangleA, capacity);
         triangleB = Arrays.copyOf(triangleB, capacity);
         triangleC = Arrays.copyOf(triangleC, capacity);

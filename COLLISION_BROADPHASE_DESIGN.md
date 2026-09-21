@@ -732,3 +732,190 @@ linear scan/bookkeeping cost without improving the measured result.
 
 These questions should be answered with separate-run or replay measurements
 before selecting a final broadphase architecture.
+
+## 2026-09-21 per-substep coarse experiment and handoff
+
+This section records the experiments performed after the recommendations above.
+It is intentionally concrete so work can continue in a new session without
+reconstructing the sequence from screenshots or chat history.
+
+### Repository state
+
+- Branch: `codex/collision-chunk-broadphase`.
+- Current committed base: `b29346e Parallelize collision candidate generation`.
+- The per-substep coarse/fat-pair experiment is currently **uncommitted**.
+- Relevant modified/new files are `BeamCraftClient.java`,
+  `CollisionChunkIndex.java`, `CollisionChunkPairState.java`,
+  `PhysicsWorld.java`, and `CollisionChunkIndexTest.java`.
+- The unrelated untracked `.claude/` directory belongs to the user and must not
+  be added, modified, or removed.
+
+After the failed formal candidate-cache experiment described below, the code
+was restored to the last usable configuration and the targeted
+`CollisionChunkIndexTest` passed. The intended current behavior is therefore:
+
+1. The original predicted fine broadphase still rebuilds every ten substeps.
+2. Every substep computes previous-to-current node bounds, node-chunk bounds,
+   and meshlet bounds reduced from precomputed unique referenced-node lists.
+3. This coarse refit runs inside the existing per-vehicle parallel internal-
+   force phase, so much of its wall time is hidden by that phase.
+4. Node chunks and meshlets have persistent group-level fat AABBs with a fixed
+   experimental margin of `0.05`.
+5. A group is dirty only when its tight swept bound escapes its fat bound.
+6. Each directed triangle-vehicle/node-vehicle pair owns a persistent dense
+   meshlet/chunk overlap bit set. Dirty meshlets are compared with all node
+   chunks; dirty node chunks are compared with non-dirty meshlets so no pair is
+   tested twice in one update.
+7. This pair state is still an **instrumented shadow coarse broadphase**. It
+   does not replace or add contacts to the formal fine candidate set.
+
+The HUD fields added for this configuration are:
+
+- `substep coarse CPU node/chunk/meshlet`;
+- `dirty pair wall`;
+- `fat dirty nodeChunks/meshlets/tests`;
+- `fat pairs active/added/removed`.
+
+### Measurements
+
+Before the per-substep chunk passes, a global prediction-containment guard was
+tested. The normal ten-substep formal broadphase retained each node's predicted
+AABB. After every substep, one collidable-node scan checked whether the actual
+previous-to-current swept node bound was still contained by that prediction.
+If every node was contained, the existing formal candidates were reused; if any
+node escaped, the complete formal broadphase was rebuilt immediately before
+collision solving. This is the same design as "scan nodes only, perform no
+chunk/fine shadow work unless prediction escapes."
+
+It did not work in the tested vehicles. The HUD showed approximately
+`total/early = 100/90`: about 90 of 100 substeps triggered an early rebuild, so
+the optimization degenerated into an almost-every-substep full broadphase and
+was about as slow as explicitly increasing the broadphase frequency. With many
+nodes, an any-node escape condition is very sensitive to suspension motion,
+deformation, acceleration, solver corrections, and collision impulses; the
+probability that at least one node violates a linear ten-substep prediction is
+close to one even when most nodes remain safely contained. The implementation
+was fully removed and was not committed.
+
+This result does not invalidate containment certificates at a smaller scope.
+It specifically rejects a **single global any-node guard whose failure forces a
+whole-world/whole-vehicle formal rebuild**. Chunk-, meshlet-, or collision-island
+containment can still be useful because one escape then invalidates only local
+work.
+
+Before fat bounds, testing all tight meshlet/chunk AABB pairs every substep was
+still too expensive. In the deliberately overlapped two-car scene, the pair
+pass tested roughly 331,000 directed pairs per Minecraft tick and its wall time
+was around 4 ms even after parallelization. This made the total cost similar to
+simply running substantially more broadphase work.
+
+The fixed-margin fat/dirty scheme changed the behavior substantially:
+
+| Scene | Total physics average | Dirty-pair average | Dirty-pair maximum | Dirty chunks / meshlets / tests | Active / added / removed pairs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Two overlapping cars at rest | 21.67 ms | 0.03 ms | 0.05 ms | 0 / 0 / 0 | 2,117 / 0 / 0 |
+| One parked car, one drifting aggressively | 20.56 ms | 0.75 ms | 1.29 ms | 527 / 629 / 193,731 | 1,695 / 379 / 370 |
+| Impact/deformation test | not captured | not captured | about 3.7 ms | not captured | not captured |
+
+The counts are accumulated over the substeps of one Minecraft tick, not counts
+for one physics substep. The resting result demonstrates the desired temporal
+coherence: once the fat bounds contain the tight bounds, pair comparison becomes
+effectively free. Aggressive rigid motion still invalidates many fixed-margin
+group bounds, but reduced pair wall time by about 81% relative to the roughly
+4.03 ms all-tight-pair pass. Impact/deformation is the remaining worst case.
+
+The fat bounds increase conservative coarse overlap. The resting scene retained
+2,117 active fat pairs versus roughly 1,300--1,500 tight overlapping pairs in
+nearby captures. That increase is inexpensive while only storing pair bits, but
+it is important when considering how many fine candidates may be materialized.
+
+### Failed formal fat-candidate cache experiment
+
+A follow-up experiment attempted to make the fat state drive the formal contact
+candidate set. It added per-node fat bounds, generated a conservative fine
+candidate mask for each active meshlet/node-chunk pair (at most 8 triangles by
+16 nodes), appended new candidates incrementally, retained removed candidates
+until a ten-substep compaction, and tried to preserve existing separation
+certificates between compactions.
+
+The client became too slow to operate. The experiment was immediately reverted
+and must not be mistaken for the current working configuration.
+
+The likely failure is architectural rather than a small implementation detail:
+
+- coarse fat overlap already increases the active pair population;
+- taking the Cartesian fine superset inside every active fat pair greatly
+  increases cached node/triangle contacts;
+- every cached contact is then presented to coloring and the narrow phase on
+  every substep, even if most are only conservative false positives;
+- cheap dirty-pair maintenance therefore moved the bottleneck into repeated
+  narrow checks and contact scheduling.
+
+This result answers an important open question: a conservative superset is not
+useful merely because it is cheap to maintain. Its **steady-state consumer
+cost** must also remain close to the existing approximately 4,300 fine AABB
+passes / roughly 1,200 stored candidates, rather than to the full 8-by-16
+Cartesian capacity of all active fat pairs.
+
+### Recommended next step
+
+Keep the current fat chunk/dirty-pair code as a measured coarse discovery path,
+but do not yet feed every fat fine candidate to the solver. Before another
+formal integration, add counters or an offline replay that estimate:
+
+1. how many active or dirty coarse pairs would reach fine rebuilding;
+2. how many fat node/triangle pairs those rebuilds would produce;
+3. how many are new relative to the existing ten-substep predicted candidate
+   cache;
+4. how many of those candidates ever pass the current tight AABB and narrow
+   tests before the next normal rebuild.
+
+A safer incremental design is likely an **exception path** rather than a full
+replacement: retain the current compact predicted candidate set, use the
+per-substep coarse pass to identify newly dangerous regions, and add only
+fine-tested candidates that are absent from the current set. This needs a cheap
+stable candidate identity/dedup structure and a validity rule for a coarse pair
+that remains fat-overlapping while its tight contents change. Do not assume that
+"continuing fat overlap" alone proves a tight fine cache remains complete.
+
+Other plausible directions are adaptive margins per collision island, exact
+tight checks only for dirty/new coarse pairs, or temporarily increasing rebuild
+frequency for a small active impact island. These should be benchmarked against
+the existing ten-substep path before replacing it. The immediate goal should be
+to preserve the resting/driving cost demonstrated above while handling the
+rare impact peak, not to make the steady-state narrow phase consume a large fat
+superset.
+
+### Shadow exception-path instrumentation
+
+The recommended measurement was subsequently added without changing the formal
+candidate set or solver input. For each directed vehicle pair it records the
+formal node/triangle identities installed by the normal ten-substep rebuild.
+When a dirty coarse pair remains fat-overlapping, it first has to pass the current
+tight meshlet/chunk AABB. Only then are its topology-filtered Cartesian fine pairs
+examined. Each fine pair must also pass the current previous-to-current swept
+AABB before an identity absent from the formal set receives one pure,
+non-resolving point/triangle narrow test.
+
+An initial version retained every missing identity until the next formal rebuild
+and re-probed it every substep. A moving two-car capture reached about 31,500
+tracked identities and 1.295 million probes per Minecraft tick, while zero passed
+the tight AABB or narrow test. The probe alone averaged roughly 26 ms and made the
+client unusable. Persistent shadow tracking was therefore removed immediately;
+the current instrumentation performs only the gated, same-substep checks above.
+
+The additional HUD fields are:
+
+- `shadow coarse fat/tight`: dirty pairs that remained fat-overlapping and the
+  subset that also passed the current tight meshlet/chunk AABB;
+- `shadow fine tested/tight/new/narrow`: topology-filtered Cartesian fine pairs,
+  the subset passing the current swept AABB, identities absent from the formal
+  set, and those producing a geometric narrow hit;
+- `shadow fine filter`: wall time spent expanding and filtering tight coarse
+  pairs.
+
+The counts accumulate across the substeps of one Minecraft tick and represent
+same-substep work rather than persistent unique identities. The first initialized
+update can be much larger than steady state and should not be used as the
+representative capture. The instrumentation never appends a shadow identity to
+`SoftBodyCollisionManager`, colors it, or applies a contact response.
