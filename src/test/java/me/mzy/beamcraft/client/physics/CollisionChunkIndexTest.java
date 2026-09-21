@@ -221,6 +221,35 @@ class CollisionChunkIndexTest {
         assertEquals(1, manager.contactCount.get());
     }
 
+    @Test
+    void reportsRegroupableLeafSpanRelativeToSpawnGeometry() {
+        SoftBodyVehicle vehicle = triangleVehicleAtOrigin();
+        vehicle.nodes.collision[0] = true;
+        vehicle.nodes.collision[1] = true;
+        vehicle.nodes.collision[2] = true;
+        setNode(vehicle, 3, 0.0f, 1.0f, 1.0f, true);
+        addTriangle(vehicle, 1, 0, 2, 3);
+        refit(vehicle);
+
+        assertEquals(1, vehicle.collisionChunks.regroupableNodeChunkCount());
+        assertEquals(1, vehicle.collisionChunks.regroupableMeshletCount());
+        assertEquals(0, vehicle.collisionChunks.stretchedNodeChunkCount());
+        assertEquals(0, vehicle.collisionChunks.stretchedMeshletCount());
+        assertEquals(1.0, vehicle.collisionChunks.maxNodeChunkSpanRatio(), 1.0e-9);
+        assertEquals(1.0, vehicle.collisionChunks.maxMeshletSpanRatio(), 1.0e-9);
+
+        vehicle.nodes.posX[1] = 4.0f;
+        vehicle.nodes.prevPosX[1] = 4.0f;
+        vehicle.collisionChunks.refit(0.0);
+
+        assertEquals(1, vehicle.collisionChunks.stretchedNodeChunkCount());
+        assertEquals(1, vehicle.collisionChunks.stretchedMeshletCount());
+        assertTrue(vehicle.collisionChunks.maxNodeChunkSpanRatio()
+                > CollisionChunkIndex.SPAN_WARNING_RATIO);
+        assertTrue(vehicle.collisionChunks.maxMeshletSpanRatio()
+                > CollisionChunkIndex.SPAN_WARNING_RATIO);
+    }
+
     private static SoftBodyVehicle triangleVehicleAtOrigin() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         setNode(vehicle, 0, 0.0f, 0.0f, 0.0f, false);

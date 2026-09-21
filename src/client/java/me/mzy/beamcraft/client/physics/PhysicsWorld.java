@@ -201,6 +201,9 @@ public class PhysicsWorld {
         int lastSapHits = 0, lastCandidatesStored = 0, lastCandidatesDropped = 0;
         int lastChunkPairTests = 0, lastChunkPairOverlaps = 0, lastChunkPairProductive = 0;
         long lastFinePairTests = 0L;
+        int lastNodeChunkCount = 0, lastInflatedNodeChunkCount = 0;
+        int lastMeshletCount = 0, lastInflatedMeshletCount = 0;
+        double lastMaxNodeChunkInflation = 1.0, lastMaxMeshletInflation = 1.0;
         List<ElectricSnapshot> electricSnapshots = new ArrayList<>(preparedStep.electricSnapshots());
 
         int nextRenderSnapshotIndex = 1;
@@ -239,6 +242,12 @@ public class PhysicsWorld {
             if (s % broadphaseRate == 0) {
                 long tii1 = System.nanoTime();
                 int activeOffset = 0;
+                lastNodeChunkCount = 0;
+                lastInflatedNodeChunkCount = 0;
+                lastMeshletCount = 0;
+                lastInflatedMeshletCount = 0;
+                lastMaxNodeChunkInflation = 1.0;
+                lastMaxMeshletInflation = 1.0;
                 for (SoftBodyVehicle vehicle : activeVehicles) {
                     if (vehicle.nodes.count > SoftBodyCollisionManager.MAX_GLOBAL_NODES - activeOffset) {
                         throw new IllegalStateException("Total vehicle node count exceeds collision capacity "
@@ -256,6 +265,14 @@ public class PhysicsWorld {
                     refitLocalPrefixMs += vehicle.collisionChunks.refitLocalPrefixNanos / 1_000_000.0;
                     refitTriangleBoundsMs += vehicle.collisionChunks.refitTriangleBoundsNanos / 1_000_000.0;
                     refitMeshletBoundsMs += vehicle.collisionChunks.refitMeshletBoundsNanos / 1_000_000.0;
+                    lastNodeChunkCount += vehicle.collisionChunks.regroupableNodeChunkCount();
+                    lastInflatedNodeChunkCount += vehicle.collisionChunks.stretchedNodeChunkCount();
+                    lastMeshletCount += vehicle.collisionChunks.regroupableMeshletCount();
+                    lastInflatedMeshletCount += vehicle.collisionChunks.stretchedMeshletCount();
+                    lastMaxNodeChunkInflation = Math.max(lastMaxNodeChunkInflation,
+                            vehicle.collisionChunks.maxNodeChunkSpanRatio());
+                    lastMaxMeshletInflation = Math.max(lastMaxMeshletInflation,
+                            vehicle.collisionChunks.maxMeshletSpanRatio());
                 }
 
                 long tii2 = System.nanoTime();
@@ -379,7 +396,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[54];
+        double[] timings = new double[60];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -412,6 +429,12 @@ public class PhysicsWorld {
         timings[51] = lastCandidateTaskCount;
         timings[52] = candidateParallelMs;
         timings[53] = candidateMergeMs;
+        timings[54] = lastNodeChunkCount;
+        timings[55] = lastInflatedNodeChunkCount;
+        timings[56] = lastMaxNodeChunkInflation;
+        timings[57] = lastMeshletCount;
+        timings[58] = lastInflatedMeshletCount;
+        timings[59] = lastMaxMeshletInflation;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {

@@ -18,8 +18,10 @@ import java.util.TreeMap;
 final class CollisionChunkIndex {
     static final int MAX_NODES_PER_CHUNK = 16;
     static final int MAX_TRIANGLES_PER_MESHLET = 8;
+    static final double SPAN_WARNING_RATIO = 2.0;
     private static final double LARGE_TRIANGLE_MEDIAN_MULTIPLIER = 4.0;
     private static final double LARGE_TRIANGLE_VEHICLE_DIAGONAL_FRACTION = 0.5;
+    private static final double SPAN_FLOOR = CollisionPipeline.SOFT_BROADPHASE_MARGIN * 2.0;
 
     private final SoftBodyVehicle vehicle;
 
@@ -44,6 +46,15 @@ final class CollisionChunkIndex {
     private double[] nodeChunkMaxX = new double[0], nodeChunkMaxY = new double[0], nodeChunkMaxZ = new double[0];
     private double[] meshletMinX = new double[0], meshletMinY = new double[0], meshletMinZ = new double[0];
     private double[] meshletMaxX = new double[0], meshletMaxY = new double[0], meshletMaxZ = new double[0];
+    private double[] nodeChunkReferenceSpan = new double[0];
+    private double[] meshletReferenceSpan = new double[0];
+
+    private int stretchedNodeChunkCount;
+    private int stretchedMeshletCount;
+    private int regroupableNodeChunkCount;
+    private int regroupableMeshletCount;
+    private double maxNodeChunkSpanRatio = 1.0;
+    private double maxMeshletSpanRatio = 1.0;
 
     // Rebuilt with the swept bounds. The first SAP prunes node chunks for a
     // meshlet. Each at-most-16-node chunk is sorted independently on all three
@@ -79,6 +90,7 @@ final class CollisionChunkIndex {
         nodeLeaves = refineLeavesByPart(nodeLeaves, false);
         nodeMembers = flatten(nodeLeaves);
         nodeChunkStart = starts(nodeLeaves);
+        regroupableNodeChunkCount = countMultiMemberLeaves(nodeLeaves);
         nodeChunkPartId = leafPartIds(nodeLeaves, false);
         nodeChunkHasSelfCollision = new boolean[nodeLeaves.size()];
         for (int chunk = 0; chunk < nodeLeaves.size(); chunk++) {
@@ -94,6 +106,7 @@ final class CollisionChunkIndex {
         meshlets = refineLeavesByPart(meshlets, true);
         triangleMembers = flatten(meshlets);
         triangleMeshletStart = starts(meshlets);
+        regroupableMeshletCount = countMultiMemberLeaves(meshlets);
         triangleMeshletPartId = leafPartIds(meshlets, true);
 
         int nodeCapacity = vehicle.nodes.count;
@@ -114,6 +127,8 @@ final class CollisionChunkIndex {
         int meshletCount = meshlets.size();
         meshletMinX = new double[meshletCount]; meshletMinY = new double[meshletCount]; meshletMinZ = new double[meshletCount];
         meshletMaxX = new double[meshletCount]; meshletMaxY = new double[meshletCount]; meshletMaxZ = new double[meshletCount];
+        nodeChunkReferenceSpan = buildNodeChunkReferenceSpans();
+        meshletReferenceSpan = buildMeshletReferenceSpans();
     }
 
     void refit(double dtPredict) {
@@ -143,13 +158,31 @@ final class CollisionChunkIndex {
         refitNodeBoundsNanos = stageFinished - stageStarted;
         stageStarted = stageFinished;
 
+        stretchedNodeChunkCount = 0;
+        maxNodeChunkSpanRatio = 1.0;
         for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
             resetBounds(nodeChunkMinX, nodeChunkMinY, nodeChunkMinZ,
                     nodeChunkMaxX, nodeChunkMaxY, nodeChunkMaxZ, chunk);
+            double tightMinX = Double.POSITIVE_INFINITY, tightMinY = Double.POSITIVE_INFINITY;
+            double tightMinZ = Double.POSITIVE_INFINITY;
+            double tightMaxX = Double.NEGATIVE_INFINITY, tightMaxY = Double.NEGATIVE_INFINITY;
+            double tightMaxZ = Double.NEGATIVE_INFINITY;
             for (int member = nodeChunkStart[chunk]; member < nodeChunkStart[chunk + 1]; member++) {
                 int node = nodeMembers[member];
                 includeNodeBounds(nodeChunkMinX, nodeChunkMinY, nodeChunkMinZ,
                         nodeChunkMaxX, nodeChunkMaxY, nodeChunkMaxZ, chunk, node);
+                tightMinX = Math.min(tightMinX, nodes.posX[node]);
+                tightMinY = Math.min(tightMinY, nodes.posY[node]);
+                tightMinZ = Math.min(tightMinZ, nodes.posZ[node]);
+                tightMaxX = Math.max(tightMaxX, nodes.posX[node]);
+                tightMaxY = Math.max(tightMaxY, nodes.posY[node]);
+                tightMaxZ = Math.max(tightMaxZ, nodes.posZ[node]);
+            }
+            if (nodeChunkEnd(chunk) - nodeChunkStart[chunk] > 1) {
+                double ratio = aabbSpan(tightMinX, tightMinY, tightMinZ, tightMaxX, tightMaxY, tightMaxZ)
+                        / nodeChunkReferenceSpan[chunk];
+                maxNodeChunkSpanRatio = Math.max(maxNodeChunkSpanRatio, ratio);
+                if (ratio > SPAN_WARNING_RATIO) stretchedNodeChunkCount++;
             }
         }
         stageFinished = System.nanoTime();
@@ -184,9 +217,15 @@ final class CollisionChunkIndex {
         refitTriangleBoundsNanos = stageFinished - stageStarted;
         stageStarted = stageFinished;
 
+        stretchedMeshletCount = 0;
+        maxMeshletSpanRatio = 1.0;
         for (int meshlet = 0; meshlet < triangleMeshletCount(); meshlet++) {
             resetBounds(meshletMinX, meshletMinY, meshletMinZ,
                     meshletMaxX, meshletMaxY, meshletMaxZ, meshlet);
+            double tightMinX = Double.POSITIVE_INFINITY, tightMinY = Double.POSITIVE_INFINITY;
+            double tightMinZ = Double.POSITIVE_INFINITY;
+            double tightMaxX = Double.NEGATIVE_INFINITY, tightMaxY = Double.NEGATIVE_INFINITY;
+            double tightMaxZ = Double.NEGATIVE_INFINITY;
             for (int member = triangleMeshletStart[meshlet]; member < triangleMeshletStart[meshlet + 1]; member++) {
                 int triangle = triangleMembers[member];
                 if (triangleMinX[triangle] == Double.POSITIVE_INFINITY) continue;
@@ -194,6 +233,20 @@ final class CollisionChunkIndex {
                         meshletMaxX, meshletMaxY, meshletMaxZ, meshlet,
                         triangleMinX[triangle], triangleMinY[triangle], triangleMinZ[triangle],
                         triangleMaxX[triangle], triangleMaxY[triangle], triangleMaxZ[triangle]);
+                int a = triangles.node1[triangle], b = triangles.node2[triangle], c = triangles.node3[triangle];
+                tightMinX = Math.min(tightMinX, Math.min(nodes.posX[a], Math.min(nodes.posX[b], nodes.posX[c])));
+                tightMinY = Math.min(tightMinY, Math.min(nodes.posY[a], Math.min(nodes.posY[b], nodes.posY[c])));
+                tightMinZ = Math.min(tightMinZ, Math.min(nodes.posZ[a], Math.min(nodes.posZ[b], nodes.posZ[c])));
+                tightMaxX = Math.max(tightMaxX, Math.max(nodes.posX[a], Math.max(nodes.posX[b], nodes.posX[c])));
+                tightMaxY = Math.max(tightMaxY, Math.max(nodes.posY[a], Math.max(nodes.posY[b], nodes.posY[c])));
+                tightMaxZ = Math.max(tightMaxZ, Math.max(nodes.posZ[a], Math.max(nodes.posZ[b], nodes.posZ[c])));
+            }
+            if (triangleMeshletEnd(meshlet) - triangleMeshletStart(meshlet) > 1
+                    && tightMinX != Double.POSITIVE_INFINITY) {
+                double ratio = aabbSpan(tightMinX, tightMinY, tightMinZ, tightMaxX, tightMaxY, tightMaxZ)
+                        / meshletReferenceSpan[meshlet];
+                maxMeshletSpanRatio = Math.max(maxMeshletSpanRatio, ratio);
+                if (ratio > SPAN_WARNING_RATIO) stretchedMeshletCount++;
             }
         }
         refitMeshletBoundsNanos = System.nanoTime() - stageStarted;
@@ -209,6 +262,12 @@ final class CollisionChunkIndex {
     int triangleMeshletEnd(int meshlet) { return triangleMeshletStart[meshlet + 1]; }
     int triangleAt(int member) { return triangleMembers[member]; }
     int triangleMeshletPartId(int meshlet) { return triangleMeshletPartId[meshlet]; }
+    int regroupableNodeChunkCount() { return regroupableNodeChunkCount; }
+    int regroupableMeshletCount() { return regroupableMeshletCount; }
+    int stretchedNodeChunkCount() { return stretchedNodeChunkCount; }
+    int stretchedMeshletCount() { return stretchedMeshletCount; }
+    double maxNodeChunkSpanRatio() { return maxNodeChunkSpanRatio; }
+    double maxMeshletSpanRatio() { return maxMeshletSpanRatio; }
 
     boolean sameKnownPart(int meshlet, CollisionChunkIndex nodes, int nodeChunk) {
         int partId = triangleMeshletPartId[meshlet];
@@ -370,6 +429,56 @@ final class CollisionChunkIndex {
                     : vehicle.nodes.partId[primitive];
         }
         return result;
+    }
+
+    private double[] buildNodeChunkReferenceSpans() {
+        double[] spans = new double[nodeChunkCount()];
+        NodeContainer nodes = vehicle.nodes;
+        for (int chunk = 0; chunk < nodeChunkCount(); chunk++) {
+            double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+            double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+            for (int member = nodeChunkStart[chunk]; member < nodeChunkStart[chunk + 1]; member++) {
+                int node = nodeMembers[member];
+                minX = Math.min(minX, nodes.baseX[node]);
+                minY = Math.min(minY, nodes.baseY[node]);
+                minZ = Math.min(minZ, nodes.baseZ[node]);
+                maxX = Math.max(maxX, nodes.baseX[node]);
+                maxY = Math.max(maxY, nodes.baseY[node]);
+                maxZ = Math.max(maxZ, nodes.baseZ[node]);
+            }
+            spans[chunk] = aabbSpan(minX, minY, minZ, maxX, maxY, maxZ);
+        }
+        return spans;
+    }
+
+    private double[] buildMeshletReferenceSpans() {
+        double[] spans = new double[triangleMeshletCount()];
+        NodeContainer nodes = vehicle.nodes;
+        TriangleContainer triangles = vehicle.triangles;
+        for (int meshlet = 0; meshlet < triangleMeshletCount(); meshlet++) {
+            double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+            double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+            for (int member = triangleMeshletStart[meshlet]; member < triangleMeshletStart[meshlet + 1]; member++) {
+                int triangle = triangleMembers[member];
+                int a = triangles.node1[triangle], b = triangles.node2[triangle], c = triangles.node3[triangle];
+                minX = Math.min(minX, Math.min(nodes.baseX[a], Math.min(nodes.baseX[b], nodes.baseX[c])));
+                minY = Math.min(minY, Math.min(nodes.baseY[a], Math.min(nodes.baseY[b], nodes.baseY[c])));
+                minZ = Math.min(minZ, Math.min(nodes.baseZ[a], Math.min(nodes.baseZ[b], nodes.baseZ[c])));
+                maxX = Math.max(maxX, Math.max(nodes.baseX[a], Math.max(nodes.baseX[b], nodes.baseX[c])));
+                maxY = Math.max(maxY, Math.max(nodes.baseY[a], Math.max(nodes.baseY[b], nodes.baseY[c])));
+                maxZ = Math.max(maxZ, Math.max(nodes.baseZ[a], Math.max(nodes.baseZ[b], nodes.baseZ[c])));
+            }
+            spans[meshlet] = aabbSpan(minX, minY, minZ, maxX, maxY, maxZ);
+        }
+        return spans;
+    }
+
+    private static double aabbSpan(double minX, double minY, double minZ,
+                                   double maxX, double maxY, double maxZ) {
+        double x = maxX - minX;
+        double y = maxY - minY;
+        double z = maxZ - minZ;
+        return Math.max(SPAN_FLOOR, Math.sqrt(x * x + y * y + z * z));
     }
 
     private void rebuildNodeChunkSap() {
@@ -616,6 +725,14 @@ final class CollisionChunkIndex {
         int[] result = new int[leaves.size() + 1];
         for (int i = 0; i < leaves.size(); i++) result[i + 1] = result[i] + leaves.get(i).length;
         return result;
+    }
+
+    private static int countMultiMemberLeaves(List<int[]> leaves) {
+        int count = 0;
+        for (int[] leaf : leaves) {
+            if (leaf.length > 1) count++;
+        }
+        return count;
     }
 
     private void includeNodeBounds(double[] minX, double[] minY, double[] minZ,

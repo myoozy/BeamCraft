@@ -942,3 +942,20 @@ This experiment intentionally does not handle separation inside one part, such
 as a breakgroup or arbitrary beam failure. Runtime AABB inflation detection and
 scheduled regrouping remain a separate follow-up so the cost and value of this
 static refinement can be measured independently.
+
+### Regroupable-leaf span telemetry
+
+Before adding runtime regrouping, the chunk index now records diagnostic-only
+span growth relative to the vehicle's spawn geometry. It compares the diagonal
+of each leaf's current tight AABB with its reference diagonal, using twice the
+soft broadphase margin as the minimum span. The tight current bounds exclude
+previous-to-future prediction, and singleton node chunks or one-triangle
+meshlets are excluded because regrouping cannot improve them. The HUD reports
+eligible node chunks and triangle meshlets above 2x reference span together
+with eligible counts and maximum ratios.
+
+The measurement is folded into the existing refit loops and does not rebuild,
+drop, or change any collision primitive. Rigid rotation can still change an
+axis-aligned diagonal somewhat, so the counter is a signal rather than proof
+that a leaf must be split. It should first establish whether large internal
+separation occurs often enough to justify a scheduled-regrouping experiment.

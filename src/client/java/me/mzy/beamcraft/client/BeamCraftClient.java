@@ -54,7 +54,7 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[54];
+	public static double[] lastPhysicsMsDetail = new double[60];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
 	private static final int[] ROLLING_TIMING_INDICES = {
 			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53
@@ -245,6 +245,10 @@ public class BeamCraftClient implements ClientModInitializer {
 					timingBreakdown("refit node/chunk/coarseSAP", 42, 43, 44),
 					timingBreakdown("refit localSAP/triangle/meshlet", 45, 46, 47),
 					timingBreakdown("localSAP key/sort/prefix", 48, 49, 50),
+					String.format("chunk span >2x eligible node/meshlet: %.0f/%.0f / %.0f/%.0f | max: %.2fx / %.2fx",
+							lastPhysicsMsDetail[55], lastPhysicsMsDetail[54],
+							lastPhysicsMsDetail[58], lastPhysicsMsDetail[57],
+							lastPhysicsMsDetail[56], lastPhysicsMsDetail[59]),
 					timingSummary("candidate+color", 4),
 					timingSummary("candidate wall", 9),
 					String.format("candidate tasks: %.0f | %s", lastPhysicsMsDetail[51],
