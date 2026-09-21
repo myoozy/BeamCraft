@@ -583,32 +583,44 @@ roughly 8,712 tested chunk pairs, 1,456 overlaps, 12,608 complete fine AABB
 tests, and 4,457 passes. Candidate generation is therefore the dominant
 broadphase stage even after refit sorting became cheap.
 
-The current code calls `activeVehicles.parallelStream()` and assigns one
-candidate-generation task per triangle vehicle. With two vehicles this exposes
-only two large tasks. Every accepted candidate also calls
-`SoftBodyCollisionManager.addContact`, whose shared `AtomicInteger` reserves a
-global output slot. Splitting the same loop into more tasks without changing
-output ownership would increase atomic contention and scheduling overhead.
+The previous code called `activeVehicles.parallelStream()` and assigned one
+candidate-generation task per triangle vehicle. With two vehicles this exposed
+only two large tasks. Every accepted candidate also called
+`SoftBodyCollisionManager.addContact`, whose shared `AtomicInteger` reserved a
+global output slot.
 
-The preferred parallel form is deterministic buffered generation:
+The implemented parallel form is deterministic buffered generation:
 
 1. Build tasks from directed vehicle-pair meshlet ranges, or from dirty
    meshlet/node-chunk pair ranges in the two-rate design.
 2. Each task writes contacts and counters into an exclusive reusable buffer;
    it performs no atomic increment per contact.
-3. After the parallel join, compute a prefix sum of task counts, clamp once to
-   global capacity, and copy buffers into the manager's SoA arrays.
+3. After the parallel join, clamp each task in stable order to the remaining
+   global capacity and bulk-copy its buffer into the manager's SoA arrays.
 4. Merge tasks in stable range order so overflow behavior and solver ordering
    remain reproducible.
 5. Run small workloads sequentially; create multiple tasks only above a measured
    meshlet/pair threshold.
 
-This can use more cores than vehicle-level parallelism and removes the current
-per-contact atomic. It needs a bounded, allocation-free buffer strategy before
-implementation. A task must not reserve `MAX_CONTACTS` independently. Practical
-options are preallocated worker slices plus an overflow path, or a two-pass
-count/fill scheme if repeating the cheap portion proves faster than oversized
-buffers.
+The task buffers are retained and grow on demand, so steady-state generation is
+allocation-free and performs no per-contact atomic operation. They are capped
+at `MAX_CONTACTS`; the stable merge enforces the global limit.
+
+The same two-vehicle overlap scene was tested with several meshlet ranges per
+task. `work` includes task setup and parallel candidate generation; `merge` is
+the sequential bulk copy and statistics reduction:
+
+| Meshlets/task | Tasks | Candidate work avg | Merge avg | Candidate wall avg |
+|---:|---:|---:|---:|---:|
+| 16 | 14 | 2.94 ms | 0.07 ms | 3.01 ms |
+| 8 | 26 | 2.30 ms | 0.10 ms | 2.40 ms |
+| 4 | 52 | 1.96 ms | 0.14 ms | 2.10 ms |
+
+Four meshlets per task is the current measured default. Finer ranges improved
+load balance enough to outweigh scheduling and merge overhead. Relative to the
+5.36 ms vehicle-task baseline, candidate wall fell by about 61%. Merge remains
+small; the remaining cost is candidate computation and task imbalance, not
+contact output.
 
 Reducing computation is preferable to parallelizing it. Priorities are:
 
@@ -676,9 +688,11 @@ The direct chunk, hierarchical SAP, joint-sweep, adaptive-axis, bounded-SAH,
 and refit-order experiments have now been measured. The next work should avoid
 another broad rewrite and proceed in this order:
 
-1. Instrument candidate generation by coarse traversal, local query/full AABB,
-   topology filtering, and contact output/merge. Refit is no longer the largest
-   unknown after temporal ordering reduced it to roughly 0.65 ms.
+1. Further split candidate work into coarse traversal, local query/full AABB,
+   and topology filtering. Task work/merge instrumentation already shows that
+   merge is only about 0.14 ms at the current four-meshlet granularity. Refit is
+   no longer the largest unknown after temporal ordering reduced it to roughly
+   0.65 ms.
 2. Precompute unique referenced-node lists per meshlet and node-to-meshlet
    reverse adjacency, prerequisites for cheap coarse bounds and local cache
    invalidation.
@@ -688,9 +702,8 @@ another broad rewrite and proceed in this order:
 4. Cache a conservative fine-candidate superset per chunk pair. Rebuild only
    when the pair is new, a primitive escapes its fat/swept validity bounds, or a
    fracture/regroup event invalidates membership.
-5. If dirty-pair rebuild wall time remains material, replace per-vehicle tasks
-   and atomic contact insertion with stable meshlet/pair-range tasks, reusable
-   local buffers, a prefix sum, and one deterministic merge.
+5. Reuse the implemented stable meshlet-range tasks and task-local buffers for
+   dirty-pair rebuilds; revisit granularity once the workload becomes sparse.
 6. Improve the CCD trigger so cached broadphase candidates that genuinely cross
    a face are not lost in narrow phase.
 7. Add local/event-driven regrouping for fracture-induced bound inflation.
@@ -703,8 +716,8 @@ linear scan/bookkeeping cost without improving the measured result.
 
 ## Open questions
 
-- How much of the remaining candidate wall is local binary querying and full
-  AABB work versus topology filtering, atomic output, and task imbalance?
+- How much of the remaining candidate work is local binary querying and full
+  AABB work versus topology filtering and task imbalance?
 - How many self-collision nodes and candidates exist in representative vehicles?
 - What is the distribution of collision triangle size, aspect ratio, and unique
   node reuse, especially for pressure wheels?

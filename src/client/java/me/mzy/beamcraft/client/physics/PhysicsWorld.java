@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -25,6 +26,7 @@ import java.util.stream.IntStream;
  * Manages nodes, beams, collision caching and physics integration
  */
 public class PhysicsWorld {
+    private static final int CANDIDATE_MESHLETS_PER_TASK = 4;
     private static final ExecutorService EVENT_TRACE_WRITER = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "BeamCraft physics trace writer");
         thread.setDaemon(true);
@@ -51,6 +53,10 @@ public class PhysicsWorld {
     private final PhysicsEventTrace eventTrace = new PhysicsEventTrace();
     private Path eventTraceDirectory;
     private volatile boolean eventTraceWriteInFlight;
+    private CollisionCandidateBuffer[] candidateTaskBuffers = new CollisionCandidateBuffer[0];
+    private SoftBodyVehicle[] candidateTaskVehicles = new SoftBodyVehicle[0];
+    private int[] candidateTaskMeshletStarts = new int[0];
+    private int[] candidateTaskMeshletEnds = new int[0];
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -186,6 +192,8 @@ public class PhysicsWorld {
         int broadphaseRate = 10;
         double internalForceMs = 0.0, globalSAPMs = 0.0, dyeCollisionMs = 0.0, softCollisionMs = 0.0, mcCollisionMs = 0.0;
         double candidateGenerationMs = 0.0, colorMs = 0.0;
+        double candidateParallelMs = 0.0, candidateMergeMs = 0.0;
+        int lastCandidateTaskCount = 0;
         double refitNodeBoundsMs = 0.0, refitNodeChunkBoundsMs = 0.0, refitChunkSapMs = 0.0;
         double refitLocalSapsMs = 0.0, refitTriangleBoundsMs = 0.0, refitMeshletBoundsMs = 0.0;
         double refitLocalKeyFillMs = 0.0, refitLocalSortMs = 0.0, refitLocalPrefixMs = 0.0;
@@ -257,10 +265,23 @@ public class PhysicsWorld {
                 collisionManager.clearContacts();
 
                 long candidateGenerationStarted = System.nanoTime();
-                activeVehicles.parallelStream().forEach(vehicle -> {
-                    collisionPipeline.generateChunkCollisionCandidates(vehicle, activeVehicles);
-                });
+                int candidateTaskCount = configureCandidateTasks(activeVehicles);
+                IntStream.range(0, candidateTaskCount).parallel().forEach(task ->
+                        collisionPipeline.generateChunkCollisionCandidates(
+                                candidateTaskVehicles[task], activeVehicles,
+                                candidateTaskMeshletStarts[task], candidateTaskMeshletEnds[task],
+                                candidateTaskBuffers[task]));
+                long candidateParallelFinished = System.nanoTime();
+                for (int task = 0; task < candidateTaskCount; task++) {
+                    CollisionCandidateBuffer buffer = candidateTaskBuffers[task];
+                    int stored = collisionManager.appendContacts(buffer);
+                    collisionPipeline.applyCandidateStats(
+                            buffer, stored, buffer.dropped + buffer.count - stored);
+                }
                 long candidateGenerationFinished = System.nanoTime();
+                candidateParallelMs += (candidateParallelFinished - candidateGenerationStarted) / 1_000_000.0;
+                candidateMergeMs += (candidateGenerationFinished - candidateParallelFinished) / 1_000_000.0;
+                lastCandidateTaskCount = candidateTaskCount;
                 substepCandidateNs = candidateGenerationFinished - candidateGenerationStarted;
                 candidateGenerationMs += substepCandidateNs / 1_000_000.0;
 
@@ -358,7 +379,7 @@ public class PhysicsWorld {
         long t4 = System.nanoTime();
         double postUpdateMs = (t4 - t3) / 1_000_000.0;
 
-        double[] timings = new double[51];
+        double[] timings = new double[54];
         timings[1] = preparedStep.mcWorldScanMs();
         timings[2] = internalForceMs;
         timings[3] = globalSAPMs;
@@ -388,6 +409,9 @@ public class PhysicsWorld {
         timings[48] = refitLocalKeyFillMs;
         timings[49] = refitLocalSortMs;
         timings[50] = refitLocalPrefixMs;
+        timings[51] = lastCandidateTaskCount;
+        timings[52] = candidateParallelMs;
+        timings[53] = candidateMergeMs;
         timings[19] = collisionManager.activeBatchCount;
         int largestBatch = 0;
         for (int batch = 0; batch < collisionManager.activeBatchCount; batch++) {
@@ -446,6 +470,43 @@ public class PhysicsWorld {
                 eventTraceWriteInFlight = false;
             }
         });
+    }
+
+    private int configureCandidateTasks(List<SoftBodyVehicle> activeVehicles) {
+        int taskCount = 0;
+        for (SoftBodyVehicle vehicle : activeVehicles) {
+            CollisionPipeline.clearCandidateStats(vehicle);
+            int meshletCount = vehicle.collisionChunks.triangleMeshletCount();
+            taskCount += (meshletCount + CANDIDATE_MESHLETS_PER_TASK - 1)
+                    / CANDIDATE_MESHLETS_PER_TASK;
+        }
+        ensureCandidateTaskCapacity(taskCount);
+
+        int task = 0;
+        for (SoftBodyVehicle vehicle : activeVehicles) {
+            int meshletCount = vehicle.collisionChunks.triangleMeshletCount();
+            for (int start = 0; start < meshletCount; start += CANDIDATE_MESHLETS_PER_TASK) {
+                candidateTaskVehicles[task] = vehicle;
+                candidateTaskMeshletStarts[task] = start;
+                candidateTaskMeshletEnds[task] = Math.min(meshletCount,
+                        start + CANDIDATE_MESHLETS_PER_TASK);
+                task++;
+            }
+        }
+        return taskCount;
+    }
+
+    private void ensureCandidateTaskCapacity(int required) {
+        if (required <= candidateTaskBuffers.length) return;
+        int oldCapacity = candidateTaskBuffers.length;
+        int capacity = Math.max(required, Math.max(8, oldCapacity << 1));
+        candidateTaskBuffers = Arrays.copyOf(candidateTaskBuffers, capacity);
+        candidateTaskVehicles = Arrays.copyOf(candidateTaskVehicles, capacity);
+        candidateTaskMeshletStarts = Arrays.copyOf(candidateTaskMeshletStarts, capacity);
+        candidateTaskMeshletEnds = Arrays.copyOf(candidateTaskMeshletEnds, capacity);
+        for (int task = oldCapacity; task < capacity; task++) {
+            candidateTaskBuffers[task] = new CollisionCandidateBuffer();
+        }
     }
 
     /**

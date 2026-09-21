@@ -76,6 +76,23 @@ public class SoftBodyCollisionManager {
         return true;
     }
 
+    /** Appends one completed task buffer without per-contact atomic operations. */
+    int appendContacts(CollisionCandidateBuffer source) {
+        int base = contactCount.get();
+        int stored = Math.min(source.count, MAX_CONTACTS - base);
+        if (stored <= 0) return 0;
+
+        System.arraycopy(source.nodeVehicles, 0, contactNodeVeh, base, stored);
+        System.arraycopy(source.nodeIds, 0, contactNodeId, base, stored);
+        System.arraycopy(source.triangleVehicles, 0, contactTriVeh, base, stored);
+        System.arraycopy(source.triangleA, 0, contactTriA, base, stored);
+        System.arraycopy(source.triangleB, 0, contactTriB, base, stored);
+        System.arraycopy(source.triangleC, 0, contactTriC, base, stored);
+        Arrays.fill(separationSlack, base, base + stored, 0.0f);
+        contactCount.set(base + stored);
+        return stored;
+    }
+
     boolean separationCertificateStillValid(int contactId,
                                             float pax, float pay, float paz,
                                             float bax, float bay, float baz,

@@ -54,10 +54,10 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[51];
+	public static double[] lastPhysicsMsDetail = new double[54];
 	private static final int PHYSICS_TIMING_WINDOW = 100;
 	private static final int[] ROLLING_TIMING_INDICES = {
-			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53
 	};
 	private static final double[][] ROLLING_TIMING_SAMPLES =
 			new double[ROLLING_TIMING_INDICES.length][PHYSICS_TIMING_WINDOW];
@@ -247,6 +247,8 @@ public class BeamCraftClient implements ClientModInitializer {
 					timingBreakdown("localSAP key/sort/prefix", 48, 49, 50),
 					timingSummary("candidate+color", 4),
 					timingSummary("candidate wall", 9),
+					String.format("candidate tasks: %.0f | %s", lastPhysicsMsDetail[51],
+							timingPair("work/merge", 52, 53)),
 					timingSummary("color", 12),
 					String.format("last fine AABB hits/stored/dropped: %.0f / %.0f / %.0f",
 							lastPhysicsMsDetail[13], lastPhysicsMsDetail[14], lastPhysicsMsDetail[15]),
@@ -514,6 +516,12 @@ public class BeamCraftClient implements ClientModInitializer {
 				lastPhysicsMsDetail[first], rollingAverage(rollingMetricForTimingIndex(first)),
 				lastPhysicsMsDetail[second], rollingAverage(rollingMetricForTimingIndex(second)),
 				lastPhysicsMsDetail[third], rollingAverage(rollingMetricForTimingIndex(third)));
+	}
+
+	private static String timingPair(String label, int first, int second) {
+		return String.format("%s current/avg: %.2f/%.2f / %.2f/%.2f ms", label,
+				lastPhysicsMsDetail[first], rollingAverage(rollingMetricForTimingIndex(first)),
+				lastPhysicsMsDetail[second], rollingAverage(rollingMetricForTimingIndex(second)));
 	}
 
 	private static int rollingMetricForTimingIndex(int timingIndex) {

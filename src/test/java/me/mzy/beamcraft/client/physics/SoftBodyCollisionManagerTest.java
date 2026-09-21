@@ -8,6 +8,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SoftBodyCollisionManagerTest {
     @Test
+    void taskBuffersAppendInStableOrderWithoutAtomicPerContactWrites() {
+        SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
+        SoftBodyVehicle nodeVehicle = vehicleAtOffset(0);
+        SoftBodyVehicle triangleVehicle = vehicleAtOffset(1_000);
+        CollisionCandidateBuffer first = new CollisionCandidateBuffer();
+        CollisionCandidateBuffer second = new CollisionCandidateBuffer();
+
+        first.reset(triangleVehicle);
+        first.add(nodeVehicle, 7, triangleVehicle, 10, 11, 12);
+        first.add(nodeVehicle, 8, triangleVehicle, 20, 21, 22);
+        second.reset(triangleVehicle);
+        second.add(nodeVehicle, 9, triangleVehicle, 30, 31, 32);
+
+        assertEquals(2, manager.appendContacts(first));
+        assertEquals(1, manager.appendContacts(second));
+        assertEquals(3, manager.contactCount.get());
+        assertEquals(7, manager.contactNodeId[0]);
+        assertEquals(8, manager.contactNodeId[1]);
+        assertEquals(9, manager.contactNodeId[2]);
+        assertEquals(10, manager.contactTriA[0]);
+        assertEquals(20, manager.contactTriA[1]);
+        assertEquals(30, manager.contactTriA[2]);
+    }
+
+    @Test
     void greedyColoringReusesLowestNonConflictingBatch() {
         SoftBodyCollisionManager manager = new SoftBodyCollisionManager();
         SoftBodyVehicle nodeVehicle = vehicleAtOffset(0);
