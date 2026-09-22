@@ -220,11 +220,40 @@ final class PowertrainSpecNormalizer {
             RigidValues values = modifyRigid(d.gearRatio(), d.friction(), d.dynamicFriction(),
                     d.torqueLossCoef(), modifier);
             double split = d.diffTorqueSplit();
-            if ("diffTorqueSplit".equals(key)) split = modify(split, modifier);
-            else if (values == null) return spec;
+            double lsdPreload = d.lsdPreload();
+            double lsdLockCoef = d.lsdLockCoef();
+            double lsdRevLockCoef = d.lsdRevLockCoef();
+            double viscousCoef = d.viscousCoef();
+            double viscousTorque = d.viscousTorque();
+            double viscousExponent = d.viscousExponent();
+            double viscousSmoothing = d.viscousSmoothing();
+            double lockTorque = d.lockTorque();
+            double lockSpring = d.lockSpring();
+            double lockDampRatio = d.lockDampRatio();
+            double activeLockTorque = d.activeLockTorque();
+            boolean changed = values != null;
+            switch (key) {
+                case "diffTorqueSplit" -> { split = modify(split, modifier); changed = true; }
+                case "lsdPreload" -> { lsdPreload = modify(lsdPreload, modifier); changed = true; }
+                case "lsdLockCoef" -> { lsdLockCoef = modify(lsdLockCoef, modifier); changed = true; }
+                case "lsdRevLockCoef" -> { lsdRevLockCoef = modify(lsdRevLockCoef, modifier); changed = true; }
+                case "viscousCoef" -> { viscousCoef = modify(viscousCoef, modifier); changed = true; }
+                case "viscousTorque" -> { viscousTorque = modify(viscousTorque, modifier); changed = true; }
+                case "viscousExponent" -> { viscousExponent = modify(viscousExponent, modifier); changed = true; }
+                case "viscousSmoothing" -> { viscousSmoothing = modify(viscousSmoothing, modifier); changed = true; }
+                case "lockTorque" -> { lockTorque = modify(lockTorque, modifier); changed = true; }
+                case "lockSpring" -> { lockSpring = modify(lockSpring, modifier); changed = true; }
+                case "lockDampRatio" -> { lockDampRatio = modify(lockDampRatio, modifier); changed = true; }
+                case "activeLockTorque" -> { activeLockTorque = modify(activeLockTorque, modifier); changed = true; }
+                default -> { }
+            }
+            if (!changed) return spec;
             if (values == null) values = new RigidValues(d.gearRatio(), d.friction(), d.dynamicFriction(), d.torqueLossCoef());
             return new DifferentialSpec(d.type(), d.name(), d.inputName(), d.inputIndex(), values.ratio, split,
-                    values.friction, values.dynamicFriction, values.torqueLossCoef, d.diffType(), List.of());
+                    values.friction, values.dynamicFriction, values.torqueLossCoef,
+                    d.diffType(), d.availableModes(), lsdPreload, lsdLockCoef, lsdRevLockCoef,
+                    viscousCoef, viscousTorque, viscousExponent, viscousSmoothing,
+                    lockTorque, lockSpring, lockDampRatio, activeLockTorque, List.of());
         }
         return spec;
     }

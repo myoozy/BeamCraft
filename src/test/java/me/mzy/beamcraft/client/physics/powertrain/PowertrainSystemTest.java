@@ -13,6 +13,42 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PowertrainSystemTest {
     @Test
+    void differentialCompilesTwoCouplingDomainsAndExposesActiveLockInterface() {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.wheels.count = 2;
+        vehicle.wheels.nameToIndex.put("L", 0);
+        vehicle.wheels.nameToIndex.put("R", 1);
+        PowertrainSystem system = vehicle.powertrain;
+        system.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 800, 6000, 1, 0.01, 2,
+                        List.of(new TorquePoint(1000, 100)), List.of(), List.of()),
+                new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
+                        300, 1000, 1, 0.2, 0.125, 1, List.of()),
+                new DifferentialSpec("differential", "diff", "clutch", 1,
+                        4.0, 0.5, 0, 0, 0,
+                        "lsd", List.of("lsd", "locked", "activeLock"),
+                        80, 0.3, 0.1, 5, 50, 1, 25,
+                        900, 7200, 0.1, 700, List.of()),
+                new ShaftSpec("shaft", "left", "diff", 1, 1, "L", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "right", "diff", 2, 1, "R", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+
+        system.finalizeSetup();
+
+        assertEquals(1, system.differentials.count);
+        assertEquals(1, system.differentials.output1PathCount[0]);
+        assertEquals(1, system.differentials.output2PathCount[0]);
+        assertEquals(DifferentialContainer.MODE_LSD, system.differentials.activeMode[0]);
+        system.setDifferentialMode("diff", "locked");
+        system.setDifferentialActiveLock("diff", 0.75f);
+        assertEquals(DifferentialContainer.MODE_LOCKED, system.differentials.activeMode[0]);
+        assertEquals(0.75f, system.differentials.activeLockCoef[0], 1.0e-6f);
+    }
+
+    @Test
     void dctIsOneClutchlikeGearboxNodeWithLinearManualHandoffs() {
         SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
         vehicle.wheels.count = 2;

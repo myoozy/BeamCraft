@@ -206,6 +206,41 @@ class PowertrainSolveTest {
     // ---------------------------------------------------------------- regression tests
 
     @Test
+    void lsdCouplingReducesARealWheelSpeedDifference() {
+        SoftBodyVehicle vehicle = sunburstLikeVehicle();
+        vehicle.powertrain.addSpecs(List.of(
+                new CombustionEngineSpec("combustionEngine", "engine", "dummy", 1,
+                        0.2, 0, 6000, 0, 0, 0,
+                        List.of(new TorquePoint(0, 0), new TorquePoint(6000, 0)), List.of(), List.of()),
+                new FrictionClutchSpec("frictionClutch", "clutch", "engine", 1,
+                        500, 4000, 1, 0.1, 0.125, 1, List.of()),
+                new DifferentialSpec("differential", "diff", "clutch", 1,
+                        1, 0.5, 0, 0, 0,
+                        "lsd", List.of("lsd"), 250, 0, 0,
+                        5, 50, 1, 25, 500, 4000, 0.1, 500, List.of()),
+                new ShaftSpec("shaft", "left", "diff", 1, 1, "FL", 0, 0, 0,
+                        List.of(), List.of(), List.of()),
+                new ShaftSpec("shaft", "right", "diff", 2, 1, "FR", 0, 0, 0,
+                        List.of(), List.of(), List.of())
+        ));
+        vehicle.powertrain.finalizeSetup();
+        spinWheel(vehicle, 0, 30.0f);
+        spinWheel(vehicle, 1, 0.0f);
+        float initialDifference = Math.abs(vehicle.wheels.getAngularVelocity(0)
+                - vehicle.wheels.getAngularVelocity(1));
+
+        for (int step = 0; step < 400; step++) {
+            vehicle.powertrain.solve(DT);
+            integrate(vehicle, DT);
+        }
+
+        float finalDifference = Math.abs(vehicle.wheels.getAngularVelocity(0)
+                - vehicle.wheels.getAngularVelocity(1));
+        assertTrue(finalDifference < initialDifference * 0.5f,
+                "the compiled LSD must transfer torque from the faster wheel domain to the slower one");
+    }
+
+    @Test
     void fullThrottleWithSlippingClutchProducesCombustionTorqueAndRevvesEngine() {
         SoftBodyVehicle vehicle = sunburstLikeVehicle();
         addSunburstPowertrain(vehicle);

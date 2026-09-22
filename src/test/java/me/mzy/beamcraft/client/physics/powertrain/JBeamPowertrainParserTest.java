@@ -434,6 +434,38 @@ class JBeamPowertrainParserTest {
     }
 
     @Test
+    void differentialParsesModesAndLimitedSlipParameters() {
+        List<DeviceSpec> specs = parse("""
+                {
+                  "powertrain": [
+                    ["type","name","inputName","inputIndex"],
+                    ["differential","diff_R","driveshaft",1]
+                  ],
+                  "diff_R": {
+                    "diffType": ["lsd","locked"],
+                    "lsdPreload": 80,
+                    "lsdLockCoef": 0.35,
+                    "lsdRevLockCoef": 0.12,
+                    "viscousCoef": 7,
+                    "viscousTorque": 150,
+                    "lockTorque": 900,
+                    "activeLockTorque": 700
+                  }
+                }
+                """);
+
+        DifferentialSpec diff = assertInstanceOf(DifferentialSpec.class, specs.get(0));
+        assertEquals("lsd", diff.diffType());
+        assertEquals(List.of("lsd", "locked"), diff.availableModes());
+        assertEquals(80.0, diff.lsdPreload(), 1.0e-6);
+        assertEquals(0.35, diff.lsdLockCoef(), 1.0e-6);
+        assertEquals(0.12, diff.lsdRevLockCoef(), 1.0e-6);
+        assertEquals(150.0, diff.viscousTorque(), 1.0e-6);
+        assertEquals(900.0, diff.lockTorque(), 1.0e-6);
+        assertEquals(700.0, diff.activeLockTorque(), 1.0e-6);
+    }
+
+    @Test
     void combustionEngineParsesTorqueCurveAndReactionNodes() {
         List<DeviceSpec> specs = parse("""
                 {

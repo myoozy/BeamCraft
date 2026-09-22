@@ -447,6 +447,9 @@ public final class JBeamPowertrainParser {
 
     private static DifferentialSpec differential(String type, String name, String inputName, int inputIndex,
                                                 JsonObject cfg, Map<String, Double> vars) {
+        List<String> modes = stringModes(cfg, "diffType", "open");
+        double viscousCoef = d(cfg, "viscousCoef", 5.0, vars);
+        double lockTorque = d(cfg, "lockTorque", 500.0, vars);
         return new DifferentialSpec(
                 type, name, inputName, inputIndex,
                 d(cfg, "gearRatio", 1.0, vars),
@@ -454,7 +457,19 @@ public final class JBeamPowertrainParser {
                 d(cfg, "friction", 0.0, vars),
                 d(cfg, "dynamicFriction", 0.0, vars),
                 d(cfg, "torqueLossCoef", 0.0, vars),
-                s(cfg, "diffType", "open"),
+                modes.getFirst(),
+                modes,
+                d(cfg, "lsdPreload", 50.0, vars),
+                d(cfg, "lsdLockCoef", 0.2, vars),
+                d(cfg, "lsdRevLockCoef", d(cfg, "lsdLockCoef", 0.2, vars), vars),
+                viscousCoef,
+                d(cfg, "viscousTorque", viscousCoef * 10.0, vars),
+                d(cfg, "viscousExponent", 1.0, vars),
+                d(cfg, "viscousSmoothing", 25.0, vars),
+                lockTorque,
+                d(cfg, "lockSpring", -1.0, vars),
+                d(cfg, "lockDampRatio", 0.1, vars),
+                d(cfg, "activeLockTorque", lockTorque, vars),
                 valueModifiers(cfg, vars)
         );
     }
@@ -496,6 +511,23 @@ public final class JBeamPowertrainParser {
 
     private static String s(JsonObject cfg, String key, String def) {
         return JBeamParser.getStringSafe(cfg, key, def);
+    }
+
+    private static List<String> stringModes(JsonObject cfg, String key, String def) {
+        JsonElement value = cfg.get(key);
+        if (value == null || value.isJsonNull()) return List.of(def);
+        List<String> result = new ArrayList<>();
+        if (value.isJsonArray()) {
+            for (JsonElement element : value.getAsJsonArray()) {
+                if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) continue;
+                String mode = element.getAsString();
+                if (!mode.isBlank()) result.add(mode);
+            }
+        } else if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+            String mode = value.getAsString();
+            if (!mode.isBlank()) result.add(mode);
+        }
+        return result.isEmpty() ? List.of(def) : List.copyOf(result);
     }
 
     private static boolean b(JsonObject cfg, String key, boolean def) {

@@ -26,6 +26,13 @@ Lua source carries a bCDDL 1.1 notice.
 | `CombustionEngineContainer.java`, `TurbochargerContainer.java`, `SuperchargerContainer.java` | `lua/vehicle/powertrain/combustionEngine.lua`, `turbocharger.lua`, `supercharger.lua` |
 | `ClutchlikeContainer.java`, `FrictionClutchContainer.java`, `TorqueConverterContainer.java`, `DctGearboxContainer.java` | `lua/vehicle/powertrain/frictionClutch.lua`, `torqueConverter.lua`, `dctGearbox.lua` |
 | `GearboxContainer.java`, `RangeBoxContainer.java`, `ShaftContainer.java`, `SplitShaftContainer.java`, `DifferentialContainer.java`, `TorsionReactorContainer.java` | `lua/vehicle/powertrain/manualGearbox.lua`, `automaticGearbox.lua`, `sequentialGearbox.lua`, `rangeBox.lua`, `shaft.lua`, `splitShaft.lua`, `differential.lua`, `torsionReactor.lua` |
+| `DifferentialSolver.java`, `DifferentialSolverTest.java` | `lua/vehicle/powertrain/differential.lua`; passive LSD, viscous, locked and active-lock constitutive behavior |
+
+`DifferentialSolver.java` also uses the no-slip impulse bound and reduced-inertia
+idea from the maintainer's MIT-licensed KinetiForgeVehicles
+`Source/KinetiForge/Private/VehicleDifferentialComponent.cpp` (copyright Zhengyi
+Miao). BeamCraft combines that stability bound with the bCDDL differential
+behavior instead of copying KinetiForge's direct synchronization model.
 
 The following powertrain files are kept as independently implemented BeamCraft
 numerical/structural work under MIT: `ImplicitCouplingSolver.java`,

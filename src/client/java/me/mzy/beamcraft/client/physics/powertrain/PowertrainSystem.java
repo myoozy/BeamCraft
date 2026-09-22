@@ -211,6 +211,29 @@ public final class PowertrainSystem {
         }
     }
 
+    /** Selects one of the modes declared by a named differential's {@code diffType}. */
+    public void setDifferentialMode(String deviceName, String mode) {
+        byte resolved = DifferentialSolver.mode(mode);
+        if (resolved < 0) return;
+        int modeBit = 1 << resolved;
+        for (int differential = 0; differential < differentials.count; differential++) {
+            if (!differentials.deviceName[differential].equals(deviceName)) continue;
+            if ((differentials.availableModes[differential] & modeBit) == 0) continue;
+            differentials.activeMode[differential] = resolved;
+            DifferentialSolver.clear(differentials, differential);
+        }
+    }
+
+    /** Commands an active differential clutch; controllers may call this with a 0..1 ratio. */
+    public void setDifferentialActiveLock(String deviceName, float ratio) {
+        float clamped = Math.clamp(ratio, 0.0f, 1.0f);
+        for (int differential = 0; differential < differentials.count; differential++) {
+            if (differentials.deviceName[differential].equals(deviceName)) {
+                differentials.activeLockCoef[differential] = clamped;
+            }
+        }
+    }
+
     /** Writes the default BeamNG-compatible torque-converter lock-up command (0 = open, 1 = locked). */
     public void setTorqueConverterLockup(float ratio) {
         vehicle.electrics.set(defaultLockupSignalId, Math.clamp(ratio, 0.0f, 1.0f));
@@ -429,6 +452,67 @@ public final class PowertrainSystem {
                     float gain = adjustedPathGain(splitShafts.pathGain[p], splitShafts.pathFlags[p],
                             gearboxFactor, rangeFactor);
                     vehicle.wheels.applyDriveTorqueAndReaction(splitShafts.pathWheel[p], splitTorque * gain);
+                }
+            }
+
+            // A differential's ordinary drive torque is already distributed by the rigid
+            // wheel paths. This pass adds only the equal-and-opposite limited-slip torque.
+            int differentialEnd = differentials.unitStart[unit] + differentials.unitCount[unit];
+            for (int differential = differentials.unitStart[unit];
+                 differential < differentialEnd; differential++) {
+                float outputAV1 = 0.0f;
+                float outputCompliance1 = 0.0f;
+                int output1End = differentials.output1PathStart[differential]
+                        + differentials.output1PathCount[differential];
+                for (int p = differentials.output1PathStart[differential]; p < output1End; p++) {
+                    int wheel = differentials.pathWheel[p];
+                    float gain = adjustedPathGain(differentials.pathGain[p], differentials.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    outputAV1 += gain * vehicle.wheels.getAngularVelocity(wheel);
+                    float inertia = vehicle.wheels.getRotationalInertia(wheel);
+                    if (inertia > 1.0e-7f) outputCompliance1 += gain * gain / inertia;
+                }
+                float outputAV2 = 0.0f;
+                float outputCompliance2 = 0.0f;
+                int output2End = differentials.output2PathStart[differential]
+                        + differentials.output2PathCount[differential];
+                for (int p = differentials.output2PathStart[differential]; p < output2End; p++) {
+                    int wheel = differentials.pathWheel[p];
+                    float gain = adjustedPathGain(differentials.pathGain[p], differentials.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    outputAV2 += gain * vehicle.wheels.getAngularVelocity(wheel);
+                    float inertia = vehicle.wheels.getRotationalInertia(wheel);
+                    if (inertia > 1.0e-7f) outputCompliance2 += gain * gain / inertia;
+                }
+                if (outputCompliance1 <= 1.0e-9f || outputCompliance2 <= 1.0e-9f) {
+                    DifferentialSolver.clear(differentials, differential);
+                    continue;
+                }
+
+                float differentialInputTorque = 0.0f;
+                int termEnd = differentials.inputTermStart[differential]
+                        + differentials.inputTermCount[differential];
+                for (int term = differentials.inputTermStart[differential]; term < termEnd; term++) {
+                    int sourceSplit = differentials.termSplit[term];
+                    float sourceTorque = sourceSplit < 0
+                            ? couplerOutputTorque : splitOutputTorque(sourceSplit);
+                    float gain = adjustedPathGain(differentials.termGain[term],
+                            differentials.termFlags[term], isDct ? 1.0f : gearboxFactor, rangeFactor);
+                    differentialInputTorque += sourceTorque * gain;
+                }
+                float lockTorque = DifferentialSolver.solve(
+                        dt, outputAV1, outputAV2,
+                        1.0f / outputCompliance1, 1.0f / outputCompliance2,
+                        differentialInputTorque, differentials, differential);
+                for (int p = differentials.output1PathStart[differential]; p < output1End; p++) {
+                    float gain = adjustedPathGain(differentials.pathGain[p], differentials.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    vehicle.wheels.applyDriveTorqueAndReaction(differentials.pathWheel[p], -lockTorque * gain);
+                }
+                for (int p = differentials.output2PathStart[differential]; p < output2End; p++) {
+                    float gain = adjustedPathGain(differentials.pathGain[p], differentials.pathFlags[p],
+                            gearboxFactor, rangeFactor);
+                    vehicle.wheels.applyDriveTorqueAndReaction(differentials.pathWheel[p], lockTorque * gain);
                 }
             }
             if (engines.engineAV[unit] < 0.0f) engines.engineAV[unit] = 0.0f;
@@ -1013,6 +1097,11 @@ public final class PowertrainSystem {
             SplitShaftSolver.clear(splitShafts, split);
             splitShafts.activeMode[split] = splitShafts.initialMode[split];
             splitShafts.clutchRatio[split] = splitShafts.defaultClutchRatio[split];
+        }
+        for (int differential = 0; differential < differentials.count; differential++) {
+            DifferentialSolver.clear(differentials, differential);
+            differentials.activeMode[differential] = differentials.initialMode[differential];
+            differentials.activeLockCoef[differential] = 0.0f;
         }
         lastShiftUpEvent = 0L;
         lastShiftDownEvent = 0L;
