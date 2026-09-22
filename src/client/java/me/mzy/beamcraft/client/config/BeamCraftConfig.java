@@ -26,11 +26,17 @@ public final class BeamCraftConfig {
 
     public Conflict conflict = new Conflict();
     public Input input = new Input();
+    public Diagnostics diagnostics = new Diagnostics();
 
     public static final class Conflict {
         public boolean notify = false;
         /** One of {@code newer}, {@code later-root}, or {@code earlier-root}. */
         public String strategy = "later-root";
+    }
+
+    public static final class Diagnostics {
+        /** Enable the manual F8 start/stop substep trace recorder. */
+        public boolean physicsEventTrace = false;
     }
 
     /**
@@ -169,6 +175,9 @@ public final class BeamCraftConfig {
         }
         if (input == null) {
             input = new Input();
+        }
+        if (diagnostics == null) {
+            diagnostics = new Diagnostics();
         }
         return this;
     }

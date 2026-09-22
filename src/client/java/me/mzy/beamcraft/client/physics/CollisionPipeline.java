@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client.physics;
 
+import java.util.List;
 import java.util.stream.IntStream;
 
 /**
@@ -9,7 +10,7 @@ import java.util.stream.IntStream;
  * world scheduler and the per-vehicle class:
  * <ul>
  *     <li>soft-body contact candidate generation (triangle vs node, fed by the
- *     shared SAP broad-phase),</li>
+ *     active chunk broad-phase or the retained SAP implementation),</li>
  *     <li>the batched resolution of cached soft-body contacts (former
  *     {@code PhysicsWorld.solveCachedContacts}/{@code resolveSingleContact}), and</li>
  *     <li>Minecraft environment collision resolution from a {@link VoxelSnapshot}.</li>
@@ -22,6 +23,12 @@ import java.util.stream.IntStream;
  * these calls safe on the pure-physics thread.
  */
 public final class CollisionPipeline {
+    static final double SOFT_BROADPHASE_MARGIN = 0.01;
+    private static final float SOFT_CONTACT_THICKNESS = 0.01f;
+    private static final float SOFT_CONTACT_BARYCENTRIC_TOLERANCE = 0.01f;
+    static final int NARROW_STAT_BITS = 21;
+    static final long NARROW_STAT_MASK = (1L << NARROW_STAT_BITS) - 1L;
+
     private final VoxelSnapshot voxelSnapshot;
     private final DynamicAxisSweep sap;
     private final SoftBodyCollisionManager collisionManager;
@@ -41,7 +48,9 @@ public final class CollisionPipeline {
     public void generateCollisionCandidates(SoftBodyVehicle vehicle, double dtPredict) {
         double eX = vehicle.entityX, eY = vehicle.entityY, eZ = vehicle.entityZ;
 
-        double BASE_MARGIN = 0.01;
+        int sapHits = 0;
+        int stored = 0;
+        int dropped = 0;
 
         for (int i = 0; i < vehicle.triangles.count; i++) {
             if (!vehicle.triangles.collision[i] || vehicle.triangles.broken[i]) continue;
@@ -53,55 +62,72 @@ public final class CollisionPipeline {
             double ax = eX + vehicle.nodes.posX[nA], ay = eY + vehicle.nodes.posY[nA], az = eZ + vehicle.nodes.posZ[nA];
             double bx = eX + vehicle.nodes.posX[nB], by = eY + vehicle.nodes.posY[nB], bz = eZ + vehicle.nodes.posZ[nB];
             double cx = eX + vehicle.nodes.posX[nC], cy = eY + vehicle.nodes.posY[nC], cz = eZ + vehicle.nodes.posZ[nC];
+            double previousAx = eX + vehicle.nodes.prevPosX[nA];
+            double previousAy = eY + vehicle.nodes.prevPosY[nA];
+            double previousAz = eZ + vehicle.nodes.prevPosZ[nA];
+            double previousBx = eX + vehicle.nodes.prevPosX[nB];
+            double previousBy = eY + vehicle.nodes.prevPosY[nB];
+            double previousBz = eZ + vehicle.nodes.prevPosZ[nB];
+            double previousCx = eX + vehicle.nodes.prevPosX[nC];
+            double previousCy = eY + vehicle.nodes.prevPosY[nC];
+            double previousCz = eZ + vehicle.nodes.prevPosZ[nC];
 
-            double minX = Math.min(ax, Math.min(bx, cx)) - BASE_MARGIN;
-            double maxX = Math.max(ax, Math.max(bx, cx)) + BASE_MARGIN;
-            double minY = Math.min(ay, Math.min(by, cy)) - BASE_MARGIN;
-            double maxY = Math.max(ay, Math.max(by, cy)) + BASE_MARGIN;
-            double minZ = Math.min(az, Math.min(bz, cz)) - BASE_MARGIN;
-            double maxZ = Math.max(az, Math.max(bz, cz)) + BASE_MARGIN;
+            // Union the current and predicted position of every vertex. Using
+            // average triangle velocity misses rotation and deformation where
+            // one vertex sweeps much farther than the centroid.
+            double futureAx = ax + vehicle.nodes.velX[nA] * dtPredict;
+            double futureAy = ay + vehicle.nodes.velY[nA] * dtPredict;
+            double futureAz = az + vehicle.nodes.velZ[nA] * dtPredict;
+            double futureBx = bx + vehicle.nodes.velX[nB] * dtPredict;
+            double futureBy = by + vehicle.nodes.velY[nB] * dtPredict;
+            double futureBz = bz + vehicle.nodes.velZ[nB] * dtPredict;
+            double futureCx = cx + vehicle.nodes.velX[nC] * dtPredict;
+            double futureCy = cy + vehicle.nodes.velY[nC] * dtPredict;
+            double futureCz = cz + vehicle.nodes.velZ[nC] * dtPredict;
 
-            double triVx = (vehicle.nodes.velX[nA] + vehicle.nodes.velX[nB] + vehicle.nodes.velX[nC]) * 0.3333333333;
-            double triVy = (vehicle.nodes.velY[nA] + vehicle.nodes.velY[nB] + vehicle.nodes.velY[nC]) * 0.3333333333;
-            double triVz = (vehicle.nodes.velZ[nA] + vehicle.nodes.velZ[nB] + vehicle.nodes.velZ[nC]) * 0.3333333333;
-
-            double dx = triVx * dtPredict;
-            double dy = triVy * dtPredict;
-            double dz = triVz * dtPredict;
-
-            if (dx > 0) maxX += dx; else minX += dx;
-            if (dy > 0) maxY += dy; else minY += dy;
-            if (dz > 0) maxZ += dz; else minZ += dz;
+            double minX = Math.min(Math.min(previousAx, Math.min(previousBx, previousCx)), Math.min(Math.min(ax, futureAx),
+                    Math.min(Math.min(bx, futureBx), Math.min(cx, futureCx)))) - SOFT_BROADPHASE_MARGIN;
+            double maxX = Math.max(Math.max(previousAx, Math.max(previousBx, previousCx)), Math.max(Math.max(ax, futureAx),
+                    Math.max(Math.max(bx, futureBx), Math.max(cx, futureCx)))) + SOFT_BROADPHASE_MARGIN;
+            double minY = Math.min(Math.min(previousAy, Math.min(previousBy, previousCy)), Math.min(Math.min(ay, futureAy),
+                    Math.min(Math.min(by, futureBy), Math.min(cy, futureCy)))) - SOFT_BROADPHASE_MARGIN;
+            double maxY = Math.max(Math.max(previousAy, Math.max(previousBy, previousCy)), Math.max(Math.max(ay, futureAy),
+                    Math.max(Math.max(by, futureBy), Math.max(cy, futureCy)))) + SOFT_BROADPHASE_MARGIN;
+            double minZ = Math.min(Math.min(previousAz, Math.min(previousBz, previousCz)), Math.min(Math.min(az, futureAz),
+                    Math.min(Math.min(bz, futureBz), Math.min(cz, futureCz)))) - SOFT_BROADPHASE_MARGIN;
+            double maxZ = Math.max(Math.max(previousAz, Math.max(previousBz, previousCz)), Math.max(Math.max(az, futureAz),
+                    Math.max(Math.max(bz, futureBz), Math.max(cz, futureCz)))) + SOFT_BROADPHASE_MARGIN;
 
             vehicle.sweepResultBuffer.clear();
-            sap.queryNodesInAABB(minX, minY, minZ, maxX, maxY, maxZ, vehicle.sweepResultBuffer);
+            int rawHits = sap.queryCollisionNodesInAABB(
+                    minX, minY, minZ, maxX, maxY, maxZ,
+                    vehicle, nA, nB, nC, vehicle.triangles.partId[i],
+                    vehicle.sweepResultBuffer);
+            sapHits += rawHits;
 
             for (int k = 0; k < vehicle.sweepResultBuffer.count; k++) {
                 SoftBodyVehicle hitVeh = vehicle.sweepResultBuffer.vehicles[k];
                 int hitNodeId = vehicle.sweepResultBuffer.nodeIds[k];
 
-                if (hitVeh == vehicle && !vehicle.nodes.selfCollision[hitNodeId]) continue;
-                if (hitVeh == vehicle && (hitNodeId == nA || hitNodeId == nB || hitNodeId == nC)) continue;
-
-                if (hitVeh == vehicle) {
-                    int triPartId = vehicle.triangles.partId[i];
-                    if (triPartId >= 0 && triPartId < vehicle.matrixPartStride) {
-                        if (vehicle.nodeInPartMatrix[hitNodeId * vehicle.matrixPartStride + triPartId]) {
-                            continue;
-                        }
-                    }
+                if (collisionManager.addContact(hitVeh, hitNodeId, vehicle, nA, nB, nC)) {
+                    stored++;
+                } else {
+                    dropped++;
                 }
-
-                collisionManager.addContact(hitVeh, hitNodeId, vehicle, nA, nB, nC);
             }
         }
+
+        vehicle.collisionCandidateSapHits = sapHits;
+        vehicle.collisionCandidateStored = stored;
+        vehicle.collisionCandidateDropped = dropped;
     }
 
     /**
      * Resolve cached soft-body contacts batch by batch.
      */
-    public void solveSoftBodyContacts(float dt) {
+    public long solveSoftBodyContacts(float dt) {
         final int PARALLEL_THRESHOLD = 1024;
+        long narrowStats = 0L;
 
         for (int b = 0; b < collisionManager.activeBatchCount; b++) {
             int currentBatchSize = collisionManager.batchSize[b];
@@ -109,25 +135,40 @@ public final class CollisionPipeline {
 
             final int batchIndex = b;
 
-            if (currentBatchSize < PARALLEL_THRESHOLD) {
+            if (!canSolveBatchInParallel(b, currentBatchSize, PARALLEL_THRESHOLD)) {
                 for (int idx = 0; idx < currentBatchSize; idx++) {
                     int contactId = collisionManager.batches[batchIndex][idx];
-                    resolveSingleContact(contactId, dt);
+                    narrowStats += packNarrowResult(resolveSingleContact(contactId, dt));
                 }
             } else {
-                IntStream.range(0, currentBatchSize).parallel().forEach(idx -> {
+                narrowStats += IntStream.range(0, currentBatchSize).parallel().mapToLong(idx -> {
                     int contactId = collisionManager.batches[batchIndex][idx];
-                    resolveSingleContact(contactId, dt);
-                });
+                    return packNarrowResult(resolveSingleContact(contactId, dt));
+                }).sum();
             }
         }
+        return narrowStats;
+    }
+
+    static boolean canSolveBatchInParallel(int batchIndex, int batchSize, int parallelThreshold) {
+        return batchIndex != SoftBodyCollisionManager.OVERFLOW_BATCH_INDEX
+                && batchSize >= parallelThreshold;
+    }
+
+    private static long packNarrowResult(int result) {
+        long aabbPassed = result == 1 || result == 2 ? 1L : 0L;
+        long resolved = result == 2 ? 1L : 0L;
+        long certificateSkipped = result == 3 ? 1L : 0L;
+        return (certificateSkipped << (NARROW_STAT_BITS * 2))
+                | (resolved << NARROW_STAT_BITS)
+                | aabbPassed;
     }
 
     /**
      * Resolve one node-vs-triangle soft-body contact in triangle-local coordinates.
      */
-    private void resolveSingleContact(int contactId, float dt) {
-        final float THICKNESS = 0.01f;
+    private int resolveSingleContact(int contactId, float dt) {
+        final float THICKNESS = SOFT_CONTACT_THICKNESS;
         final float PBD_RELAXATION = 1.0f;
         final float MAX_POS_PUSH = 0.1f;
         final float RESTITUTION = 0.0f;
@@ -153,33 +194,57 @@ public final class CollisionPipeline {
         float pY = entityDeltaY + nVeh.nodes.posY[nHit];
         float pZ = entityDeltaZ + nVeh.nodes.posZ[nHit];
 
+        float pax = pX - ax, pay = pY - ay, paz = pZ - az;
+        float bax = bx - ax, bay = by - ay, baz = bz - az;
+        float cax = cx - ax, cay = cy - ay, caz = cz - az;
+        if (collisionManager.separationCertificateStillValid(contactId,
+                pax, pay, paz, bax, bay, baz, cax, cay, caz)) {
+            return 3;
+        }
+
         float minX = Math.min(ax, Math.min(bx, cx)) - THICKNESS;
         float maxX = Math.max(ax, Math.max(bx, cx)) + THICKNESS;
         float minY = Math.min(ay, Math.min(by, cy)) - THICKNESS;
         float maxY = Math.max(ay, Math.max(by, cy)) + THICKNESS;
         float minZ = Math.min(az, Math.min(bz, cz)) - THICKNESS;
         float maxZ = Math.max(az, Math.max(bz, cz)) + THICKNESS;
-        if (pX < minX || pX > maxX || pY < minY || pY > maxY || pZ < minZ || pZ > maxZ) return;
+        boolean currentAabbPassed = pX >= minX && pX <= maxX
+                && pY >= minY && pY <= maxY && pZ >= minZ && pZ <= maxZ;
+        float sweptHitTime = -1.0f;
+        if (!currentAabbPassed) {
+            sweptHitTime = sweptPointTriangleHitTime(
+                    entityDeltaX + nVeh.nodes.prevPosX[nHit],
+                    entityDeltaY + nVeh.nodes.prevPosY[nHit],
+                    entityDeltaZ + nVeh.nodes.prevPosZ[nHit],
+                    tVeh.nodes.prevPosX[nA], tVeh.nodes.prevPosY[nA], tVeh.nodes.prevPosZ[nA],
+                    tVeh.nodes.prevPosX[nB], tVeh.nodes.prevPosY[nB], tVeh.nodes.prevPosZ[nB],
+                    tVeh.nodes.prevPosX[nC], tVeh.nodes.prevPosY[nC], tVeh.nodes.prevPosZ[nC],
+                    pX, pY, pZ, ax, ay, az, bx, by, bz, cx, cy, cz);
+        }
+        if (!currentAabbPassed && sweptHitTime < 0.0f) {
+            float aabbSlack = Math.max(
+                    Math.max(Math.max(minX - pX, pX - maxX), Math.max(minY - pY, pY - maxY)),
+                    Math.max(minZ - pZ, pZ - maxZ));
+            collisionManager.recordSeparationCertificate(contactId, aabbSlack,
+                    pax, pay, paz, bax, bay, baz, cax, cay, caz);
+            return 0;
+        }
 
-        float abx = bx - ax, aby = by - ay, abz = bz - az;
-        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float abx = bax, aby = bay, abz = baz;
+        float acx = cax, acy = cay, acz = caz;
         float nx = aby * acz - abz * acy;
         float ny = abz * acx - abx * acz;
         float nz = abx * acy - aby * acx;
 
         float nLenSq = nx * nx + ny * ny + nz * nz;
-        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        if (nLenSq < PhysicsWorld.KINDA_SMALL_NUMBER) {
+            collisionManager.invalidateSeparationCertificate(contactId);
+            return 1;
+        }
         float invNLen = 1.0f / (float) Math.sqrt(nLenSq);
         nx *= invNLen; ny *= invNLen; nz *= invNLen;
 
-        float d00 = abx * abx + aby * aby + abz * abz;
-        float d01 = abx * acx + aby * acy + abz * acz;
-        float d11 = acx * acx + acy * acy + acz * acz;
-        float denom = d00 * d11 - d01 * d01;
-        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) return;
-        float invDenom = 1.0f / denom;
-
-        float apx = pX - ax, apy = pY - ay, apz = pZ - az;
+        float apx = pax, apy = pay, apz = paz;
         float distCurr = apx * nx + apy * ny + apz * nz;
 
         float triVx = (tVeh.nodes.velX[nA] + tVeh.nodes.velX[nB] + tVeh.nodes.velX[nC]) * 0.33333334f;
@@ -190,11 +255,41 @@ public final class CollisionPipeline {
                 (nVeh.nodes.velY[nHit] - triVy) * ny +
                 (nVeh.nodes.velZ[nHit] - triVz) * nz;
 
-        float distPrev = distCurr - approxRelV * dt;
-        float pushDir = (distPrev > 0.0f) ? 1.0f : -1.0f;
+        float prevAx = tVeh.nodes.prevPosX[nA], prevAy = tVeh.nodes.prevPosY[nA], prevAz = tVeh.nodes.prevPosZ[nA];
+        float prevAbx = tVeh.nodes.prevPosX[nB] - prevAx;
+        float prevAby = tVeh.nodes.prevPosY[nB] - prevAy;
+        float prevAbz = tVeh.nodes.prevPosZ[nB] - prevAz;
+        float prevAcx = tVeh.nodes.prevPosX[nC] - prevAx;
+        float prevAcy = tVeh.nodes.prevPosY[nC] - prevAy;
+        float prevAcz = tVeh.nodes.prevPosZ[nC] - prevAz;
+        float prevNx = prevAby * prevAcz - prevAbz * prevAcy;
+        float prevNy = prevAbz * prevAcx - prevAbx * prevAcz;
+        float prevNz = prevAbx * prevAcy - prevAby * prevAcx;
+        float prevApx = entityDeltaX + nVeh.nodes.prevPosX[nHit] - prevAx;
+        float prevApy = entityDeltaY + nVeh.nodes.prevPosY[nHit] - prevAy;
+        float prevApz = entityDeltaZ + nVeh.nodes.prevPosZ[nHit] - prevAz;
+        float prevSignedVolume = prevApx * prevNx + prevApy * prevNy + prevApz * prevNz;
+        float pushDir = prevSignedVolume != 0.0f
+                ? (prevSignedVolume > 0.0f ? 1.0f : -1.0f)
+                : (distCurr - approxRelV * dt > 0.0f ? 1.0f : -1.0f);
         float signedDist = distCurr * pushDir;
         float penetration = THICKNESS - signedDist;
-        if (penetration <= 0.0f) return;
+        if (penetration <= 0.0f) {
+            recordGeometricSeparation(contactId, apx, apy, apz, abx, aby, abz, acx, acy, acz);
+            return 1;
+        }
+
+        // Most cached candidates fail the plane-distance test above. Delay the
+        // barycentric Gram matrix until a contact can actually penetrate.
+        float d00 = abx * abx + aby * aby + abz * abz;
+        float d01 = abx * acx + aby * acy + abz * acz;
+        float d11 = acx * acx + acy * acy + acz * acz;
+        float denom = d00 * d11 - d01 * d01;
+        if (denom < PhysicsWorld.KINDA_SMALL_NUMBER) {
+            collisionManager.invalidateSeparationCertificate(contactId);
+            return 1;
+        }
+        float invDenom = 1.0f / denom;
 
         float ppx = apx - distCurr * nx;
         float ppy = apy - distCurr * ny;
@@ -207,8 +302,41 @@ public final class CollisionPipeline {
         float wC = (d00 * d21 - d01 * d20) * invDenom;
         float wA = 1.0f - wB - wC;
 
-        final float TOLERANCE = -0.01f;
-        if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) return;
+        if (sweptHitTime >= 0.0f) {
+            float hitAx = lerp(prevAx, ax, sweptHitTime);
+            float hitAy = lerp(prevAy, ay, sweptHitTime);
+            float hitAz = lerp(prevAz, az, sweptHitTime);
+            float hitBx = lerp(tVeh.nodes.prevPosX[nB], bx, sweptHitTime);
+            float hitBy = lerp(tVeh.nodes.prevPosY[nB], by, sweptHitTime);
+            float hitBz = lerp(tVeh.nodes.prevPosZ[nB], bz, sweptHitTime);
+            float hitCx = lerp(tVeh.nodes.prevPosX[nC], cx, sweptHitTime);
+            float hitCy = lerp(tVeh.nodes.prevPosY[nC], cy, sweptHitTime);
+            float hitCz = lerp(tVeh.nodes.prevPosZ[nC], cz, sweptHitTime);
+            float hitPx = lerp(entityDeltaX + nVeh.nodes.prevPosX[nHit], pX, sweptHitTime);
+            float hitPy = lerp(entityDeltaY + nVeh.nodes.prevPosY[nHit], pY, sweptHitTime);
+            float hitPz = lerp(entityDeltaZ + nVeh.nodes.prevPosZ[nHit], pZ, sweptHitTime);
+            float hitAbx = hitBx - hitAx, hitAby = hitBy - hitAy, hitAbz = hitBz - hitAz;
+            float hitAcx = hitCx - hitAx, hitAcy = hitCy - hitAy, hitAcz = hitCz - hitAz;
+            float hitApx = hitPx - hitAx, hitApy = hitPy - hitAy, hitApz = hitPz - hitAz;
+            float hitD00 = hitAbx * hitAbx + hitAby * hitAby + hitAbz * hitAbz;
+            float hitD01 = hitAbx * hitAcx + hitAby * hitAcy + hitAbz * hitAcz;
+            float hitD11 = hitAcx * hitAcx + hitAcy * hitAcy + hitAcz * hitAcz;
+            float hitD20 = hitApx * hitAbx + hitApy * hitAby + hitApz * hitAbz;
+            float hitD21 = hitApx * hitAcx + hitApy * hitAcy + hitApz * hitAcz;
+            float hitDenom = hitD00 * hitD11 - hitD01 * hitD01;
+            if (hitDenom >= PhysicsWorld.KINDA_SMALL_NUMBER) {
+                float hitInvDenom = 1.0f / hitDenom;
+                wB = (hitD11 * hitD20 - hitD01 * hitD21) * hitInvDenom;
+                wC = (hitD00 * hitD21 - hitD01 * hitD20) * hitInvDenom;
+                wA = 1.0f - wB - wC;
+            }
+        }
+
+        final float TOLERANCE = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
+        if (!(wA >= TOLERANCE && wB >= TOLERANCE && wC >= TOLERANCE)) {
+            recordGeometricSeparation(contactId, apx, apy, apz, abx, aby, abz, acx, acy, acz);
+            return 1;
+        }
 
         float effNx = nx * pushDir, effNy = ny * pushDir, effNz = nz * pushDir;
 
@@ -216,7 +344,10 @@ public final class CollisionPipeline {
         float massA = tVeh.nodes.mass[nA], massB = tVeh.nodes.mass[nB], massC = tVeh.nodes.mass[nC];
 
         float wTotal = (1.0f / massNode) + (wA * wA / massA) + (wB * wB / massB) + (wC * wC / massC);
-        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) return;
+        if (wTotal < PhysicsWorld.KINDA_SMALL_NUMBER) {
+            collisionManager.invalidateSeparationCertificate(contactId);
+            return 1;
+        }
         float invWTotal = 1.0f / wTotal;
 
         float pushAmount = penetration * PBD_RELAXATION;
@@ -325,6 +456,264 @@ public final class CollisionPipeline {
         tVeh.applyPositionAndVelocityDeltaUnSafe(nC,
                 -dpX * (wC / massC), -dpY * (wC / massC), -dpZ * (wC / massC),
                 -dvX * (wC / massC), -dvY * (wC / massC), -dvZ * (wC / massC));
+        collisionManager.invalidateSeparationCertificate(contactId);
+        if (sweptHitTime >= 0.0f) collisionManager.sweptResolvedCount.incrementAndGet();
+        return 2;
+    }
+
+    /**
+     * Generates candidates through a node-chunk SAP followed by a small node
+     * SAP inside each overlapping triangle-meshlet/node-chunk pair. Chunk
+     * membership is unique, so the same node-triangle pair cannot be emitted
+     * by two different chunk pairs.
+     */
+    public void generateChunkCollisionCandidates(SoftBodyVehicle triangleVehicle,
+                                                 List<SoftBodyVehicle> activeVehicles) {
+        CollisionCandidateBuffer buffer = new CollisionCandidateBuffer();
+        generateChunkCollisionCandidates(
+                triangleVehicle, activeVehicles, 0,
+                triangleVehicle.collisionChunks.triangleMeshletCount(), buffer);
+        int stored = collisionManager.appendContacts(buffer);
+        clearCandidateStats(triangleVehicle);
+        applyCandidateStats(buffer, stored, buffer.dropped + buffer.count - stored);
+    }
+
+    void generateChunkCollisionCandidates(SoftBodyVehicle triangleVehicle,
+                                          List<SoftBodyVehicle> activeVehicles,
+                                          int meshletStart, int meshletEnd,
+                                          CollisionCandidateBuffer buffer) {
+        CollisionChunkIndex triangleChunks = triangleVehicle.collisionChunks;
+        TriangleContainer triangles = triangleVehicle.triangles;
+        buffer.reset(triangleVehicle);
+
+        for (int meshlet = meshletStart; meshlet < meshletEnd; meshlet++) {
+            if (!triangleChunks.meshletActive(meshlet)) continue;
+            for (SoftBodyVehicle nodeVehicle : activeVehicles) {
+                CollisionChunkIndex nodeChunks = nodeVehicle.collisionChunks;
+                boolean self = nodeVehicle == triangleVehicle;
+                int firstNodeChunk = triangleChunks.firstNodeChunkCandidate(meshlet, nodeChunks);
+                for (int sortedChunk = firstNodeChunk;
+                     sortedChunk < nodeChunks.nodeChunkCount(); sortedChunk++) {
+                    if (triangleChunks.nodeChunkStartsAfterMeshlet(meshlet, nodeChunks, sortedChunk)) break;
+                    int nodeChunk = triangleChunks.sortedNodeChunkAt(nodeChunks, sortedChunk);
+                    if (self && !nodeChunks.nodeChunkHasSelfCollision(nodeChunk)) continue;
+                    if (self && triangleChunks.sameKnownPart(meshlet, nodeChunks, nodeChunk)) continue;
+                    buffer.chunkPairTests++;
+                    if (!triangleChunks.chunksOverlap(meshlet, nodeChunks, nodeChunk)) continue;
+                    buffer.chunkPairOverlaps++;
+                    int localSweepAxis = triangleChunks.localSweepAxis(meshlet, nodeChunk, nodeChunks);
+                    boolean productivePair = false;
+
+                    for (int triangleMember = triangleChunks.triangleMeshletStart(meshlet);
+                         triangleMember < triangleChunks.triangleMeshletEnd(meshlet); triangleMember++) {
+                        int triangle = triangleChunks.triangleAt(triangleMember);
+                        if (triangles.broken[triangle]) continue;
+                        int nA = triangles.node1[triangle];
+                        int nB = triangles.node2[triangle];
+                        int nC = triangles.node3[triangle];
+                        int trianglePart = triangles.partId[triangle];
+
+                        int firstNode = triangleChunks.firstNodeCandidate(
+                                triangle, nodeChunk, nodeChunks, localSweepAxis);
+                        for (int sortedNode = firstNode;
+                             sortedNode < triangleChunks.sortedNodeEnd(
+                                     nodeChunk, nodeChunks, localSweepAxis); sortedNode++) {
+                            if (triangleChunks.nodeStartsAfterTriangle(
+                                    triangle, nodeChunks, sortedNode, localSweepAxis)) break;
+                            int node = triangleChunks.sortedNodeAt(nodeChunks, sortedNode);
+                            if (self && !nodeVehicle.nodes.selfCollision[node]) continue;
+                            buffer.finePairTests++;
+                            if (!triangleChunks.triangleOverlapsNode(triangle, nodeChunks, node)) continue;
+                            productivePair = true;
+                            buffer.rawHits++;
+
+                            if (self) {
+                                if (node == nA || node == nB || node == nC) continue;
+                                if (trianglePart >= 0 && trianglePart < triangleVehicle.matrixPartStride
+                                        && triangleVehicle.nodeInPartMatrix != null
+                                        && triangleVehicle.nodeInPartMatrix[
+                                        node * triangleVehicle.matrixPartStride + trianglePart]) continue;
+                            }
+                            buffer.add(nodeVehicle, node, triangleVehicle, nA, nB, nC);
+                        }
+                    }
+                    if (productivePair) buffer.chunkPairProductive++;
+                }
+            }
+        }
+
+    }
+
+    static void clearCandidateStats(SoftBodyVehicle vehicle) {
+        vehicle.collisionCandidateSapHits = 0;
+        vehicle.collisionCandidateStored = 0;
+        vehicle.collisionCandidateDropped = 0;
+        vehicle.collisionChunkPairTests = 0;
+        vehicle.collisionChunkPairOverlaps = 0;
+        vehicle.collisionChunkPairProductive = 0;
+        vehicle.collisionFinePairTests = 0L;
+    }
+
+    static void applyCandidateStats(CollisionCandidateBuffer buffer, int stored, int dropped) {
+        SoftBodyVehicle vehicle = buffer.triangleVehicle;
+        vehicle.collisionCandidateSapHits += buffer.rawHits;
+        vehicle.collisionCandidateStored += stored;
+        vehicle.collisionCandidateDropped += dropped;
+        vehicle.collisionChunkPairTests += buffer.chunkPairTests;
+        vehicle.collisionChunkPairOverlaps += buffer.chunkPairOverlaps;
+        vehicle.collisionChunkPairProductive += buffer.chunkPairProductive;
+        vehicle.collisionFinePairTests += buffer.finePairTests;
+    }
+
+    private void recordGeometricSeparation(int contactId,
+                                           float px, float py, float pz,
+                                           float bx, float by, float bz,
+                                           float cx, float cy, float cz) {
+        float distanceSq = pointTriangleDistanceSquared(px, py, pz, bx, by, bz, cx, cy, cz);
+        float abLength = (float) Math.sqrt(bx * bx + by * by + bz * bz);
+        float acLength = (float) Math.sqrt(cx * cx + cy * cy + cz * cz);
+        float contactEnvelope = SOFT_CONTACT_THICKNESS
+                + SOFT_CONTACT_BARYCENTRIC_TOLERANCE * (abLength + acLength);
+        float slack = (float) Math.sqrt(distanceSq) - contactEnvelope;
+        collisionManager.recordSeparationCertificate(contactId, slack,
+                px, py, pz, bx, by, bz, cx, cy, cz);
+    }
+
+    /** Squared distance from P to triangle (0, B, C). */
+    static float pointTriangleDistanceSquared(float px, float py, float pz,
+                                              float bx, float by, float bz,
+                                              float cx, float cy, float cz) {
+        float d1 = bx * px + by * py + bz * pz;
+        float d2 = cx * px + cy * py + cz * pz;
+        if (d1 <= 0.0f && d2 <= 0.0f) return px * px + py * py + pz * pz;
+
+        float bpx = px - bx, bpy = py - by, bpz = pz - bz;
+        float d3 = bx * bpx + by * bpy + bz * bpz;
+        float d4 = cx * bpx + cy * bpy + cz * bpz;
+        if (d3 >= 0.0f && d4 <= d3) return bpx * bpx + bpy * bpy + bpz * bpz;
+
+        float vc = d1 * d4 - d3 * d2;
+        if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+            float v = d1 / (d1 - d3);
+            float qx = px - v * bx, qy = py - v * by, qz = pz - v * bz;
+            return qx * qx + qy * qy + qz * qz;
+        }
+
+        float cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+        float d5 = bx * cpx + by * cpy + bz * cpz;
+        float d6 = cx * cpx + cy * cpy + cz * cpz;
+        if (d6 >= 0.0f && d5 <= d6) return cpx * cpx + cpy * cpy + cpz * cpz;
+
+        float vb = d5 * d2 - d1 * d6;
+        if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+            float w = d2 / (d2 - d6);
+            float qx = px - w * cx, qy = py - w * cy, qz = pz - w * cz;
+            return qx * qx + qy * qy + qz * qz;
+        }
+
+        float va = d3 * d6 - d5 * d4;
+        if (va <= 0.0f && d4 - d3 >= 0.0f && d5 - d6 >= 0.0f) {
+            float edgeX = cx - bx, edgeY = cy - by, edgeZ = cz - bz;
+            float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            float qx = bpx - w * edgeX, qy = bpy - w * edgeY, qz = bpz - w * edgeZ;
+            return qx * qx + qy * qy + qz * qz;
+        }
+
+        float denom = 1.0f / (va + vb + vc);
+        float v = vb * denom;
+        float w = vc * denom;
+        float qx = px - bx * v - cx * w;
+        float qy = py - by * v - cy * w;
+        float qz = pz - bz * v - cz * w;
+        return qx * qx + qy * qy + qz * qz;
+    }
+
+    static float sweptPointTriangleHitTime(
+            float p0x, float p0y, float p0z,
+            float a0x, float a0y, float a0z,
+            float b0x, float b0y, float b0z,
+            float c0x, float c0y, float c0z,
+            float p1x, float p1y, float p1z,
+            float a1x, float a1y, float a1z,
+            float b1x, float b1y, float b1z,
+            float c1x, float c1y, float c1z) {
+        float f0 = orientedVolume(p0x, p0y, p0z, a0x, a0y, a0z, b0x, b0y, b0z, c0x, c0y, c0z);
+        float f1 = orientedVolume(p1x, p1y, p1z, a1x, a1y, a1z, b1x, b1y, b1z, c1x, c1y, c1z);
+        if (!Float.isFinite(f0) || !Float.isFinite(f1) || f0 * f1 > 0.0f) return -1.0f;
+
+        float low = 0.0f, high = 1.0f, lowValue = f0;
+        for (int iteration = 0; iteration < 12; iteration++) {
+            float middle = (low + high) * 0.5f;
+            float value = orientedVolumeAt(middle,
+                    p0x, p0y, p0z, a0x, a0y, a0z, b0x, b0y, b0z, c0x, c0y, c0z,
+                    p1x, p1y, p1z, a1x, a1y, a1z, b1x, b1y, b1z, c1x, c1y, c1z);
+            if (Math.abs(value) <= 1e-7f) {
+                low = high = middle;
+                break;
+            }
+            if ((lowValue <= 0.0f && value <= 0.0f) || (lowValue >= 0.0f && value >= 0.0f)) {
+                low = middle;
+                lowValue = value;
+            } else {
+                high = middle;
+            }
+        }
+
+        float hitTime = (low + high) * 0.5f;
+        float ax = lerp(a0x, a1x, hitTime), ay = lerp(a0y, a1y, hitTime), az = lerp(a0z, a1z, hitTime);
+        float bx = lerp(b0x, b1x, hitTime), by = lerp(b0y, b1y, hitTime), bz = lerp(b0z, b1z, hitTime);
+        float cx = lerp(c0x, c1x, hitTime), cy = lerp(c0y, c1y, hitTime), cz = lerp(c0z, c1z, hitTime);
+        float px = lerp(p0x, p1x, hitTime) - ax;
+        float py = lerp(p0y, p1y, hitTime) - ay;
+        float pz = lerp(p0z, p1z, hitTime) - az;
+        float abx = bx - ax, aby = by - ay, abz = bz - az;
+        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float d00 = abx * abx + aby * aby + abz * abz;
+        float d01 = abx * acx + aby * acy + abz * acz;
+        float d11 = acx * acx + acy * acy + acz * acz;
+        float d20 = px * abx + py * aby + pz * abz;
+        float d21 = px * acx + py * acy + pz * acz;
+        float denominator = d00 * d11 - d01 * d01;
+        if (denominator < PhysicsWorld.KINDA_SMALL_NUMBER) return -1.0f;
+        float inverse = 1.0f / denominator;
+        float wB = (d11 * d20 - d01 * d21) * inverse;
+        float wC = (d00 * d21 - d01 * d20) * inverse;
+        float wA = 1.0f - wB - wC;
+        float tolerance = -SOFT_CONTACT_BARYCENTRIC_TOLERANCE;
+        return wA >= tolerance && wB >= tolerance && wC >= tolerance ? hitTime : -1.0f;
+    }
+
+    private static float orientedVolumeAt(float t,
+                                          float p0x, float p0y, float p0z,
+                                          float a0x, float a0y, float a0z,
+                                          float b0x, float b0y, float b0z,
+                                          float c0x, float c0y, float c0z,
+                                          float p1x, float p1y, float p1z,
+                                          float a1x, float a1y, float a1z,
+                                          float b1x, float b1y, float b1z,
+                                          float c1x, float c1y, float c1z) {
+        return orientedVolume(
+                lerp(p0x, p1x, t), lerp(p0y, p1y, t), lerp(p0z, p1z, t),
+                lerp(a0x, a1x, t), lerp(a0y, a1y, t), lerp(a0z, a1z, t),
+                lerp(b0x, b1x, t), lerp(b0y, b1y, t), lerp(b0z, b1z, t),
+                lerp(c0x, c1x, t), lerp(c0y, c1y, t), lerp(c0z, c1z, t));
+    }
+
+    private static float orientedVolume(float px, float py, float pz,
+                                        float ax, float ay, float az,
+                                        float bx, float by, float bz,
+                                        float cx, float cy, float cz) {
+        float abx = bx - ax, aby = by - ay, abz = bz - az;
+        float acx = cx - ax, acy = cy - ay, acz = cz - az;
+        float apx = px - ax, apy = py - ay, apz = pz - az;
+        float nx = aby * acz - abz * acy;
+        float ny = abz * acx - abx * acz;
+        float nz = abx * acy - aby * acx;
+        return apx * nx + apy * ny + apz * nz;
+    }
+
+    private static float lerp(float from, float to, float t) {
+        return from + (to - from) * t;
     }
 
     /**

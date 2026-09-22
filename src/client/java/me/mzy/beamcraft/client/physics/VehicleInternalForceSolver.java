@@ -36,6 +36,7 @@ public final class VehicleInternalForceSolver {
      * {@code SoftBodyVehicle.solveInternalForces} body did.
      */
     public void solve(float dt, float plasticRelaxation, ElectricSnapshot electricSnapshot) {
+        if (v.physicsEventTraceEnabled) v.physicsEventTraceBreakCommitNanos = 0L;
         // Actuator commands arrive from the MC/controller thread. Drain them here,
         // on the thread that owns this sub-step, so the SoA damping arrays are never
         // mutated concurrently.
@@ -87,7 +88,13 @@ public final class VehicleInternalForceSolver {
         // Commit fracture topology only after every beam family has evaluated
         // the same start-of-substep topology. Directly failed beams already
         // skipped their own force; break-group peers retain this substep's force.
-        v.commitPendingBeamBreaks();
+        if (v.physicsEventTraceEnabled) {
+            long breakCommitStarted = System.nanoTime();
+            v.commitPendingBeamBreaks();
+            v.physicsEventTraceBreakCommitNanos = System.nanoTime() - breakCommitStarted;
+        } else {
+            v.commitPendingBeamBreaks();
+        }
 
         // ==========================================
         // ==========================================

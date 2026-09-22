@@ -15,16 +15,20 @@ import me.mzy.beamcraft.client.physics.VehicleCameraData;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
+import org.lwjgl.glfw.GLFW;
 
 import java.io.File;
 
@@ -33,6 +37,7 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final boolean DEBUG_SHOW_BEAMS = true;
 	private static long lastOverrunNoticeNanos = 0L;
 	private static boolean physicsFailureReported = false;
+	private static KeyBinding physicsTraceToggleKey;
 	public static final double DELTA_TIME = 0.05;
 
 	public static final PhysicsWorld PHYSICS_WORLD = new PhysicsWorld();
@@ -49,7 +54,19 @@ public class BeamCraftClient implements ClientModInitializer {
 	private static final float[] ATTITUDE_DEG = new float[2];
 	public static double lastPhysicsWaitMs = 0.0;
 	public static boolean lastPhysicsOverBudget = false;
-	public static double[] lastPhysicsMsDetail = new double[9];
+	public static double[] lastPhysicsMsDetail = new double[60];
+	private static final int PHYSICS_TIMING_WINDOW = 100;
+	private static final int[] ROLLING_TIMING_INDICES = {
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53
+	};
+	private static final double[][] ROLLING_TIMING_SAMPLES =
+			new double[ROLLING_TIMING_INDICES.length][PHYSICS_TIMING_WINDOW];
+	private static final double[] ROLLING_TIMING_SUMS = new double[ROLLING_TIMING_INDICES.length];
+	private static final double[] ROLLING_TIMING_MINS = new double[ROLLING_TIMING_INDICES.length];
+	private static final double[] ROLLING_TIMING_MAXES = new double[ROLLING_TIMING_INDICES.length];
+	private static int rollingTimingSampleCount;
+	private static int rollingTimingWriteIndex;
+	private static int rollingTimingVehicleCount = -1;
 
 	@Override
 	public void onInitializeClient() {
@@ -57,6 +74,16 @@ public class BeamCraftClient implements ClientModInitializer {
 		// 加载配置文件，确定资产根列表并确保目录存在
 		BeamCraftConfig config = BeamCraftConfigManager.initialize(
 				FabricLoader.getInstance().getConfigDir(), GAME_DIR);
+		PHYSICS_WORLD.configureEventTrace(
+				config.diagnostics.physicsEventTrace,
+				FabricLoader.getInstance().getGameDir().resolve("beamcraft-traces"));
+		if (config.diagnostics.physicsEventTrace) {
+			physicsTraceToggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+					"key.beamcraft.physics_trace_toggle",
+					InputUtil.Type.KEYSYM,
+					GLFW.GLFW_KEY_F8,
+					"key.categories.misc"));
+		}
 		VehicleInputHandler inputHandler = new VehicleInputHandler(config.input);
 		AssetScanner.INSTANCE.configure(config.policy());
 		for (File root : BeamCraftConfigManager.assetRoots()) {
@@ -83,6 +110,7 @@ public class BeamCraftClient implements ClientModInitializer {
 				if (completion.timings() != null) {
 					lastPhysicsMsDetail = completion.timings();
 					lastPhysicsMs = lastPhysicsMsDetail[0];
+					updateRollingPhysicsTimings(lastPhysicsMsDetail, PHYSICS_WORLD.vehicles.size());
 				}
 
 				if (completion.failure() != null && !physicsFailureReported) {
@@ -108,6 +136,10 @@ public class BeamCraftClient implements ClientModInitializer {
 				}
 			}
 
+			if (physicsTraceToggleKey != null) {
+				while (physicsTraceToggleKey.wasPressed()) world.toggleEventTrace();
+			}
+
 			// Vehicle creation/removal is safe only after the previous job joined.
 			ClientVehicleManager.update(client);
 			if (client.player == null || client.world == null || PHYSICS_SCHEDULER.failure() != null) return;
@@ -126,7 +158,10 @@ public class BeamCraftClient implements ClientModInitializer {
 			MinecraftClient client = MinecraftClient.getInstance();
 			if (client.options.hudHidden) return; // 如果按了 F1 隐藏界面，就不画
 
-			String physicsStepText = String.format("BeamCraft Physics: %.2f ms", lastPhysicsMs);
+			String physicsStepText = String.format(
+					"BeamCraft Physics current/avg/min/max (%d): %.2f / %.2f / %.2f / %.2f ms",
+					rollingTimingSampleCount, lastPhysicsMs, rollingAverage(0),
+					ROLLING_TIMING_MINS[0], ROLLING_TIMING_MAXES[0]);
 			SoftBodyVehicle debugVehicle = PHYSICS_WORLD.vehicles.isEmpty() ? null : PHYSICS_WORLD.vehicles.getFirst();
 			String powertrainState = debugVehicle == null ? "no vehicle" : debugVehicle.powertrain.diagnostic();
 			float engineRPM = debugVehicle == null ? 0.0f : debugVehicle.powertrain.debugEngineRPM();
@@ -165,6 +200,18 @@ public class BeamCraftClient implements ClientModInitializer {
 					: debugVehicle.nodes.names[refNodes.ref()] + "->" + debugVehicle.nodes.names[refNodes.back()]
 							+ "/" + debugVehicle.nodes.names[refNodes.left()];
 
+			double narrowChecks = lastPhysicsMsDetail[16];
+			double narrowAabbPassed = lastPhysicsMsDetail[17];
+			double narrowResolved = lastPhysicsMsDetail[18];
+			double narrowCertificateSkipped = lastPhysicsMsDetail[37];
+			double aabbPassPercent = narrowChecks == 0.0 ? 0.0 : narrowAabbPassed * 100.0 / narrowChecks;
+			double resolvePercent = narrowChecks == 0.0 ? 0.0 : narrowResolved * 100.0 / narrowChecks;
+			String batchSizes = String.format("%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f | %.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f",
+					lastPhysicsMsDetail[21], lastPhysicsMsDetail[22], lastPhysicsMsDetail[23], lastPhysicsMsDetail[24],
+					lastPhysicsMsDetail[25], lastPhysicsMsDetail[26], lastPhysicsMsDetail[27], lastPhysicsMsDetail[28],
+					lastPhysicsMsDetail[29], lastPhysicsMsDetail[30], lastPhysicsMsDetail[31], lastPhysicsMsDetail[32],
+					lastPhysicsMsDetail[33], lastPhysicsMsDetail[34], lastPhysicsMsDetail[35], lastPhysicsMsDetail[36]);
+
 			String[] lines = {
 					hasAttitude
 							? String.format("pitch: %+.2f deg (nose up +) | roll: %+.2f deg (left up +) | refNodes: %s",
@@ -174,32 +221,60 @@ public class BeamCraftClient implements ClientModInitializer {
 							? "accel: n/a"
 							: String.format("accel: %+.3f g longitudinal", debugVehicle.longitudinalAccelG),
 					"powertrain: " + powertrainState,
-					String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
-							throttleInput * 100.0f, actualThrottle * 100.0f),
-					String.format("combustion: %.1f Nm | curve: %d | starter: %s", combustionTorque,
-							torqueCurvePoints, starterActive ? "on" : "off"),
-					turboExisting
-							? String.format("turbo: %.0f rpm | boost: %.1f psi", turboRPM, turboBoostPSI)
-							: "turbo: off",
-					superchargerExisting
-							? String.format("supercharger: %.0f rpm | boost: %.1f psi",
-									superchargerRPM, superchargerBoostPSI)
-							: "supercharger: off",
-					String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
-							sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
-							limiterActive ? "cut" : "ready", limiterTime),
-					String.format("gear: %s | ratio: %.3f | shift: %.3fs | range: %s %.3f",
-							gearName, gearRatio, shiftTime, rangeMode, rangeRatio),
-					String.format("clutch engagement: %.0f%% | torque: %.1f Nm", clutchEngagement * 100.0f, clutchTorque),
+					//String.format("engine: %.0f rpm | pedal: %.0f%% | throttle: %.0f%%", engineRPM,
+					//		throttleInput * 100.0f, actualThrottle * 100.0f),
+					//String.format("combustion: %.1f Nm | curve: %d | starter: %s", combustionTorque,
+					//		torqueCurvePoints, starterActive ? "on" : "off"),
+					//turboExisting
+					//		? String.format("turbo: %.0f rpm | boost: %.1f psi", turboRPM, turboBoostPSI)
+					//		: "turbo: off",
+					//superchargerExisting
+					//		? String.format("supercharger: %.0f rpm | boost: %.1f psi",
+					//				superchargerRPM, superchargerBoostPSI)
+					//		: "supercharger: off",
+					//String.format("spark/fuel: %s/%s | limiter: %s %.3fs",
+					//		sparkEnabled ? "on" : "off", fuelEnabled ? "on" : "off",
+					//		limiterActive ? "cut" : "ready", limiterTime),
+					//String.format("gear: %s | ratio: %.3f | shift: %.3fs | range: %s %.3f",
+					//		gearName, gearRatio, shiftTime, rangeMode, rangeRatio),
+					//String.format("clutch engagement: %.0f%% | torque: %.1f Nm", clutchEngagement * 100.0f, clutchTorque),
 					String.format("tickBarrierWait: %.2f ms", lastPhysicsWaitMs),
-					String.format("mcWorldScan: %.2f ms", lastPhysicsMsDetail[1]),
-					String.format("internalForce: %.2f ms", lastPhysicsMsDetail[2]),
-					String.format("globalSAP: %.2f ms", lastPhysicsMsDetail[3]),
-					String.format("dyeCollision: %.2f ms", lastPhysicsMsDetail[4]),
-					String.format("softCollision: %.2f ms", lastPhysicsMsDetail[5]),
-					String.format("mcCollision: %.2f ms", lastPhysicsMsDetail[6]),
-					String.format("postUpdate: %.2f ms", lastPhysicsMsDetail[7]),
-					String.format("moveEntity: %.2f ms", lastPhysicsMsDetail[8])
+					timingSummary("mcWorldScan", 1),
+					timingSummary("internalForce", 2),
+					timingSummary("chunk refit", 3),
+					timingBreakdown("refit node/chunk/coarseSAP", 42, 43, 44),
+					timingBreakdown("refit localSAP/triangle/meshlet", 45, 46, 47),
+					timingBreakdown("localSAP key/sort/prefix", 48, 49, 50),
+					String.format("chunk span >2x eligible node/meshlet: %.0f/%.0f / %.0f/%.0f | max: %.2fx / %.2fx",
+							lastPhysicsMsDetail[55], lastPhysicsMsDetail[54],
+							lastPhysicsMsDetail[58], lastPhysicsMsDetail[57],
+							lastPhysicsMsDetail[56], lastPhysicsMsDetail[59]),
+					timingSummary("candidate+color", 4),
+					timingSummary("candidate wall", 9),
+					String.format("candidate tasks: %.0f | %s", lastPhysicsMsDetail[51],
+							timingPair("work/merge", 52, 53)),
+					timingSummary("color", 12),
+					String.format("last fine AABB hits/stored/dropped: %.0f / %.0f / %.0f",
+							lastPhysicsMsDetail[13], lastPhysicsMsDetail[14], lastPhysicsMsDetail[15]),
+					String.format("last chunk pairs productive/overlap/tested: %.0f / %.0f / %.0f (%.2f%% productive)",
+							lastPhysicsMsDetail[41], lastPhysicsMsDetail[39], lastPhysicsMsDetail[38],
+							lastPhysicsMsDetail[39] > 0.0
+									? lastPhysicsMsDetail[41] * 100.0 / lastPhysicsMsDetail[39]
+									: 0.0),
+					String.format("last fine AABB passed/tested: %.0f / %.0f (%.2f%%)",
+							lastPhysicsMsDetail[13], lastPhysicsMsDetail[40],
+							lastPhysicsMsDetail[40] > 0.0
+									? lastPhysicsMsDetail[13] * 100.0 / lastPhysicsMsDetail[40]
+									: 0.0),
+					timingSummary("softCollision", 5),
+					String.format("narrow checks/cert-skip/AABB/resolved: %.0f / %.0f / %.0f (%.1f%%) / %.0f (%.2f%%)",
+							narrowChecks, narrowCertificateSkipped, narrowAabbPassed, aabbPassPercent,
+							narrowResolved, resolvePercent),
+					String.format("batches: %.0f | largest: %.0f | sizes: %s",
+							lastPhysicsMsDetail[19], lastPhysicsMsDetail[20], batchSizes),
+					timingSummary("mcCollision", 6),
+					timingSummary("postUpdate", 7),
+					timingSummary("moveEntity", 8)
 			};
 
 			int color = (lastPhysicsOverBudget || PHYSICS_SCHEDULER.failure() != null)
@@ -397,5 +472,70 @@ public class BeamCraftClient implements ClientModInitializer {
 
 			stack.pop();
 		});
+	}
+
+	private static void updateRollingPhysicsTimings(double[] timings, int vehicleCount) {
+		if (vehicleCount != rollingTimingVehicleCount) {
+			rollingTimingVehicleCount = vehicleCount;
+			rollingTimingSampleCount = 0;
+			rollingTimingWriteIndex = 0;
+			for (int metric = 0; metric < ROLLING_TIMING_SUMS.length; metric++) {
+				ROLLING_TIMING_SUMS[metric] = 0.0;
+			}
+		}
+		int overwrittenIndex = rollingTimingWriteIndex;
+		boolean windowFull = rollingTimingSampleCount == PHYSICS_TIMING_WINDOW;
+		if (!windowFull) rollingTimingSampleCount++;
+
+		for (int metric = 0; metric < ROLLING_TIMING_INDICES.length; metric++) {
+			double value = timings[ROLLING_TIMING_INDICES[metric]];
+			if (windowFull) ROLLING_TIMING_SUMS[metric] -= ROLLING_TIMING_SAMPLES[metric][overwrittenIndex];
+			ROLLING_TIMING_SAMPLES[metric][overwrittenIndex] = value;
+			ROLLING_TIMING_SUMS[metric] += value;
+		}
+		rollingTimingWriteIndex = (rollingTimingWriteIndex + 1) % PHYSICS_TIMING_WINDOW;
+
+		for (int metric = 0; metric < ROLLING_TIMING_INDICES.length; metric++) {
+			double min = Double.POSITIVE_INFINITY;
+			double max = Double.NEGATIVE_INFINITY;
+			for (int sample = 0; sample < rollingTimingSampleCount; sample++) {
+				double value = ROLLING_TIMING_SAMPLES[metric][sample];
+				if (value < min) min = value;
+				if (value > max) max = value;
+			}
+			ROLLING_TIMING_MINS[metric] = min;
+			ROLLING_TIMING_MAXES[metric] = max;
+		}
+	}
+
+	private static String timingSummary(String label, int timingIndex) {
+		int metric = rollingMetricForTimingIndex(timingIndex);
+		return String.format("%s current/avg/min/max: %.2f / %.2f / %.2f / %.2f ms", label,
+				lastPhysicsMsDetail[timingIndex], rollingAverage(metric),
+				ROLLING_TIMING_MINS[metric], ROLLING_TIMING_MAXES[metric]);
+	}
+
+	private static String timingBreakdown(String label, int first, int second, int third) {
+		return String.format("%s current/avg: %.2f/%.2f / %.2f/%.2f / %.2f/%.2f ms", label,
+				lastPhysicsMsDetail[first], rollingAverage(rollingMetricForTimingIndex(first)),
+				lastPhysicsMsDetail[second], rollingAverage(rollingMetricForTimingIndex(second)),
+				lastPhysicsMsDetail[third], rollingAverage(rollingMetricForTimingIndex(third)));
+	}
+
+	private static String timingPair(String label, int first, int second) {
+		return String.format("%s current/avg: %.2f/%.2f / %.2f/%.2f ms", label,
+				lastPhysicsMsDetail[first], rollingAverage(rollingMetricForTimingIndex(first)),
+				lastPhysicsMsDetail[second], rollingAverage(rollingMetricForTimingIndex(second)));
+	}
+
+	private static int rollingMetricForTimingIndex(int timingIndex) {
+		for (int metric = 0; metric < ROLLING_TIMING_INDICES.length; metric++) {
+			if (ROLLING_TIMING_INDICES[metric] == timingIndex) return metric;
+		}
+		throw new IllegalArgumentException("Timing index is not tracked: " + timingIndex);
+	}
+
+	private static double rollingAverage(int metric) {
+		return rollingTimingSampleCount == 0 ? 0.0 : ROLLING_TIMING_SUMS[metric] / rollingTimingSampleCount;
 	}
 }

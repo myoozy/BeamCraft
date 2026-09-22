@@ -52,6 +52,7 @@ public class SoftBodyVehicle {
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
     public final VehicleCameraData cameras = new VehicleCameraData();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
+    final CollisionChunkIndex collisionChunks = new CollisionChunkIndex(this);
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -68,8 +69,21 @@ public class SoftBodyVehicle {
     public java.util.Map<String, List<BeamPointer>> breakGroupMap = new java.util.HashMap<>();
     private final java.util.Set<String> triggeredBreakGroups = new java.util.HashSet<>();
     private final Set<String> triggeredDeformGroups = ConcurrentHashMap.newKeySet();
+    boolean physicsEventTraceEnabled;
+    long physicsEventTraceBreakCommitNanos;
 
     final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
+
+    // Written once by this vehicle's broad-phase task and consumed after the
+    // parallel candidate-generation barrier. Primitive fields keep collision
+    // diagnostics allocation-free inside the hot loop.
+    int collisionCandidateSapHits;
+    int collisionCandidateStored;
+    int collisionCandidateDropped;
+    int collisionChunkPairTests;
+    int collisionChunkPairOverlaps;
+    int collisionChunkPairProductive;
+    long collisionFinePairTests;
 
     double entityX = 0.0;
     double entityY = 0.0;
@@ -473,6 +487,7 @@ public class SoftBodyVehicle {
         powertrain.finalizeSetup();
         flexbodies.compileGroupsCSR(nodes);
         triangles.buildBreakIndices();
+        collisionChunks.rebuild();
 
         // Actuators address beams by their authored name, so the lookup must be
         // built only once every beam of every selected part exists.
@@ -970,6 +985,23 @@ public class SoftBodyVehicle {
 
     public Set<String> triggeredDeformGroups() {
         return Set.copyOf(triggeredDeformGroups);
+    }
+
+    int physicsEventTraceBreakGroupCount() {
+        return triggeredBreakGroups.size();
+    }
+
+    int physicsEventTraceBrokenBeamCount() {
+        return brokenCount(normalBeams) + brokenCount(supportBeams) + brokenCount(boundedBeams)
+                + brokenCount(lBeams) + brokenCount(anisotropicBeams);
+    }
+
+    private static int brokenCount(BeamContainer container) {
+        int result = 0;
+        for (int beam = 0; beam < container.count; beam++) {
+            if (container.broken[beam]) result++;
+        }
+        return result;
     }
 
     /** Evaluates only beams that declared a finite deformation trigger ratio. */

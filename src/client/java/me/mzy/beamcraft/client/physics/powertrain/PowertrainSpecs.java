@@ -457,10 +457,38 @@ public final class PowertrainSpecs {
             double dynamicFriction,
             double torqueLossCoef,
             String diffType,
+            List<String> availableModes,
+            double lsdPreload,
+            double lsdLockCoef,
+            double lsdRevLockCoef,
+            double viscousCoef,
+            double viscousTorque,
+            double viscousExponent,
+            double viscousSmoothing,
+            double lockTorque,
+            double lockSpring,
+            double lockDampRatio,
+            double activeLockTorque,
             List<ValueModifier> valueModifiers
     ) implements DeviceSpec {
         public DifferentialSpec {
+            diffType = diffType == null || diffType.isBlank() ? "open" : diffType;
+            availableModes = availableModes == null || availableModes.isEmpty()
+                    ? List.of(diffType) : List.copyOf(availableModes);
             valueModifiers = List.copyOf(valueModifiers);
+        }
+
+        /** Backwards-compatible constructor for callers that only need an open differential. */
+        public DifferentialSpec(String type, String name, String inputName, int inputIndex,
+                                double gearRatio, double diffTorqueSplit, double friction,
+                                double dynamicFriction, double torqueLossCoef, String diffType,
+                                List<ValueModifier> valueModifiers) {
+            this(type, name, inputName, inputIndex, gearRatio, diffTorqueSplit,
+                    friction, dynamicFriction, torqueLossCoef, diffType,
+                    List.of(diffType == null || diffType.isBlank() ? "open" : diffType),
+                    50.0, 0.2, 0.2,
+                    5.0, 50.0, 1.0, 25.0,
+                    500.0, -1.0, 0.1, -1.0, valueModifiers);
         }
     }
 

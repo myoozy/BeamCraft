@@ -59,7 +59,7 @@ BeamCraft is configured by a single JSON file in the game directory — in a
 development client that is `run/config/beamcraft.json`. It is created
 automatically on first launch if absent; on later launches any missing default
 section is merged back in without discarding keys that are not recognised. The
-file has three sections:
+file has four sections:
 
 ```json
 {
@@ -71,6 +71,9 @@ file has three sections:
     "notify": false,
     "strategy": "later-root"
   },
+  "diagnostics": {
+    "physicsEventTrace": false
+  },
   "input": {
     "throttle": {
       "keys": [{ "key": "key.keyboard.up", "value": 1.0 }],
@@ -80,6 +83,16 @@ file has three sections:
   }
 }
 ```
+
+### `diagnostics` — impact event tracing
+
+Set `physicsEventTrace` to `true` and restart the client to enable manual
+substep-level capture. Press F8 before the test to start recording, then press F8
+again after the event to stop. F8 is exposed in Minecraft's Controls menu and can
+be rebound. Up to the newest ten seconds are retained and written in the
+background to `beamcraft-traces/physics-trace-<timestamp>.csv`. The console and
+`latest.log` receive only short start/stop/path messages, and no HUD panel is
+added.
 
 ### `assetRoots` — where vehicles are loaded from
 
@@ -273,6 +286,7 @@ Other versions not tested.
 - Some compatibility code is adapted from BeamNG.drive bCDDL 1.1 Lua source;
   see [Source provenance](SOURCE_PROVENANCE.md)
 - Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Collision broadphase investigation: [docs/investigations/collision-broadphase.md](docs/investigations/collision-broadphase.md)
 
 ---
 

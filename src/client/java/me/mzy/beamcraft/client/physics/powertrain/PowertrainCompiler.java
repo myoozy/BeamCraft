@@ -191,17 +191,15 @@ final class PowertrainCompiler {
         for (DeviceSpec spec : specs) {
             switch (spec) {
                 case ShaftSpec ignored -> data.shafts.count++;
-                case DifferentialSpec ignored -> data.differentials.count++;
                 case TorsionReactorSpec ignored -> data.torsionReactors.count++;
                 default -> { }
             }
         }
         // Gearboxes are compiled per-unit as runtime SoA in compileUnits, not here.
         data.shafts.allocate(data.shafts.count);
-        data.differentials.allocate(data.differentials.count);
         data.torsionReactors.allocate(data.torsionReactors.count);
 
-        int shaft = 0, differential = 0, reactor = 0;
+        int shaft = 0, reactor = 0;
         for (int i = 0; i < specs.size(); i++) {
             switch (specs.get(i)) {
                 case ShaftSpec sh -> {
@@ -212,16 +210,6 @@ final class PowertrainCompiler {
                     data.shafts.dynamicFriction[shaft] = (float) sh.dynamicFriction();
                     data.shafts.torqueLossCoef[shaft] = (float) sh.torqueLossCoef();
                     shaft++;
-                }
-                case DifferentialSpec df -> {
-                    data.differentials.device[differential] = i;
-                    data.differentials.gearRatio[differential] = (float) df.gearRatio();
-                    data.differentials.diffTorqueSplit[differential] = (float) df.diffTorqueSplit();
-                    data.differentials.diffType[differential] = df.diffType();
-                    data.differentials.friction[differential] = (float) df.friction();
-                    data.differentials.dynamicFriction[differential] = (float) df.dynamicFriction();
-                    data.differentials.torqueLossCoef[differential] = (float) df.torqueLossCoef();
-                    differential++;
                 }
                 case TorsionReactorSpec tr -> {
                     data.torsionReactors.device[reactor] = i;
@@ -256,6 +244,7 @@ final class PowertrainCompiler {
         List<PathBuild> paths = new ArrayList<>();
         List<ReactorBuild> reactors = new ArrayList<>();
         List<SplitBuild> splitShafts = new ArrayList<>();
+        List<DifferentialBuild> differentials = new ArrayList<>();
         boolean[] visiting = new boolean[topology.deviceCount];
         byte initialFlags = dctSpec != null ? DrivenWheelPathContainer.FLAG_GEARBOX : 0;
         float initialGain = dctSpec != null ? (float) dctSpec.firstPositiveGearRatio() : 1.0f;
@@ -271,6 +260,13 @@ final class PowertrainCompiler {
         Arrays.fill(visiting, false);
         List<ReactionTermBuild> initialReaction = List.of(
                 new ReactionTermBuild(-1, initialGain, initialFlags));
+        Arrays.fill(visiting, false);
+        for (int i = 0; i < topology.childCount[clutchlike]; i++) {
+            collectDifferentialBuilds(vehicle, specs, topology,
+                    topology.children[topology.childStart[clutchlike] + i],
+                    initialReaction, gearboxDevice, rangeBoxDevice, differentials, visiting);
+        }
+        Arrays.fill(visiting, false);
         for (int i = 0; i < topology.childCount[clutchlike]; i++) {
             collectReactors(vehicle, specs, topology,
                     topology.children[topology.childStart[clutchlike] + i],
@@ -305,7 +301,7 @@ final class PowertrainCompiler {
         return new UnitBuild(engine, clutchlike, engineSpec, clutchSpec, converterSpec, dctSpec,
                 capacity, spring, maxTorque, paths, reactions, reactors,
                 gearboxDevice, gearbox, rangeBoxDevice, rangeBox,
-                splitShafts, turbocharger, supercharger);
+                splitShafts, differentials, turbocharger, supercharger);
     }
 
     /**
@@ -401,6 +397,70 @@ final class PowertrainCompiler {
         visiting[device] = false;
     }
 
+    /** Collects each differential's two output domains and its upstream torque expression. */
+    private static void collectDifferentialBuilds(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
+                                                  PowertrainTopologyContainer topology, int device,
+                                                  List<ReactionTermBuild> incomingTerms,
+                                                  int gearboxDevice, int rangeBoxDevice,
+                                                  List<DifferentialBuild> result,
+                                                  boolean[] visiting) {
+        if (visiting[device] || topology.deviceType[device] == TYPE_UNSUPPORTED) return;
+        visiting[device] = true;
+        byte addedFlags = 0;
+        if (device == gearboxDevice) addedFlags |= DrivenWheelPathContainer.FLAG_GEARBOX;
+        if (device == rangeBoxDevice) addedFlags |= DrivenWheelPathContainer.FLAG_RANGE_BOX;
+        List<ReactionTermBuild> terms = transformReactionTerms(
+                incomingTerms, topology.deviceRatio[device], addedFlags);
+        DeviceSpec spec = specs.get(device);
+
+        if (spec instanceof DifferentialSpec differentialSpec) {
+            List<PathBuild> output1 = new ArrayList<>();
+            List<PathBuild> output2 = new ArrayList<>();
+            boolean[] pathVisiting = new boolean[topology.deviceCount];
+            int end = topology.childStart[device] + topology.childCount[device];
+            for (int cursor = topology.childStart[device]; cursor < end; cursor++) {
+                int child = topology.children[cursor];
+                List<PathBuild> target = topology.parentPort[child] <= 1 ? output1 : output2;
+                collectDomainPaths(vehicle, specs, topology, child, 1.0f, (byte) 0,
+                        gearboxDevice, rangeBoxDevice, target, pathVisiting);
+            }
+            if (output1.isEmpty() || output2.isEmpty()) {
+                LOGGER.warn("Differential '{}' has no resolved wheel inertia on output {}; "
+                                + "its limited-slip coupling will stay inactive",
+                        differentialSpec.name(), output1.isEmpty() ? 1 : 2);
+            }
+            result.add(new DifferentialBuild(device, differentialSpec,
+                    output1, output2, List.copyOf(terms)));
+        }
+
+        int count = topology.childCount[device];
+        for (int i = 0; i < count; i++) {
+            int child = topology.children[topology.childStart[device] + i];
+            float split = 1.0f;
+            List<ReactionTermBuild> childTerms = terms;
+            if (topology.deviceType[device] == TYPE_SPLIT_SHAFT) {
+                boolean primary = topology.parentPort[child]
+                        == ((SplitShaftSpec) spec).primaryOutputID();
+                if (primary) {
+                    childTerms = new ArrayList<>(terms);
+                    childTerms.add(new ReactionTermBuild(device, -1.0f, (byte) 0));
+                } else {
+                    childTerms = List.of(new ReactionTermBuild(device, 1.0f, (byte) 0));
+                }
+            } else if (topology.deviceType[device] == TYPE_DIFFERENTIAL) {
+                float configured = Math.clamp(
+                        (float) ((DifferentialSpec) spec).diffTorqueSplit(), 0.0f, 1.0f);
+                split = topology.parentPort[child] <= 1 ? configured : 1.0f - configured;
+            } else if (count > 1) {
+                split = 1.0f / count;
+            }
+            if (split != 1.0f) childTerms = transformReactionTerms(childTerms, split, (byte) 0);
+            collectDifferentialBuilds(vehicle, specs, topology, child, childTerms,
+                    gearboxDevice, rangeBoxDevice, result, visiting);
+        }
+        visiting[device] = false;
+    }
+
     /**
      * Compiles each reactor's real branch torque.  A split shaft's primary output is
      * {@code input * gearRatio - splitTorque}; its secondary output is exactly
@@ -473,6 +533,7 @@ final class PowertrainCompiler {
         TorqueConverterContainer torqueConverters = data.torqueConverters;
         DctGearboxContainer dctGearboxes = data.dctGearboxes;
         SplitShaftContainer splitShafts = data.splitShafts;
+        DifferentialContainer differentials = data.differentials;
         TurbochargerContainer turbochargers = data.turbochargers;
         SuperchargerContainer superchargers = data.superchargers;
         PowertrainTopologyContainer topology = data.topology;
@@ -480,6 +541,7 @@ final class PowertrainCompiler {
         int n = units.size();
         int curves = 0, paths = 0, reactionTotal = 0, reactors = 0, reactorTerms = 0, gearSlots = 0;
         int splitCount = 0, splitPathCount = 0, turboPressurePoints = 0, turboEnginePoints = 0;
+        int differentialCount = 0, differentialPathCount = 0, differentialTermCount = 0;
         int superchargerControllerPoints = 0;
         for (UnitBuild unit : units) {
             curves += unit.engine.torqueCurve().size();
@@ -494,6 +556,12 @@ final class PowertrainCompiler {
             splitCount += unit.splitShafts.size();
             for (SplitBuild split : unit.splitShafts) {
                 splitPathCount += split.primaryPaths.size() + split.secondaryPaths.size();
+            }
+            differentialCount += unit.differentials.size();
+            for (DifferentialBuild differential : unit.differentials) {
+                differentialPathCount += differential.output1Paths.size()
+                        + differential.output2Paths.size();
+                differentialTermCount += differential.inputTerms.size();
             }
             if (unit.turbocharger != null) {
                 turboPressurePoints += unit.turbocharger.pressureCurve().size();
@@ -515,9 +583,11 @@ final class PowertrainCompiler {
         gearboxes.allocate(n, Math.max(1, gearSlots));
         rangeBoxes.allocate(n);
         splitShafts.allocate(n, splitCount, splitPathCount);
+        differentials.allocate(n, differentialCount, differentialPathCount, differentialTermCount);
 
         int curveCursor = 0, pathCursor = 0, reactionCursor = 0, reactorCursor = 0, reactorTermCursor = 0, gearCursor = 0;
         int splitCursor = 0, splitPathCursor = 0, turboPressureCursor = 0, turboEngineCursor = 0;
+        int differentialCursor = 0, differentialPathCursor = 0, differentialTermCursor = 0;
         int superchargerControllerCursor = 0;
         for (int i = 0; i < n; i++) {
             UnitBuild unit = units.get(i);
@@ -759,6 +829,80 @@ final class PowertrainCompiler {
                 splitPathCursor = writeSplitPaths(splitShafts, splitBuild.secondaryPaths, splitPathCursor);
             }
 
+            differentials.unitStart[i] = differentialCursor;
+            differentials.unitCount[i] = (short) unit.differentials.size();
+            for (DifferentialBuild differentialBuild : unit.differentials) {
+                int differential = differentialCursor++;
+                DifferentialSpec spec = differentialBuild.spec;
+                differentials.unit[differential] = i;
+                differentials.device[differential] = differentialBuild.device;
+                differentials.deviceName[differential] = spec.name();
+                differentials.gearRatio[differential] = (float) spec.gearRatio();
+                differentials.diffTorqueSplit[differential] = Math.clamp(
+                        (float) spec.diffTorqueSplit(), 0.0f, 1.0f);
+                differentials.diffType[differential] = spec.diffType();
+                int availableModes = 0;
+                for (String mode : spec.availableModes()) {
+                    availableModes |= DifferentialSolver.modeBit(mode);
+                }
+                byte initialMode = DifferentialSolver.mode(spec.diffType());
+                if (initialMode < 0) initialMode = DifferentialContainer.MODE_OPEN;
+                if (availableModes == 0) availableModes = 1 << initialMode;
+                differentials.availableModes[differential] = availableModes;
+                differentials.initialMode[differential] = initialMode;
+                differentials.activeMode[differential] = initialMode;
+                differentials.friction[differential] = Math.max(0.0f, (float) spec.friction());
+                differentials.dynamicFriction[differential] = Math.max(
+                        0.0f, (float) spec.dynamicFriction());
+                differentials.torqueLossCoef[differential] = Math.clamp(
+                        (float) spec.torqueLossCoef(), 0.0f, 1.0f);
+                differentials.lsdPreload[differential] = Math.max(0.0f, (float) spec.lsdPreload());
+                differentials.lsdLockCoef[differential] = Math.max(0.0f, (float) spec.lsdLockCoef());
+                differentials.lsdRevLockCoef[differential] = Math.max(
+                        0.0f, (float) spec.lsdRevLockCoef());
+                differentials.viscousCoef[differential] = Math.max(0.0f, (float) spec.viscousCoef());
+                differentials.viscousCapacity[differential] = Math.max(
+                        0.0f, (float) spec.viscousTorque());
+                differentials.viscousExponent[differential] = Math.max(
+                        0.0f, (float) spec.viscousExponent());
+                differentials.viscousSmoothing[differential] = Math.max(
+                        0.0f, (float) spec.viscousSmoothing());
+                float lockCapacity = Math.max(0.0f, (float) spec.lockTorque());
+                differentials.lockCapacity[differential] = lockCapacity;
+                float lockSpring = (float) spec.lockSpring();
+                if (lockSpring <= 0.0f) lockSpring = lockCapacity / 0.125f;
+                differentials.lockSpring[differential] = Math.max(0.0f, lockSpring);
+                differentials.lockDampingRatio[differential] = Math.max(
+                        0.0f, (float) spec.lockDampRatio());
+                float activeCapacity = (float) spec.activeLockTorque();
+                differentials.activeLockCapacity[differential] = activeCapacity >= 0.0f
+                        ? activeCapacity : lockCapacity;
+
+                differentials.output1PathStart[differential] = differentialPathCursor;
+                differentials.output1PathCount[differential] = (short) differentialBuild.output1Paths.size();
+                differentialPathCursor = writeDifferentialPaths(
+                        differentials, differentialBuild.output1Paths, differentialPathCursor);
+                differentials.output2PathStart[differential] = differentialPathCursor;
+                differentials.output2PathCount[differential] = (short) differentialBuild.output2Paths.size();
+                differentialPathCursor = writeDifferentialPaths(
+                        differentials, differentialBuild.output2Paths, differentialPathCursor);
+
+                differentials.inputTermStart[differential] = differentialTermCursor;
+                differentials.inputTermCount[differential] = (short) differentialBuild.inputTerms.size();
+                for (ReactionTermBuild term : differentialBuild.inputTerms) {
+                    Integer sourceSplit = term.splitDevice < 0
+                            ? null : splitIndexByDevice.get(term.splitDevice);
+                    if (term.splitDevice >= 0 && sourceSplit == null) {
+                        throw new IllegalStateException("Missing compiled split shaft for device "
+                                + topology.deviceName[term.splitDevice]);
+                    }
+                    differentials.termSplit[differentialTermCursor] = sourceSplit == null ? -1 : sourceSplit;
+                    differentials.termGain[differentialTermCursor] = term.gain;
+                    differentials.termFlags[differentialTermCursor] = term.flags;
+                    differentialTermCursor++;
+                }
+            }
+
             engines.curveStart[i] = curveCursor; engines.curveCount[i] = (short) engine.torqueCurve().size();
             for (TorquePoint point : engine.torqueCurve()) {
                 engines.curveRPM[curveCursor] = (float) point.rpm();
@@ -799,6 +943,17 @@ final class PowertrainCompiler {
     }
 
     private static int writeSplitPaths(SplitShaftContainer target, List<PathBuild> paths, int cursor) {
+        for (PathBuild path : paths) {
+            target.pathWheel[cursor] = path.wheel;
+            target.pathGain[cursor] = path.gain;
+            target.pathFlags[cursor] = path.flags;
+            cursor++;
+        }
+        return cursor;
+    }
+
+    private static int writeDifferentialPaths(DifferentialContainer target,
+                                              List<PathBuild> paths, int cursor) {
         for (PathBuild path : paths) {
             target.pathWheel[cursor] = path.wheel;
             target.pathGain[cursor] = path.gain;
@@ -1000,13 +1155,19 @@ final class PowertrainCompiler {
                               List<PathBuild> primaryPaths, List<PathBuild> secondaryPaths) {
     }
 
+    private record DifferentialBuild(int device, DifferentialSpec spec,
+                                     List<PathBuild> output1Paths, List<PathBuild> output2Paths,
+                                     List<ReactionTermBuild> inputTerms) {
+    }
+
     private record UnitBuild(int engineDevice, int clutchlikeDevice, CombustionEngineSpec engine,
                              FrictionClutchSpec clutch, TorqueConverterSpec converter, DctGearboxSpec dct,
                              float capacity, float spring, float maxTorque,
                              List<PathBuild> paths, List<Integer> reactions, List<ReactorBuild> reactors,
                              int gearboxDevice, GearSelectableSpec gearbox,
                              int rangeBoxDevice, GearboxSpec rangeBox,
-                             List<SplitBuild> splitShafts, TurbochargerSpec turbocharger,
+                             List<SplitBuild> splitShafts, List<DifferentialBuild> differentials,
+                             TurbochargerSpec turbocharger,
                              SuperchargerSpec supercharger) {
     }
 }
