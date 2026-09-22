@@ -286,6 +286,7 @@ Other versions not tested.
 - Some compatibility code is adapted from BeamNG.drive bCDDL 1.1 Lua source;
   see [Source provenance](SOURCE_PROVENANCE.md)
 - Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Collision broadphase investigation: [docs/investigations/collision-broadphase.md](docs/investigations/collision-broadphase.md)
 
 ---
 

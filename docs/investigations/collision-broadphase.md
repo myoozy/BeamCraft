@@ -1,4 +1,30 @@
-# Vehicle-to-Vehicle Collision Broadphase Notes
+# Vehicle-to-Vehicle Collision Broadphase Investigation
+
+> This is an investigation log, not the authoritative architecture document.
+> Measurements, branch names, and implementation descriptions are snapshots
+> from the dates stated below. For the repository-wide architecture, see
+> [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md).
+
+## Implementation status (checked 2026-09-22)
+
+The checked-in implementation still uses the chunked vehicle-to-vehicle path
+described below:
+
+- `CollisionChunkIndex` partitions collidable nodes into node chunks and
+  complete triangles into meshlets; the working limits are 16 nodes and 8
+  triangles.
+- Chunk and meshlet swept bounds are refit every ten 2000 Hz physics substeps
+  (about 5 ms). The refit uses previous, current, and linearly predicted node
+  positions.
+- A chunk-level SAP is followed by per-chunk local X/Y/Z node SAP queries.
+- Candidate generation and cached-contact solving are owned by
+  `CollisionPipeline`; contact coloring and separation-certificate checks are
+  still active.
+
+The proposed per-substep coarse-bound update described later in this document
+has not become the default implementation. The benchmark tables and branch
+names below remain historical experiment records, even where they use words
+such as "current" or "implemented".
 
 This document records the September 2026 design discussion and experiments
 around BeamCraft's vehicle-to-vehicle collision broadphase. It includes both
@@ -22,9 +48,9 @@ simple per-node response is cheap, sufficiently accurate for the game, and has
 the desirable property that a node spawned inside a block remains trapped
 instead of being teleported out.
 
-## Current pipeline
+## Pipeline at the time of the investigation
 
-The current prototype vehicle-to-vehicle path is node versus triangle through
+The investigated vehicle-to-vehicle path is node versus triangle through
 stable node chunks and whole-triangle meshlets:
 
 1. Static collision membership is partitioned into node chunks and triangle
@@ -41,9 +67,9 @@ stable node chunks and whole-triangle meshlets:
    most pairs whose relative geometry has not consumed their known clearance.
 7. The narrow phase performs position correction, normal impulse, and friction.
 
-The broadphase is rebuilt every ten 2000 Hz substeps, or approximately every
-5 ms. Node and triangle swept bounds include previous/current positions and a
-linear future prediction over that interval.
+At the 2026-09-22 code check, the broadphase is refit every ten 2000 Hz
+substeps, or approximately every 5 ms. Node and triangle swept bounds include
+previous/current positions and a linear future prediction over that interval.
 
 Relevant classes:
 
@@ -127,13 +153,13 @@ Primitive `Arrays.sort(long[])` can be faster than this repeated query work in
 practice because it is optimized and accesses contiguous memory. The observed
 cost does not imply that sorting itself is the dominant operation.
 
-## Current branch versus `dev`
+## Historical branch comparison: investigation branch versus `dev`
 
 Measurements indicate that `dev` spends roughly one third as much time in its
 node SAP, but more time in candidate generation. The total physics cost is
 similar.
 
-The current branch performs additional SAP-side work:
+The investigation branch performed additional SAP-side work:
 
 - separate sorted node segments and active axes per vehicle;
 - vehicle and authored-part swept bounds;
@@ -382,7 +408,7 @@ subtree can be rebuilt when a quality metric degrades. Nevertheless, BVH
 complexity is not justified until direct chunk-pair checks or chunk SAP are
 measured to be too expensive.
 
-## Implemented chunk experiments
+## Historical chunk experiments
 
 The prototype was implemented on `codex/collision-chunk-broadphase`. All times
 below are rolling in-game averages from two deliberately overlapping copies of
@@ -495,9 +521,10 @@ the largest of those three local operations.
   remain discarded.
 - Total-physics averages must not be compared without stage times; internal
   force varied by around a millisecond between several captures.
-- The current implementation still rebuilds the broadphase every ten substeps.
-  It has not yet implemented the original proposal to check chunk AABBs every
-  substep.
+- The implementation measured in this section rebuilt the broadphase every ten
+  substeps. The checked-in implementation still has that cadence as of the
+  status check at the top of this document; the original proposal to check
+  chunk AABBs every substep has not become the default.
 - Merely moving all primitive maintenance to every substep is unlikely to work.
   The earlier persistent SAP showed that insertion sorting does not eliminate
   the cost of scanning every node, triangle, and triangle vertex.
