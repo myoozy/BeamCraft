@@ -94,8 +94,12 @@ public class JBeamParser {
      * 有前缀时返回求值得到的字符串（非字符串结果 / 求值失败 → null）。
      */
     static String evalStringValue(String raw, Map<String, Double> vars) {
+        return evalStringValue(raw, JBeamExpressionEvaluator.contextOf(vars));
+    }
+
+    static String evalStringValue(String raw, BeamExpressionContext context) {
         if (raw == null || !raw.startsWith("$=")) return raw;
-        EvalOutcome out = JBeamExpressionEvaluator.evaluate(raw, JBeamExpressionEvaluator.contextOf(vars));
+        EvalOutcome out = JBeamExpressionEvaluator.evaluate(raw, context);
         if (out.status() == EvalStatus.OK) {
             Object v = out.value();
             if (v instanceof String s) return s;
@@ -1084,6 +1088,16 @@ public class JBeamParser {
 
     // --- 7. Flexbody Parsing ---
     public static void parseFlexbodies(JsonArray flexbodies, SoftBodyVehicle vehicle, String rootPartName, JBeamAssembler.PartEntry entry) {
+        parseFlexbodies(flexbodies, vehicle, rootPartName, entry,
+                JBeamExpressionEvaluator.contextOf(entry.variables));
+    }
+
+    static void parseFlexbodies(
+            JsonArray flexbodies,
+            SoftBodyVehicle vehicle,
+            String rootPartName,
+            JBeamAssembler.PartEntry entry,
+            BeamExpressionContext expressionContext) {
         boolean isHeader = true;
         java.util.List<String> currentGroups = new java.util.ArrayList<>();
         String currentDeformGroup = "";
@@ -1114,7 +1128,7 @@ public class JBeamParser {
                     if (meshName.isEmpty()) continue;
 
                     // meshName 可能是一条 "$=..." 字符串表达式（如 $components 条件选 mesh）
-                    String evaluatedMesh = evalStringValue(meshName, entry.variables);
+                    String evaluatedMesh = evalStringValue(meshName, expressionContext);
                     if (evaluatedMesh == null || evaluatedMesh.isEmpty()) continue;
                     meshName = evaluatedMesh;
 
@@ -1138,23 +1152,26 @@ public class JBeamParser {
                     for (int i = 1; i < row.size(); i++) {
                         if (row.get(i).isJsonObject()) {
                             JsonObject trans = row.get(i).getAsJsonObject();
-                            if (trans.has("pos")) {
-                                JsonObject pos = trans.getAsJsonObject("pos");
-                                px = getFloatSafe(pos, "x", 0, entry.variables);
-                                py = getFloatSafe(pos, "y", 0, entry.variables);
-                                pz = getFloatSafe(pos, "z", 0, entry.variables);
+                            float[] pos = vectorValue(trans.get("pos"), expressionContext,
+                                    entry.variables, 0);
+                            if (pos != null) {
+                                px = pos[0];
+                                py = pos[1];
+                                pz = pos[2];
                             }
-                            if (trans.has("rot")) {
-                                JsonObject rot = trans.getAsJsonObject("rot");
-                                rx = getFloatSafe(rot, "x", 0, entry.variables);
-                                ry = getFloatSafe(rot, "y", 0, entry.variables);
-                                rz = getFloatSafe(rot, "z", 0, entry.variables);
+                            float[] rot = vectorValue(trans.get("rot"), expressionContext,
+                                    entry.variables, 0);
+                            if (rot != null) {
+                                rx = rot[0];
+                                ry = rot[1];
+                                rz = rot[2];
                             }
-                            if (trans.has("scale")) {
-                                JsonObject scale = trans.getAsJsonObject("scale");
-                                sx = getFloatSafe(scale, "x", 1, entry.variables);
-                                sy = getFloatSafe(scale, "y", 1, entry.variables);
-                                sz = getFloatSafe(scale, "z", 1, entry.variables);
+                            float[] scale = vectorValue(trans.get("scale"), expressionContext,
+                                    entry.variables, 1);
+                            if (scale != null) {
+                                sx = scale[0];
+                                sy = scale[1];
+                                sz = scale[2];
                             }
                             deformGroup = getStringSafe(trans, "deformGroup", deformGroup);
                             deformMaterialBase = getStringSafe(
@@ -1176,5 +1193,59 @@ public class JBeamParser {
                 }
             }
         }
+    }
+
+    private static float[] vectorValue(
+            JsonElement raw,
+            BeamExpressionContext expressionContext,
+            Map<String, Double> variables,
+            float defaultValue) {
+        if (raw == null || raw.isJsonNull()) {
+            return null;
+        }
+        if (raw.isJsonObject()) {
+            JsonObject object = raw.getAsJsonObject();
+            return new float[]{
+                    getFloatSafe(object, "x", defaultValue, variables),
+                    getFloatSafe(object, "y", defaultValue, variables),
+                    getFloatSafe(object, "z", defaultValue, variables)
+            };
+        }
+        if (!raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+
+        String expression = raw.getAsString();
+        if (!expression.startsWith("$=")) {
+            return null;
+        }
+        EvalOutcome outcome = JBeamExpressionEvaluator.evaluate(expression, expressionContext);
+        if (outcome.status() != EvalStatus.OK) {
+            ExpressionDiagnostics.warn(expression, outcome.reason());
+            return null;
+        }
+        if (!(outcome.value() instanceof Map<?, ?> vector)) {
+            return null;
+        }
+        return new float[]{
+                vectorComponent(vector, "x", defaultValue),
+                vectorComponent(vector, "y", defaultValue),
+                vectorComponent(vector, "z", defaultValue)
+        };
+    }
+
+    private static float vectorComponent(Map<?, ?> vector, String name, float defaultValue) {
+        Object value = vector.get(name);
+        if (value instanceof Number number) {
+            return number.floatValue();
+        }
+        if (value instanceof String string) {
+            try {
+                return Float.parseFloat(string);
+            } catch (NumberFormatException ignored) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
     }
 }

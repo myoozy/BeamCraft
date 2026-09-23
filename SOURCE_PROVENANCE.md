@@ -55,6 +55,11 @@ is recorded:
 - Node-and-beam soft-body dynamics, stability/stiffness limiting, collision and
   damage logic.
 - Flexbody binding and DAE loading.
+- Flexbody transform expressions in `JBeamParser.java` were checked against the
+  installed BeamNG data entry
+  `vehicles/vivace/vivace_suspension_R_rally.jbeam` (BeamNG contributors). The
+  compatibility change was contributed by M1AO and BeamCraft contributors with
+  Codex assistance; no BeamNG implementation source was adapted for this change.
 - Rendering, material interpretation and GPU skinning.
 - Rigs of Rods GPLv3 `source/main/physics/flex/FlexBody.cpp`, `FlexBody.h`, and
   `Locator_t.h` were consulted in September 2026 as a comparative reference for

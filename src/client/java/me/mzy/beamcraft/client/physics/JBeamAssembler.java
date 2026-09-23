@@ -7,6 +7,7 @@ import me.mzy.beamcraft.client.physics.powertrain.JBeamPowertrainParser;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -124,6 +125,13 @@ public class JBeamAssembler {
             collectPartsRecursive(assemblyRootName, rootPart, userConfig, registry,
                     activeParts, new TransformContext(), globalVariables);
 
+            // Expressions in one selected part may refer to vehicle-wide
+            // components contributed by another selected part.
+            JsonObject assembledData = JBeamPartMerger.mergeParts(
+                    activeParts.stream().map(entry -> entry.json).toList());
+            BeamExpressionContext expressionContext = BeamExpressionContext.of(
+                    globalVariables, expressionRoot(assembledData));
+
             System.out.println("Starting multi-Pass Assembly");
             System.out.println("Collected " + activeParts.size() + " valid part modules.");
 
@@ -171,7 +179,8 @@ public class JBeamAssembler {
                 }
                 if (entry.json.has("flexbodies")) {
                     // Flexbody 也需要接受空间变换矩阵以正确渲染位移
-                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"), vehicle, rootPartName, entry);
+                    JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"),
+                            vehicle, rootPartName, entry, expressionContext);
                 }
             }
             int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;
@@ -195,8 +204,6 @@ public class JBeamAssembler {
             // BeamNG exposes one vehicle-wide JBeam data view after selected parts have been
             // unified. Configuration parsers consume that view once; structural parsers above
             // still use the original parts because their transforms and origins are per-part.
-            JsonObject assembledData = JBeamPartMerger.mergeParts(
-                    activeParts.stream().map(entry -> entry.json).toList());
             vehicle.powertrain.addSpecs(JBeamPowertrainParser.parsePart(assembledData, globalVariables));
             // Controller instances are resolved against the named beams below, in
             // SoftBodyVehicle.finalizePhysicsSetup, after every part has been built.
@@ -290,6 +297,46 @@ public class JBeamAssembler {
         System.out.println("Resolved vehicle namespace '" + requestedRootName
                 + "' to main JBeam part '" + mainPartName + "'");
         return mainPartName;
+    }
+
+    private static Map<String, Object> expressionRoot(JsonObject assembledData) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        JsonElement components = assembledData.get("components");
+        if (components != null && components.isJsonObject()) {
+            result.put("components", toExpressionObject(components.getAsJsonObject()));
+        }
+        return result;
+    }
+
+    private static Map<String, Object> toExpressionObject(JsonObject object) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
+            result.put(entry.getKey(), toExpressionValue(entry.getValue()));
+        }
+        return result;
+    }
+
+    private static Object toExpressionValue(JsonElement value) {
+        if (value == null || value.isJsonNull()) {
+            return null;
+        }
+        if (value.isJsonObject()) {
+            return toExpressionObject(value.getAsJsonObject());
+        }
+        if (value.isJsonArray()) {
+            List<Object> result = new ArrayList<>();
+            for (JsonElement element : value.getAsJsonArray()) {
+                result.add(toExpressionValue(element));
+            }
+            return result;
+        }
+        if (value.getAsJsonPrimitive().isBoolean()) {
+            return value.getAsBoolean();
+        }
+        if (value.getAsJsonPrimitive().isNumber()) {
+            return value.getAsDouble();
+        }
+        return value.getAsString();
     }
 
     private static boolean addSpawnCoupler(SoftBodyVehicle vehicle, String node1, String node2,
