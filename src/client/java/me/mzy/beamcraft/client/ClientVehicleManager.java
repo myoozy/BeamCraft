@@ -27,10 +27,12 @@ import java.util.Map;
 
 public final class ClientVehicleManager {
 
-    private static final double ROBUST_BOUNDS_MIN_RADIUS = 4.0;
-    private static final double ROBUST_BOUNDS_RADIUS_PADDING = 2.0;
-    private static final double ROBUST_BOUNDS_BOX_PADDING = 1.0;
+    private static final double MIN_INTERACTION_BOUNDS_SIDE = 0.75;
+    private static final double MIN_RENDER_BOUNDS_SPAN = 4.0;
+    private static final double RENDER_DEFORMATION_MARGIN = 2.0;
     private static float[] boundsScratch = new float[NodeContainer.INIT_NODE_CAP];
+
+    static record BoundsProfile(double interactionSide, double renderMaxSpan) {}
 
     private static final Map<Integer, SoftBodyVehicle> VEHICLE_MAP = new HashMap<>();
     private static final VehicleLoadFailureCache LOAD_FAILURES = new VehicleLoadFailureCache();
@@ -147,6 +149,10 @@ public final class ClientVehicleManager {
 
         LoadTiming.log("[load total] vehicle load (" + rootPart + ")", totalStart);
 
+        BoundsProfile boundsProfile = computeBoundsProfile(softBody.nodes);
+        softBody.interactionBoundsSide = boundsProfile.interactionSide();
+        softBody.renderBoundsMaxSpan = boundsProfile.renderMaxSpan();
+
         float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
         softBody.nodes.rotateNodes(playerYaw, 0, 0);
         BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
@@ -173,56 +179,98 @@ public final class ClientVehicleManager {
         double entityX = vehicle.parentEntity.getX();
         double entityY = vehicle.parentEntity.getY();
         double entityZ = vehicle.parentEntity.getZ();
-        Box localBounds = computeRobustLocalBounds(nodes);
-        vehicle.parentEntity.setBoundingBox(localBounds.offset(entityX, entityY, entityZ));
+        Box interactionBounds = computeInteractionLocalBounds(vehicle);
+        Box visibilityBounds = computeCappedRenderLocalBounds(nodes, vehicle.renderBoundsMaxSpan);
+        vehicle.parentEntity.setBoundingBox(interactionBounds.offset(entityX, entityY, entityZ));
+        vehicle.parentEntity.setVisibilityBoundingBox(visibilityBounds.offset(entityX, entityY, entityZ));
     }
 
     /**
-     * Builds a render/interaction envelope around the main vehicle body without
-     * allowing a detached node to expand the Minecraft entity AABB indefinitely.
-     * The coordinate-wise median follows the majority of the nodes and is not
-     * displaced by a small detached group. The undeformed vehicle diagonal
-     * supplies a vehicle-specific acceptance radius, so this also works for
-     * vehicles much larger than a passenger car.
+     * Captures the two spawn-time dimensions that must not grow with deformation.
+     * The shorter authored horizontal span is the interaction-square side.  The
+     * full 3-D diagonal is a rotation-safe cap for the visibility AABB.
      */
-    static Box computeRobustLocalBounds(NodeContainer nodes) {
-        ensureBoundsScratchCapacity(nodes.count);
-        float centerX = NodeContainer.medianOfFinite(nodes.renderSnapCurrX, nodes.count, boundsScratch);
-        float centerY = NodeContainer.medianOfFinite(nodes.renderSnapCurrY, nodes.count, boundsScratch);
-        float centerZ = NodeContainer.medianOfFinite(nodes.renderSnapCurrZ, nodes.count, boundsScratch);
-
-        double baseMinX = Double.POSITIVE_INFINITY;
-        double baseMinY = Double.POSITIVE_INFINITY;
-        double baseMinZ = Double.POSITIVE_INFINITY;
-        double baseMaxX = Double.NEGATIVE_INFINITY;
-        double baseMaxY = Double.NEGATIVE_INFINITY;
-        double baseMaxZ = Double.NEGATIVE_INFINITY;
+    static BoundsProfile computeBoundsProfile(NodeContainer nodes) {
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double minZ = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        double maxZ = Double.NEGATIVE_INFINITY;
         for (int node = 0; node < nodes.count; node++) {
             double x = nodes.baseX[node];
             double y = nodes.baseY[node];
             double z = nodes.baseZ[node];
-            if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
-                continue;
-            }
-            baseMinX = Math.min(baseMinX, x);
-            baseMinY = Math.min(baseMinY, y);
-            baseMinZ = Math.min(baseMinZ, z);
-            baseMaxX = Math.max(baseMaxX, x);
-            baseMaxY = Math.max(baseMaxY, y);
-            baseMaxZ = Math.max(baseMaxZ, z);
+            if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) continue;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            minZ = Math.min(minZ, z);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            maxZ = Math.max(maxZ, z);
+        }
+        if (!Double.isFinite(minX)) {
+            return new BoundsProfile(MIN_INTERACTION_BOUNDS_SIDE, MIN_RENDER_BOUNDS_SPAN);
         }
 
-        double baseDiagonal = 0.0;
-        if (Double.isFinite(baseMinX)) {
-            baseDiagonal = Math.sqrt(
-                    square(baseMaxX - baseMinX)
-                            + square(baseMaxY - baseMinY)
-                            + square(baseMaxZ - baseMinZ)
-            );
+        double spanX = maxX - minX;
+        double spanY = maxY - minY;
+        double spanZ = maxZ - minZ;
+        double interactionSide = Math.max(MIN_INTERACTION_BOUNDS_SIDE, Math.min(spanX, spanZ));
+        double diagonal = Math.sqrt(square(spanX) + square(spanY) + square(spanZ));
+        double renderMaxSpan = Math.max(MIN_RENDER_BOUNDS_SPAN, diagonal + RENDER_DEFORMATION_MARGIN);
+        return new BoundsProfile(interactionSide, renderMaxSpan);
+    }
+
+    /** Small, yaw-invariant interaction cube centred on the cabin when possible. */
+    static Box computeInteractionLocalBounds(SoftBodyVehicle vehicle) {
+        NodeContainer nodes = vehicle.nodes;
+        ensureBoundsScratchCapacity(nodes.count);
+        double medianX = NodeContainer.medianOfFinite(nodes.renderSnapCurrX, nodes.count, boundsScratch);
+        double medianY = NodeContainer.medianOfFinite(nodes.renderSnapCurrY, nodes.count, boundsScratch);
+        double medianZ = NodeContainer.medianOfFinite(nodes.renderSnapCurrZ, nodes.count, boundsScratch);
+        double centerX = medianX;
+        double centerY = medianY;
+        double centerZ = medianZ;
+
+        var driver = vehicle.cameras.driver();
+        if (driver != null) {
+            int driverNode = driver.nodeIndex();
+            if (isFiniteNode(nodes, driverNode)) {
+                centerX = nodes.renderSnapCurrX[driverNode];
+                centerY = nodes.renderSnapCurrY[driverNode];
+                centerZ = nodes.renderSnapCurrZ[driverNode];
+
+                var refs = vehicle.cameras.refNodes();
+                if (refs != null && isFiniteNode(nodes, refs.ref()) && isFiniteNode(nodes, refs.left())) {
+                    double lateralX = nodes.renderSnapCurrX[refs.left()] - nodes.renderSnapCurrX[refs.ref()];
+                    double lateralZ = nodes.renderSnapCurrZ[refs.left()] - nodes.renderSnapCurrZ[refs.ref()];
+                    double lateralLength = Math.sqrt(square(lateralX) + square(lateralZ));
+                    if (lateralLength > 1.0e-8) {
+                        lateralX /= lateralLength;
+                        lateralZ /= lateralLength;
+                        double lateralOffset = (medianX - centerX) * lateralX + (medianZ - centerZ) * lateralZ;
+                        centerX += lateralOffset * lateralX;
+                        centerZ += lateralOffset * lateralZ;
+                    }
+                }
+            }
         }
-        double radius = Math.max(ROBUST_BOUNDS_MIN_RADIUS,
-                baseDiagonal + ROBUST_BOUNDS_RADIUS_PADDING);
-        double radiusSquared = radius * radius;
+
+        double half = Math.max(MIN_INTERACTION_BOUNDS_SIDE, vehicle.interactionBoundsSide) * 0.5;
+        return new Box(centerX - half, centerY - half, centerZ - half,
+                centerX + half, centerY + half, centerZ + half);
+    }
+
+    /**
+     * Full-node visibility envelope, capped around the robust median so one
+     * detached node cannot keep the complete vehicle renderable indefinitely.
+     */
+    static Box computeCappedRenderLocalBounds(NodeContainer nodes, double maxSpan) {
+        ensureBoundsScratchCapacity(nodes.count);
+        double centerX = NodeContainer.medianOfFinite(nodes.renderSnapCurrX, nodes.count, boundsScratch);
+        double centerY = NodeContainer.medianOfFinite(nodes.renderSnapCurrY, nodes.count, boundsScratch);
+        double centerZ = NodeContainer.medianOfFinite(nodes.renderSnapCurrZ, nodes.count, boundsScratch);
 
         double minX = Double.POSITIVE_INFINITY;
         double minY = Double.POSITIVE_INFINITY;
@@ -235,10 +283,6 @@ public final class ClientVehicleManager {
             double y = nodes.renderSnapCurrY[node];
             double z = nodes.renderSnapCurrZ[node];
             if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
-                continue;
-            }
-            double distanceSquared = square(x - centerX) + square(y - centerY) + square(z - centerZ);
-            if (distanceSquared > radiusSquared) {
                 continue;
             }
             minX = Math.min(minX, x);
@@ -254,14 +298,18 @@ public final class ClientVehicleManager {
             minY = maxY = centerY;
             minZ = maxZ = centerZ;
         }
-        return new Box(
-                minX - ROBUST_BOUNDS_BOX_PADDING,
-                minY - ROBUST_BOUNDS_BOX_PADDING,
-                minZ - ROBUST_BOUNDS_BOX_PADDING,
-                maxX + ROBUST_BOUNDS_BOX_PADDING,
-                maxY + ROBUST_BOUNDS_BOX_PADDING,
-                maxZ + ROBUST_BOUNDS_BOX_PADDING
-        );
+        double half = Math.max(MIN_RENDER_BOUNDS_SPAN, maxSpan) * 0.5;
+        if (maxX - minX > half * 2.0) { minX = centerX - half; maxX = centerX + half; }
+        if (maxY - minY > half * 2.0) { minY = centerY - half; maxY = centerY + half; }
+        if (maxZ - minZ > half * 2.0) { minZ = centerZ - half; maxZ = centerZ + half; }
+        return new Box(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    private static boolean isFiniteNode(NodeContainer nodes, int node) {
+        return 0 <= node && node < nodes.count
+                && Float.isFinite(nodes.renderSnapCurrX[node])
+                && Float.isFinite(nodes.renderSnapCurrY[node])
+                && Float.isFinite(nodes.renderSnapCurrZ[node]);
     }
 
     private static void ensureBoundsScratchCapacity(int nodeCount) {

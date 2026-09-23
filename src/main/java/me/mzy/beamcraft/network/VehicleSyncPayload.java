@@ -6,7 +6,24 @@ import net.minecraft.network.codec.PacketCodecs;
 import net.minecraft.network.packet.CustomPayload;
 import net.minecraft.util.Identifier;
 
-public record VehicleSyncPayload(int entityId, double x, double y, double z, float yaw) implements CustomPayload {
+public record VehicleSyncPayload(
+        int entityId,
+        double x,
+        double y,
+        double z,
+        float yaw,
+        RiderAnchor riderAnchor
+) implements CustomPayload {
+
+    public record RiderAnchor(float x, float y, float z, boolean eyePosition) {
+        public static final PacketCodec<RegistryByteBuf, RiderAnchor> CODEC = PacketCodec.tuple(
+                PacketCodecs.FLOAT, RiderAnchor::x,
+                PacketCodecs.FLOAT, RiderAnchor::y,
+                PacketCodecs.FLOAT, RiderAnchor::z,
+                PacketCodecs.BOOL, RiderAnchor::eyePosition,
+                RiderAnchor::new
+        );
+    }
 
     public static final CustomPayload.Id<VehicleSyncPayload> ID = new CustomPayload.Id<>(Identifier.of("beamcraft", "vehicle_sync"));
 
@@ -16,6 +33,7 @@ public record VehicleSyncPayload(int entityId, double x, double y, double z, flo
             PacketCodecs.DOUBLE, VehicleSyncPayload::y,
             PacketCodecs.DOUBLE, VehicleSyncPayload::z,
             PacketCodecs.FLOAT, VehicleSyncPayload::yaw,
+            RiderAnchor.CODEC, VehicleSyncPayload::riderAnchor,
             VehicleSyncPayload::new
     );
 

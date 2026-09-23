@@ -67,6 +67,9 @@ public class BeamCraft implements ModInitializer {
 					// 同步服务端实体位置，防止服务端进行视距卸载或判定移动作弊
 					entity.setPosition(payload.x(), payload.y(), payload.z());
 					entity.setYaw(payload.yaw());
+					VehicleSyncPayload.RiderAnchor riderAnchor = payload.riderAnchor();
+					vehicle.setRiderAnchor(
+							riderAnchor.x(), riderAnchor.y(), riderAnchor.z(), riderAnchor.eyePosition());
 					entity.velocityModified = true; // 挂起原版速度修正预测
 				}
 			});

@@ -57,6 +57,7 @@ public class PhysicsWorld {
     private SoftBodyVehicle[] candidateTaskVehicles = new SoftBodyVehicle[0];
     private int[] candidateTaskMeshletStarts = new int[0];
     private int[] candidateTaskMeshletEnds = new int[0];
+    private final float[] riderAnchorScratch = new float[3];
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -455,13 +456,22 @@ public class PhysicsWorld {
         for (SoftBodyVehicle vehicle : result.preparedStep().activeVehicles()) {
             vehicle.nodes.writeRenderBuffer();
             vehicle.updateEntityLocation();
-            if (vehicle.parentEntity != null && ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
+            if (vehicle.parentEntity != null) {
+                boolean riderAnchorIsEye = vehicle.resolveRiderAnchor(riderAnchorScratch);
+                vehicle.parentEntity.setRiderAnchor(
+                        riderAnchorScratch[0], riderAnchorScratch[1], riderAnchorScratch[2], riderAnchorIsEye);
+                if (!ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
+                    continue;
+                }
                 ClientPlayNetworking.send(new VehicleSyncPayload(
                         vehicle.parentEntity.getId(),
                         vehicle.parentEntity.getX(),
                         vehicle.parentEntity.getY(),
                         vehicle.parentEntity.getZ(),
-                        vehicle.parentEntity.getYaw()
+                        vehicle.parentEntity.getYaw(),
+                        new VehicleSyncPayload.RiderAnchor(
+                                riderAnchorScratch[0], riderAnchorScratch[1], riderAnchorScratch[2],
+                                riderAnchorIsEye)
                 ));
             }
         }

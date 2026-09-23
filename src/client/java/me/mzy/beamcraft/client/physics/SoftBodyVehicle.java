@@ -26,6 +26,9 @@ public class SoftBodyVehicle {
     final int parkingBrakeInputSignalId;
     public final PhysicsVehicleEntity parentEntity;
     public final float[] localOriginShift = new float[3];
+    /** Fixed interaction-box side and rotation-safe visibility cap, derived at assembly time. */
+    public double interactionBoundsSide = 1.0;
+    public double renderBoundsMaxSpan = 4.0;
     public int vehicleId = -1;
     public int globalNodeOffset = 0;
 
@@ -74,6 +77,7 @@ public class SoftBodyVehicle {
     long physicsEventTraceBreakCommitNanos;
 
     final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
+    private final float[] riderAnchorScratch = new float[3];
 
     // Written once by this vehicle's broad-phase task and consumed after the
     // parallel candidate-generation barrier. Primitive fields keep collision
@@ -124,6 +128,40 @@ public class SoftBodyVehicle {
         double newEntityY = entityY + localOriginShift[1];
         double newEntityZ = entityZ + localOriginShift[2];
         this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
+    }
+
+    /**
+     * Resolves the current local rider anchor.  A real driver camera is an eye
+     * anchor; vehicles without one fall back to the robust node median, which
+     * is treated as a feet anchor so it cannot place the rider below the body.
+     *
+     * @param out receives local x/y/z
+     * @return true when {@code out} is a driver eye position, false when it is
+     *         the median fallback feet position
+     */
+    public boolean resolveRiderAnchor(float[] out) {
+        if (out == null || out.length < 3) {
+            throw new IllegalArgumentException("rider anchor output must hold three values");
+        }
+        VehicleCameraData.InternalCamera driver = cameras.driver();
+        if (driver != null) {
+            int node = driver.nodeIndex();
+            if (0 <= node && node < nodes.count
+                    && Float.isFinite(nodes.posX[node])
+                    && Float.isFinite(nodes.posY[node])
+                    && Float.isFinite(nodes.posZ[node])) {
+                out[0] = nodes.posX[node];
+                out[1] = nodes.posY[node];
+                out[2] = nodes.posZ[node];
+                return true;
+            }
+        }
+
+        nodes.getMedianPosition(riderAnchorScratch);
+        out[0] = riderAnchorScratch[0];
+        out[1] = riderAnchorScratch[1];
+        out[2] = riderAnchorScratch[2];
+        return false;
     }
 
     /**

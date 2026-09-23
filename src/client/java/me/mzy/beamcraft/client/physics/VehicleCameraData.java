@@ -12,18 +12,32 @@ public final class VehicleCameraData {
     public record RefNodes(int ref, int back, int left, int up) {}
 
     private final List<InternalCamera> internal = new ArrayList<>();
+    private InternalCamera driver;
     private RefNodes refNodes;
     private ExternalCamera chase;
     private ExternalCamera external;
 
     public void addInternal(String type, int nodeIndex, float fov) {
-        internal.add(new InternalCamera(type == null ? "" : type, nodeIndex, fov));
+        InternalCamera camera = new InternalCamera(type == null ? "" : type, nodeIndex, fov);
+        internal.add(camera);
+        if (driver == null && camera.type().equalsIgnoreCase("driver")) {
+            driver = camera;
+        }
     }
 
     public InternalCamera preferredInternal() {
         return internal.stream()
                 .min(Comparator.comparingInt(camera -> priority(camera.type())))
                 .orElse(null);
+    }
+
+    /**
+     * Returns an authored driver camera only.  Other internal cameras (dash,
+     * hood, bumper, etc.) are useful viewing fallbacks but are not reliable
+     * cabin or rider anchors.
+     */
+    public InternalCamera driver() {
+        return driver;
     }
 
     private static int priority(String type) {
@@ -61,6 +75,7 @@ public final class VehicleCameraData {
 
     public void clear() {
         internal.clear();
+        driver = null;
         refNodes = null;
         chase = null;
         external = null;
