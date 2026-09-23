@@ -88,6 +88,8 @@ The project uses `loom.splitEnvironmentSourceSets()` — common code lives in `s
 
 **`SoftBodyVehicle.java`** — One vehicle instance. Owns all physics data in Structure-of-Arrays (SoA) containers and the container lifecycle (`add`/`reset`/`clear`/`finalize`), break-group coordination and the public `solveInternalForces` entry points, which delegate to `VehicleInternalForceSolver`. Containers: `NodeContainer`; two `BeamContainer`s (normal + support); `BoundedBeamContainer`, `LBeamContainer`, `AnisotropicBeamContainer`, `CouplerContainer`, `HydroContainer`, `TorsionHydroContainer`, `TorsionBarContainer`, `SlideNodeContainer`, `TriangleContainer`, `WheelContainer`, `FlexbodyContainer`; plus `PowertrainSystem`, `AdaptiveDamperActuators`, `DriverInputFilter`, `VehicleCameraData`. Also caches per-part bounding boxes so inactive sub-assemblies can be culled.
 
+**`BeamGraph.java`** — Immutable authored node/beam adjacency built after vehicle assembly. It exposes both complete constraint connectivity and a narrower cohesive graph that excludes one-way support beams and break-group seams. Flexbody binding uses it to reject a spatially nearby fourth locator node that does not belong to the same compact local structure; the graph remains general-purpose for future topology diagnostics and partitioning.
+
 Break group system: beams can be grouped; when enough beams in a group break, all remaining beams in that group break too.
 
 **`DirectionalStabilityLimiter.java`** — direction-aware per-node budget clamp. The reduction is shared across a node's constraints weighted by how much each fills the node, so a damper pays for its own share while a small contributor is effectively protected.

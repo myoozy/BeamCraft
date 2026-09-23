@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.model;
 
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import me.mzy.beamcraft.client.physics.BeamGraph;
 import me.mzy.beamcraft.client.physics.JBeamAssembler;
 import me.mzy.beamcraft.client.physics.JBeamLoader;
 import me.mzy.beamcraft.client.physics.NodeContainer;
@@ -45,6 +46,7 @@ class Etk800FlexbodyAuditTest {
 
         FlexbodyContainer flex = vehicle.flexbodies;
         NodeContainer nodes = vehicle.nodes;
+        BeamGraph beamGraph = vehicle.beamGraph();
         int vertexOffset = 0;
         for (int mesh = 0; mesh < flex.meshCount; mesh++) {
             String name = flex.meshName[mesh];
@@ -76,10 +78,18 @@ class Etk800FlexbodyAuditTest {
             int wheelHubAxisCenters = 0;
             int explicitZVertices = 0;
             int crossZVertices = 0;
+            int[] explicitDirectConnections = new int[4];
             double maximumAffineGain = 0.0;
             double maximumNodeSpan = 0.0;
             for (int vertex = meshVertexOffset; vertex < meshVertexOffset + geometry.vertexCount; vertex++) {
-                if (!flex.vUseCrossZ[vertex] && flex.vVzNode[vertex] >= 0) explicitZVertices++;
+                if (!flex.vUseCrossZ[vertex] && flex.vVzNode[vertex] >= 0) {
+                    explicitZVertices++;
+                    int direct = 0;
+                    if (beamGraph.cohesivelyConnected(flex.vVzNode[vertex], flex.vCenterNode[vertex])) direct++;
+                    if (beamGraph.cohesivelyConnected(flex.vVzNode[vertex], flex.vVxNode[vertex])) direct++;
+                    if (beamGraph.cohesivelyConnected(flex.vVzNode[vertex], flex.vVyNode[vertex])) direct++;
+                    explicitDirectConnections[direct]++;
+                }
                 if (flex.vUseCrossZ[vertex]) crossZVertices++;
                 double gain = FlexbodyBindingUtil.affineNodeGain(
                         flex.vWeightX[vertex], flex.vWeightY[vertex],
@@ -120,21 +130,30 @@ class Etk800FlexbodyAuditTest {
                     + " generatedWheelRefs=" + usesGeneratedWheel
                     + " explicitZ=" + explicitZVertices
                     + " crossZ=" + crossZVertices
+                    + " explicitDirect=" + java.util.Arrays.toString(explicitDirectConnections)
                     + " maxGain=" + maximumAffineGain
                     + " maxNodeSpan=" + maximumNodeSpan);
             if (name.contains("caliper")) {
                 assertEquals(0, usesWheelHubAxis,
                         name + " must stay on the suspension side when its wheel detaches");
+            } else if (name.contains("tire")) {
+                assertEquals(geometry.vertexCount, explicitZVertices,
+                        name + " must use one continuous four-node model while steering");
             } else if (name.contains("brakedisc")) {
                 assertTrue(usesWheelHubAxis > 0,
                         name + " is a rotating part and must retain its wheel-axis binding");
-            } else if (name.startsWith("tire_")) {
-                assertEquals(geometry.vertexCount, explicitZVertices,
-                        name + " should use BeamNG-style four-node locators");
             }
             if (name.equals("etk800_duct_F")) {
-                assertTrue(crossZVertices > 0,
-                        "the front duct must reject unstable four-node extrapolation");
+                assertEquals(0, explicitZVertices,
+                        "the front duct must not mix deformation models across one surface");
+                assertTrue(maximumNodeSpan < 0.65,
+                        "the front duct must not reach into remote bumper locator nodes");
+            }
+            if (name.equals("etk800_bumper_F_sport")) {
+                assertEquals(0, explicitZVertices,
+                        "the front bumper must not mix deformation models across one surface");
+                assertTrue(maximumNodeSpan < 0.85,
+                        "the front bumper must keep every locator cage local");
             }
         }
     }

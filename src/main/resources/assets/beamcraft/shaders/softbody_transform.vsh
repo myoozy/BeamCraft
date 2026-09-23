@@ -11,6 +11,11 @@ uniform samplerBuffer uPhysicsNodes;
 out vec3 tfPosition;
 out vec3 tfNormal;
 
+const float MIN_DIRECTION_LENGTH_SQUARED = 1e-10;
+const float MIN_REST_BASIS_AREA = 1e-6;
+const float CROSS_COLLAPSE_FADE_START = 0.05;
+const float CROSS_COLLAPSE_FADE_END = 0.25;
+
 void main() {
     int id = gl_VertexID;
     vec4 weightsAndCenter = texelFetch(uRigWeights, id);
@@ -23,7 +28,7 @@ void main() {
     int centerNode = int(weightsAndCenter.w + 0.5);
     vec3 normalWeights = normalWeightsAndVx.xyz;
     int vxNode = int(normalWeightsAndVx.w + 0.5);
-    vec3 staticOffset = staticOffsetAndVy.xyz;
+    vec3 rigAux = staticOffsetAndVy.xyz;
     int vyNode = int(staticOffsetAndVy.w + 0.5);
 
     vec3 centerPosition = texelFetch(uPhysicsNodes, centerNode).xyz;
@@ -34,18 +39,25 @@ void main() {
         vec3 vy = texelFetch(uPhysicsNodes, vyNode).xyz - centerPosition;
         vec3 basisNormal = cross(vx, vy);
         float basisLengthSquared = dot(basisNormal, basisNormal);
+        float basisLength = sqrt(basisLengthSquared);
 
-        if (basisLengthSquared > 1e-10) {
-            basisNormal *= inversesqrt(basisLengthSquared);
+        if (basisLengthSquared > MIN_DIRECTION_LENGTH_SQUARED) {
+            basisNormal /= basisLength;
         } else {
-            // A collapsed node basis has no well-defined normal. Keep the
-            // output finite so a damaged vehicle cannot poison later draws.
-            basisNormal = vec3(0.0, 1.0, 0.0);
+            basisNormal = vec3(0.0);
         }
 
+        // A cross-derived thickness direction becomes undefined as its node
+        // triangle collapses. Fade the offset relative to the rest-pose area,
+        // so an inversion passes continuously through a flat surface instead
+        // of launching vertices along an arbitrary world-space normal.
+        float restBasisLength = max(rigAux.x, MIN_REST_BASIS_AREA);
+        float crossThicknessScale = smoothstep(
+                CROSS_COLLAPSE_FADE_START, CROSS_COLLAPSE_FADE_END,
+                basisLength / restBasisLength);
         vec3 vz = vzNodeValue >= 0.0
                 ? texelFetch(uPhysicsNodes, vzNode).xyz - centerPosition
-                : basisNormal;
+                : basisNormal * crossThicknessScale;
 
         tfPosition = centerPosition
                 + vx * weights.x
@@ -56,13 +68,18 @@ void main() {
                 + vy * normalWeights.y
                 + vz * normalWeights.z;
         float normalLengthSquared = dot(reconstructedNormal, reconstructedNormal);
-        tfNormal = normalLengthSquared > 1e-10
+        vec3 survivingAxis = dot(vx, vx) >= dot(vy, vy) ? vx : vy;
+        float survivingAxisLengthSquared = dot(survivingAxis, survivingAxis);
+        vec3 finiteFallbackNormal = survivingAxisLengthSquared > MIN_DIRECTION_LENGTH_SQUARED
+                ? survivingAxis * inversesqrt(survivingAxisLengthSquared)
+                : vec3(0.0, 1.0, 0.0);
+        tfNormal = normalLengthSquared > MIN_DIRECTION_LENGTH_SQUARED
                 ? reconstructedNormal * inversesqrt(normalLengthSquared)
-                : basisNormal;
+                : finiteFallbackNormal;
     } else {
-        tfPosition = centerPosition + staticOffset;
+        tfPosition = centerPosition + rigAux;
         float normalLengthSquared = dot(normalWeights, normalWeights);
-        tfNormal = normalLengthSquared > 1e-10
+        tfNormal = normalLengthSquared > MIN_DIRECTION_LENGTH_SQUARED
                 ? normalWeights * inversesqrt(normalLengthSquared)
                 : vec3(0.0, 1.0, 0.0);
     }

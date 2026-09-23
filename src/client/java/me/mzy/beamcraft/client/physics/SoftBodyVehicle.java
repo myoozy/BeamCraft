@@ -53,6 +53,7 @@ public class SoftBodyVehicle {
     public final VehicleCameraData cameras = new VehicleCameraData();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
     final CollisionChunkIndex collisionChunks = new CollisionChunkIndex(this);
+    private BeamGraph beamGraph;
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -302,6 +303,7 @@ public class SoftBodyVehicle {
     }
 
     private BeamPointer addBeamInternal(PhysicsSpecs.BeamSpec spec) {
+        beamGraph = null;
         String name1 = spec.name1();
         String name2 = spec.name2();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
@@ -485,6 +487,7 @@ public class SoftBodyVehicle {
 
     public void finalizePhysicsSetup() {
         powertrain.finalizeSetup();
+        beamGraph = BeamGraph.from(this);
         flexbodies.compileGroupsCSR(nodes);
         triangles.buildBreakIndices();
         collisionChunks.rebuild();
@@ -516,6 +519,14 @@ public class SoftBodyVehicle {
         // Every channel is now bounded by the cutoff-aware stability ceiling, so the
         // neutral mode (when authored) can be applied without exceeding the budget.
         adaptiveDampers.applyDefaultModes();
+    }
+
+    /** Immutable authored beam topology, rebuilt after vehicle assembly. */
+    public BeamGraph beamGraph() {
+        if (beamGraph == null || beamGraph.nodeCount() != nodes.count) {
+            beamGraph = BeamGraph.from(this);
+        }
+        return beamGraph;
     }
 
     /**
@@ -823,6 +834,7 @@ public class SoftBodyVehicle {
      * Clear all physics container data and reset simulation world
      */
     public void clear() {
+        beamGraph = null;
         nodes.clear();
         electrics.clear();
         normalBeams.clear();

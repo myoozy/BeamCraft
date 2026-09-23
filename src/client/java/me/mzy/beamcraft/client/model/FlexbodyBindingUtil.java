@@ -1,6 +1,7 @@
 package me.mzy.beamcraft.client.model;
 
 import me.mzy.beamcraft.client.debug.LoadTiming;
+import me.mzy.beamcraft.client.physics.BeamGraph;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import me.mzy.beamcraft.client.physics.JBeamAssembler;
 import me.mzy.beamcraft.client.physics.NodeContainer;
@@ -29,12 +30,31 @@ public class FlexbodyBindingUtil {
      * into a much larger render-mesh spike.
      */
     static final double MAX_AFFINE_NODE_GAIN = 2.0;
+    /** Four-node binding must beat the three-node normal basis by a useful margin. */
+    static final double EXPLICIT_Z_SENSITIVITY_MARGIN = 0.05;
+    /**
+     * Meshes below this confident-VZ fraction use one continuous three-node model.
+     * This separates ETK's volumetric wheel/brake meshes from its mostly planar
+     * bumper/duct meshes without inspecting mesh or part names.
+     */
+    static final double MIN_EXPLICIT_Z_MESH_COVERAGE = 0.75;
+    /** A VZ candidate must reach every planar anchor within this local beam radius. */
+    static final int MAX_COHESIVE_CAGE_HOPS = 2;
     /** Last-resort finite guard. Values this large are never a defensible local locator. */
     static final double MAX_SAFE_LOCATOR_MAGNITUDE = 15.0;
     static final double MIN_AXIS_LENGTH_SQUARED = 1.0e-6;
     static final double MIN_BASIS_NORMAL_LENGTH_SQUARED = 1.0e-14;
     static final double MIN_INPUT_NORMAL_LENGTH = 1.0e-5;
     static final double MIN_INVERSE_SCALE_MAGNITUDE = 1.0e-12;
+
+    private enum ExplicitZMode {
+        /** Conservative per-vertex vote used only to classify the whole mesh. */
+        CONFIDENCE_PROBE,
+        /** Topology and affine safety decide VZ after the mesh has passed the vote. */
+        STRUCTURAL,
+        /** Force the continuous three-node representation. */
+        DISABLED
+    }
 
     public static void performBinding(FlexbodyContainer flex, SoftBodyVehicle vehicle) {
         NodeContainer nodes = vehicle.nodes;
@@ -77,6 +97,7 @@ public class FlexbodyBindingUtil {
         }
 
         int ptr = 0;
+        BeamGraph beamGraph = vehicle.beamGraph();
         boolean[] wheelAxisNodes = collectWheelAxisNodes(vehicle.wheels, nodes.count);
         boolean[] generatedWheelNodes = collectGeneratedWheelNodes(vehicle.wheels, nodes.count);
 
@@ -153,6 +174,8 @@ public class FlexbodyBindingUtil {
             double cosY = Math.cos(rY), sinY = Math.sin(rY);
 
             JBeamAssembler.TransformContext slotCtx = flex.slotContext[m];
+            int meshVertexStart = ptr;
+            int explicitZVertices = 0;
 
             for (int v = 0; v < geom.vertexCount; v++) {
 
@@ -198,10 +221,11 @@ public class FlexbodyBindingUtil {
                 // position rather than reaching into nodes owned by other parts.
                 boolean success = calculateDecoupledWeights(flex, nodes, ptr,
                         staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ,
-                        hasGeneratedWheelGroup, bindingPool);
+                        beamGraph, ExplicitZMode.CONFIDENCE_PROBE, bindingPool);
                 if (!success) {
                     applyFallbackRigidBinding(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
                 }
+                if (!flex.vUseCrossZ[ptr] && flex.vVzNode[ptr] >= 0) explicitZVertices++;
 
                 if (uvs != null && v * 2 + 1 < uvs.length) {
                     flex.uvU[ptr] = uvs[v * 2]; flex.uvV[ptr] = uvs[v * 2 + 1];
@@ -209,6 +233,25 @@ public class FlexbodyBindingUtil {
                     flex.uvU[ptr] = 0.0f; flex.uvV[ptr] = 0.0f;
                 }
                 ptr++;
+            }
+
+            boolean useStructuralExplicitZ = retainExplicitZForMesh(explicitZVertices, geom.vertexCount);
+            for (int vertex = meshVertexStart; vertex < ptr; vertex++) {
+                boolean deformBasis = flex.vUseCrossZ[vertex] || flex.vVzNode[vertex] >= 0;
+                if (!deformBasis) continue;
+                if (!useStructuralExplicitZ && flex.vVzNode[vertex] < 0) continue;
+                double[] restNormal = reconstructRestNormal(flex, nodes, vertex);
+                boolean rebound = calculateDecoupledWeights(flex, nodes, vertex,
+                        flex.skinnedPosX[vertex], flex.skinnedPosY[vertex], flex.skinnedPosZ[vertex],
+                        restNormal[0], restNormal[1], restNormal[2],
+                        beamGraph,
+                        useStructuralExplicitZ ? ExplicitZMode.STRUCTURAL : ExplicitZMode.DISABLED,
+                        bindingPool);
+                if (!rebound) {
+                    applyFallbackRigidBinding(flex, nodes, vertex,
+                            flex.skinnedPosX[vertex], flex.skinnedPosY[vertex], flex.skinnedPosZ[vertex],
+                            restNormal[0], restNormal[1], restNormal[2], bindingPool);
+                }
             }
         }
         LoadTiming.log("[flex] per-vertex binding (" + ptr + " verts)", bindStart);
@@ -254,13 +297,21 @@ public class FlexbodyBindingUtil {
                                               double vx, double vy, double vz,
                                               double normX, double normY, double normZ, List<Integer> pool) {
         return calculateDecoupledWeights(flex, nodes, ptr, vx, vy, vz,
-                normX, normY, normZ, true, pool);
+                normX, normY, normZ, null, ExplicitZMode.STRUCTURAL, pool);
     }
 
     static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,
                                               double vx, double vy, double vz,
                                               double normX, double normY, double normZ,
-                                              boolean allowExplicitZ, List<Integer> pool) {
+                                              BeamGraph beamGraph, List<Integer> pool) {
+        return calculateDecoupledWeights(flex, nodes, ptr, vx, vy, vz,
+                normX, normY, normZ, beamGraph, ExplicitZMode.CONFIDENCE_PROBE, pool);
+    }
+
+    private static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,
+                                              double vx, double vy, double vz,
+                                              double normX, double normY, double normZ,
+                                              BeamGraph beamGraph, ExplicitZMode explicitZMode, List<Integer> pool) {
         if (pool.size() < 3) return false;
 
         int centerNode = pool.getFirst();
@@ -308,9 +359,9 @@ public class FlexbodyBindingUtil {
         }
         if (!foundBasis) return false;
 
-        ExplicitZSolution explicitZ = allowExplicitZ
-                ? findExplicitZ(nodes, centerNode, best, candidates, distances,
-                        candidateCount, vx, vy, vz)
+        ExplicitZSolution explicitZ = explicitZMode != ExplicitZMode.DISABLED
+                ? findExplicitZ(nodes, beamGraph, centerNode, best,
+                        candidates, distances, candidateCount, vx, vy, vz, explicitZMode)
                 : new ExplicitZSolution();
 
         if (explicitZ.found) {
@@ -331,6 +382,7 @@ public class FlexbodyBindingUtil {
             flex.vWeightY[ptr] = explicitZ.weightY;
             flex.vWeightZ[ptr] = explicitZ.weightZ;
             flex.vUseCrossZ[ptr] = false;
+            flex.vRestCrossLength[ptr] = restCrossLength(best);
             if (flex.vNormWeightX != null) {
                 flex.vNormWeightX[ptr] = (float) normalWeights[0];
                 flex.vNormWeightY[ptr] = (float) normalWeights[1];
@@ -367,14 +419,59 @@ public class FlexbodyBindingUtil {
         flex.vWeightY[ptr] = best.weightY;
         flex.vWeightZ[ptr] = (float) best.weightZ;
         flex.vUseCrossZ[ptr] = true;
+        flex.vRestCrossLength[ptr] = restCrossLength(best);
         return true;
     }
 
-    private static ExplicitZSolution findExplicitZ(NodeContainer nodes, int centerNode,
+    private static float restCrossLength(BasisSolution basis) {
+        return (float) Math.sqrt(basis.uLengthSquared * basis.vLengthSquared * basis.sineSquared);
+    }
+
+    static boolean retainExplicitZForMesh(int explicitVertices, int totalVertices) {
+        return totalVertices > 0
+                && explicitVertices >= Math.ceil(totalVertices * MIN_EXPLICIT_Z_MESH_COVERAGE);
+    }
+
+    private static double[] reconstructRestNormal(FlexbodyContainer flex, NodeContainer nodes, int vertex) {
+        int center = flex.vCenterNode[vertex];
+        int vx = flex.vVxNode[vertex];
+        int vy = flex.vVyNode[vertex];
+        double ux = nodes.baseX[vx] - nodes.baseX[center];
+        double uy = nodes.baseY[vx] - nodes.baseY[center];
+        double uz = nodes.baseZ[vx] - nodes.baseZ[center];
+        double vxAxis = nodes.baseX[vy] - nodes.baseX[center];
+        double vyAxis = nodes.baseY[vy] - nodes.baseY[center];
+        double vzAxis = nodes.baseZ[vy] - nodes.baseZ[center];
+        double zx, zy, zz;
+        int vz = flex.vVzNode[vertex];
+        if (vz >= 0) {
+            zx = nodes.baseX[vz] - nodes.baseX[center];
+            zy = nodes.baseY[vz] - nodes.baseY[center];
+            zz = nodes.baseZ[vz] - nodes.baseZ[center];
+        } else {
+            zx = uy * vzAxis - uz * vyAxis;
+            zy = uz * vxAxis - ux * vzAxis;
+            zz = ux * vyAxis - uy * vxAxis;
+            double length = Math.sqrt(zx * zx + zy * zy + zz * zz);
+            if (length > 0.0) {
+                zx /= length;
+                zy /= length;
+                zz /= length;
+            }
+        }
+        return new double[]{
+                flex.vNormWeightX[vertex] * ux + flex.vNormWeightY[vertex] * vxAxis + flex.vNormWeightZ[vertex] * zx,
+                flex.vNormWeightX[vertex] * uy + flex.vNormWeightY[vertex] * vyAxis + flex.vNormWeightZ[vertex] * zy,
+                flex.vNormWeightX[vertex] * uz + flex.vNormWeightY[vertex] * vzAxis + flex.vNormWeightZ[vertex] * zz
+        };
+    }
+
+    private static ExplicitZSolution findExplicitZ(NodeContainer nodes, BeamGraph beamGraph, int centerNode,
                                                     BasisSolution planarBasis,
                                                     int[] candidates, double[] distances,
                                                     int candidateCount,
-                                                    double px, double py, double pz) {
+                                                    double px, double py, double pz,
+                                                    ExplicitZMode mode) {
         ExplicitZSolution best = new ExplicitZSolution();
         double cx = nodes.baseX[centerNode], cy = nodes.baseY[centerNode], cz = nodes.baseZ[centerNode];
         double dX = px - cx, dY = py - cy, dZ = pz - cz;
@@ -386,6 +483,9 @@ public class FlexbodyBindingUtil {
         for (int i = 0; i < candidateCount; i++) {
             int vzNode = candidates[i];
             if (vzNode == planarBasis.vxNode || vzNode == planarBasis.vyNode) continue;
+            int topologyScore = localCageScore(beamGraph, vzNode, centerNode,
+                    planarBasis.vxNode, planarBasis.vyNode);
+            if (topologyScore == Integer.MAX_VALUE) continue;
             double zX = nodes.baseX[vzNode] - cx;
             double zY = nodes.baseY[vzNode] - cy;
             double zZ = nodes.baseZ[vzNode] - cz;
@@ -403,19 +503,42 @@ public class FlexbodyBindingUtil {
             if (!finiteAndSafe(weights)) continue;
             double affineGain = affineNodeGain(weights[0], weights[1], weights[2]);
             if (affineGain > MAX_AFFINE_NODE_GAIN) continue;
+            if (mode == ExplicitZMode.CONFIDENCE_PROBE
+                    && affineGain + EXPLICIT_Z_SENSITIVITY_MARGIN >= crossBasisSensitivity(planarBasis)) continue;
 
             boolean preferredAngle = outOfPlaneSineSquared >= squaredSine(PREFERRED_BASIS_ANGLE_DEGREES);
             boolean preferredCoordinates = withinPreferredLocatorBounds(weights[0])
                     && withinPreferredLocatorBounds(weights[1])
                     && withinPreferredLocatorBounds(weights[2]);
             int tier = BasisSolution.preferenceTier(preferredAngle, preferredCoordinates);
-            if (best.accepts(tier, distances[i], outOfPlaneSineSquared)) {
+            if (best.accepts(topologyScore, tier, distances[i], outOfPlaneSineSquared)) {
                 best.set(vzNode, zX, zY, zZ, determinant,
                         (float) weights[0], (float) weights[1], (float) weights[2],
-                        tier, distances[i], outOfPlaneSineSquared);
+                        topologyScore, tier, distances[i], outOfPlaneSineSquared);
             }
         }
         return best;
+    }
+
+    /**
+     * A fourth locator node is useful only when it belongs to the same compact
+     * structural cage as the planar basis. Spatial proximity alone can select a
+     * node from a bumper, lamp or liner that later detaches independently.
+     */
+    static int localCageScore(BeamGraph graph, int vzNode, int centerNode, int vxNode, int vyNode) {
+        if (graph == null) return 0;
+        int[] anchors = {centerNode, vxNode, vyNode};
+        int directConnections = 0;
+        for (int anchor : anchors) {
+            if (graph.cohesivelyConnected(vzNode, anchor)) directConnections++;
+            int hops = graph.hopDistance(vzNode, anchor, MAX_COHESIVE_CAGE_HOPS, true);
+            if (hops < 0) return Integer.MAX_VALUE;
+        }
+        if (directConnections == 0) return Integer.MAX_VALUE;
+
+        // Fewer missing direct links means a more cohesive local cage. The hop
+        // checks above are a validity gate, not another weighted heuristic.
+        return anchors.length - directConnections;
     }
 
     private static double[] solveBasisCoordinates(double dX, double dY, double dZ,
@@ -509,6 +632,20 @@ public class FlexbodyBindingUtil {
         return Math.abs(centerWeight) + Math.abs(weightX) + Math.abs(weightY) + Math.abs(weightZ);
     }
 
+    /**
+     * First-order displacement sensitivity of the three-node representation.
+     * The affine term covers translation of the planar locators; the second
+     * term estimates how strongly the metric normal offset reacts when either
+     * planar axis rotates.
+     */
+    private static double crossBasisSensitivity(BasisSolution basis) {
+        double sine = Math.sqrt(basis.sineSquared);
+        double inverseAxisScale = 1.0 / Math.sqrt(basis.uLengthSquared)
+                + 1.0 / Math.sqrt(basis.vLengthSquared);
+        double normalRotationGain = Math.abs(basis.weightZ) * inverseAxisScale / sine;
+        return affineNodeGain(basis.weightX, basis.weightY, 0.0) + normalRotationGain;
+    }
+
     private static final class BasisSolution {
         int vxNode, vyNode;
         double uX, uY, uZ, vX, vY, vZ, nX, nY, nZ;
@@ -521,11 +658,16 @@ public class FlexbodyBindingUtil {
         int preferenceTier = Integer.MAX_VALUE;
 
         static int preferenceTier(boolean preferredAngle, boolean preferredCoordinates) {
-            if (preferredAngle && preferredCoordinates) return 0;
-            if (preferredAngle) return 1;
-            if (preferredCoordinates) return 2;
-            return 3;
+            if (preferredAngle && preferredCoordinates) return PREFERRED_ANGLE_AND_COORDINATES;
+            if (preferredAngle) return PREFERRED_ANGLE_ONLY;
+            if (preferredCoordinates) return PREFERRED_COORDINATES_ONLY;
+            return USABLE_FALLBACK;
         }
+
+        private static final int PREFERRED_ANGLE_AND_COORDINATES = 0;
+        private static final int PREFERRED_ANGLE_ONLY = 1;
+        private static final int PREFERRED_COORDINATES_ONLY = 2;
+        private static final int USABLE_FALLBACK = 3;
 
         boolean accepts(double candidateScore, int tier, double distanceSquared, double candidateSineSquared) {
             int scoreOrder = Double.compare(candidateScore, stabilityScore);
@@ -566,19 +708,23 @@ public class FlexbodyBindingUtil {
         double zX, zY, zZ;
         double determinant;
         float weightX, weightY, weightZ;
+        int topologyScore = Integer.MAX_VALUE;
         int preferenceTier = Integer.MAX_VALUE;
         double distanceSquared = Double.POSITIVE_INFINITY;
         double sineSquared;
 
-        boolean accepts(int tier, double candidateDistanceSquared, double candidateSineSquared) {
+        boolean accepts(int candidateTopologyScore, int tier,
+                        double candidateDistanceSquared, double candidateSineSquared) {
             if (tier != preferenceTier) return tier < preferenceTier;
             int distanceOrder = Double.compare(candidateDistanceSquared, distanceSquared);
-            return distanceOrder < 0 || (distanceOrder == 0 && candidateSineSquared > sineSquared);
+            if (distanceOrder != 0) return distanceOrder < 0;
+            if (candidateTopologyScore != topologyScore) return candidateTopologyScore < topologyScore;
+            return candidateSineSquared > sineSquared;
         }
 
         void set(int vzNode, double zX, double zY, double zZ, double determinant,
                  float weightX, float weightY, float weightZ,
-                 int preferenceTier, double distanceSquared, double sineSquared) {
+                 int topologyScore, int preferenceTier, double distanceSquared, double sineSquared) {
             found = true;
             this.vzNode = vzNode;
             this.zX = zX;
@@ -588,6 +734,7 @@ public class FlexbodyBindingUtil {
             this.weightX = weightX;
             this.weightY = weightY;
             this.weightZ = weightZ;
+            this.topologyScore = topologyScore;
             this.preferenceTier = preferenceTier;
             this.distanceSquared = distanceSquared;
             this.sineSquared = sineSquared;
@@ -611,6 +758,7 @@ public class FlexbodyBindingUtil {
         flex.vVzNode[ptr]     = -1;
         flex.vWeightX[ptr]    = 0.0f; flex.vWeightY[ptr]    = 0.0f; flex.vWeightZ[ptr]    = 0.0f;
         flex.vUseCrossZ[ptr]  = false;
+        flex.vRestCrossLength[ptr] = 0.0f;
 
         flex.skinnedPosX[ptr] = (float) (vx - nodes.baseX[bestC]);
         flex.skinnedPosY[ptr] = (float) (vy - nodes.baseY[bestC]);
