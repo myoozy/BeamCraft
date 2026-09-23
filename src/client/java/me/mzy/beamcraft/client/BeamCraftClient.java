@@ -2,6 +2,8 @@ package me.mzy.beamcraft.client;
 
 import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.assets.AssetScanner;
+import me.mzy.beamcraft.client.assets.VehicleCatalog;
+import me.mzy.beamcraft.client.command.ClientVehicleCommands;
 import me.mzy.beamcraft.client.config.BeamCraftConfig;
 import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
 import me.mzy.beamcraft.client.input.VehicleInputHandler;
@@ -89,6 +91,8 @@ public class BeamCraftClient implements ClientModInitializer {
 		for (File root : BeamCraftConfigManager.assetRoots()) {
 			if (!root.exists()) root.mkdirs();
 		}
+		VehicleCatalog vehicleCatalog = VehicleCatalog.scan(BeamCraftConfigManager.assetRoots());
+		ClientVehicleCommands.register(vehicleCatalog);
 
 		ClientVehicleManager.initRenderHooks(); // 初始化渲染
 		EntityRendererRegistry.register(BeamCraft.PHYSICS_VEHICLE_ENTITY, PhysicsVehicleRenderer::new);

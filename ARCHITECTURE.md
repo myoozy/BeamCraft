@@ -48,9 +48,9 @@ The project uses `loom.splitEnvironmentSourceSets()` — common code lives in `s
 
 **`BeamCraft.java`** — Mod initializer. Registers:
 - `PhysicsVehicleEntity` as a custom entity type (`SpawnGroup.MISC`, fire-immune)
-- C2S payload codecs `VehicleSyncPayload` and `VehicleRidePayload`
+- C2S payload codecs `VehicleSyncPayload`, `VehicleRidePayload`, and `VehicleSpawnPayload`
 - Receivers: `VehicleSyncPayload` writes position/yaw onto the entity, but only while the vehicle is passenger-free or the sender is the passenger; `VehicleRidePayload` mounts/dismounts the sender within a 6-block range
-- `/spawnvehicle <name> <pcFile>` command (spawns a vehicle entity at the player's position)
+- `VehicleSpawnPayload` validates the client-selected vehicle/PC names and spawns the server-side entity anchor at the player's position
 
 **`entity/PhysicsVehicleEntity.java`** — Lightweight, rideable entity. Only holds two synced data-tracker strings (`rootPartName`, `pcFileName`). All physics and rendering are client-side; the server entity is essentially a world anchor that gets position updates from the client via `VehicleSyncPayload`. Overrides `canHit()` so the crosshair yields an `EntityHitResult` (without it right-click entry can never trigger). On client, `updateTrackedPositionAndAngles` is a no-op to prevent server position interpolation from overriding client physics.
 
@@ -63,7 +63,7 @@ The project uses `loom.splitEnvironmentSourceSets()` — common code lives in `s
 **`ClientVehicleManager.java`** — Singleton that maps entity IDs → `SoftBodyVehicle` instances. Each client tick it scans world entities for `PhysicsVehicleEntity` instances, creates vehicles on first sight (loading JBeam + meshes + materials), updates entity bounding boxes, and cleans up removed entities. `VehicleLoadFailureCache` keeps a vehicle whose load already failed from being retried every tick. Also owns shared interpolation arrays used during GPU skinning — they are safe to share because each vehicle's upload completes before the next one starts.
 
 **`BeamCraftClient.java`** — Wires everything together:
-1. **Config**: loads `config/beamcraft.json` via `BeamCraftConfigManager`, configures `AssetScanner` with the conflict policy, and builds the `VehicleInputHandler`.
+1. **Config and commands**: loads `config/beamcraft.json` via `BeamCraftConfigManager`, configures `AssetScanner` with the conflict policy, builds the lightweight `VehicleCatalog`, registers the client-side `/spawnvehicle <name> [pcFile]` command with local asset completion, and builds the `VehicleInputHandler`.
 2. **Physics tick**: one fixed physics step per game tick. `AsyncPhysicsScheduler` keeps exactly one step in flight — the preceding step is committed at the tick boundary (`finishPreviousStep`), then `prepareStep` (world access, client thread) and `simulatePreparedStep` (pure physics, worker pool). `DELTA_TIME = 0.05` at a 2000 Hz substep rate → 100 substeps per step. A step exceeding the 50 ms budget is logged and reported in chat at most once per 5 s; a worker failure stops the simulation and is reported once.
 3. **Render hand-off**: each vehicle publishes node positions into its `PhysicsRenderTimeline`; the renderer samples that timeline against wall-clock time instead of reading live physics arrays.
 4. **HUD**: physics step timing (red if >10 ms, green otherwise), powertrain diagnostics, and the body's pitch/roll.
@@ -141,6 +141,8 @@ Break group system: beams can be grouped; when enough beams in a group break, al
 **`AssetScanner.java`** — The single shared discovery engine used by `JBeamLoader`, `DaeMeshLoader` and `MaterialLibrary`. For each asset root it scans direct-child containers (folders or `.zip`s). The outer container name is **arbitrary**; the real vehicle name is the inner `vehicles/<name>/` path segment (segment-boundary aware and case-insensitive, so `vehicles/sunburst2/` never matches `sunburst`). Entries are grouped by logical path; when one path exists in several sources the configured `ConflictStrategy` picks a winner and `ConflictReporter` logs (and optionally notifies). Containers are deduplicated by canonical path. `NamespaceScan.sources()` only returns containers of winning entries, so a shadowed root is never registered with the texture locator.
 
 **`ConflictReporter.java`** — Always `LOGGER.warn`s; optionally posts a deduplicated in-game chat message listing the conflicting source addresses.
+
+**`VehicleCatalog.java`** — A lightweight immutable client-side index of vehicle namespaces and their `.pc` filenames. It inspects path names in folder/ZIP containers once at startup without parsing file contents and drives `/spawnvehicle` argument completion.
 
 ### Shaders
 
