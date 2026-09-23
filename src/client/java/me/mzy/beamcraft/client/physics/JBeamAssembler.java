@@ -111,11 +111,18 @@ public class JBeamAssembler {
             Map<String, String[]> vehicleRailMap = new HashMap<>();
             Map<String, Double> globalVariables = new HashMap<>();
 
-            // Phase 0: Recursively collect all required parts before assembly
-            JsonObject rootPart = registry.get(rootPartName);
-            if (rootPart != null) {
-                collectPartsRecursive(rootPartName, rootPart, userConfig, registry, activeParts, new TransformContext(), globalVariables);
+            // Phase 0: Recursively collect all required parts before assembly.
+            // Most official vehicles name their main part after the vehicle
+            // namespace, but exported/mod vehicles are only required to identify
+            // it with slotType "main" (Automation uses names such as
+            // Camso_<namespace>_core).
+            String assemblyRootName = resolveAssemblyRootName(rootPartName, registry);
+            if (assemblyRootName == null) {
+                return false;
             }
+            JsonObject rootPart = registry.get(assemblyRootName);
+            collectPartsRecursive(assemblyRootName, rootPart, userConfig, registry,
+                    activeParts, new TransformContext(), globalVariables);
 
             System.out.println("Starting multi-Pass Assembly");
             System.out.println("Collected " + activeParts.size() + " valid part modules.");
@@ -249,6 +256,40 @@ public class JBeamAssembler {
             t.printStackTrace();
             return false;
         }
+    }
+
+    private static String resolveAssemblyRootName(
+            String requestedRootName,
+            Map<String, JsonObject> registry) {
+        if (registry.containsKey(requestedRootName)) {
+            return requestedRootName;
+        }
+
+        String mainPartName = null;
+        for (Map.Entry<String, JsonObject> entry : registry.entrySet()) {
+            JsonElement slotType = entry.getValue().get("slotType");
+            if (slotType == null || !slotType.isJsonPrimitive()
+                    || !"main".equalsIgnoreCase(slotType.getAsString())) {
+                continue;
+            }
+            if (mainPartName != null) {
+                System.err.println("Cannot resolve vehicle root part '" + requestedRootName
+                        + "': multiple slotType 'main' parts found ('" + mainPartName
+                        + "', '" + entry.getKey() + "')");
+                return null;
+            }
+            mainPartName = entry.getKey();
+        }
+
+        if (mainPartName == null) {
+            System.err.println("Cannot resolve vehicle root part '" + requestedRootName
+                    + "': no matching part or unique slotType 'main' part found");
+            return null;
+        }
+
+        System.out.println("Resolved vehicle namespace '" + requestedRootName
+                + "' to main JBeam part '" + mainPartName + "'");
+        return mainPartName;
     }
 
     private static boolean addSpawnCoupler(SoftBodyVehicle vehicle, String node1, String node2,
