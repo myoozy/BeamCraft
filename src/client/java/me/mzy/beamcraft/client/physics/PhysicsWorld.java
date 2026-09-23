@@ -131,6 +131,9 @@ public class PhysicsWorld {
     }
 
     public void clear() {
+        for (SoftBodyVehicle vehicle : vehicles) {
+            vehicle.clear();
+        }
         vehicles.clear();
         collisionManager.clearContacts();
         System.out.println("Physics world data cleared");
@@ -454,6 +457,9 @@ public class PhysicsWorld {
     public double[] commitPreparedStep(StepResult result) {
         long commitStartedNanos = System.nanoTime();
         for (SoftBodyVehicle vehicle : result.preparedStep().activeVehicles()) {
+            if (vehicle.parentEntity == null || vehicle.parentEntity.isRemoved()) {
+                continue;
+            }
             vehicle.nodes.writeRenderBuffer();
             vehicle.updateEntityLocation();
             if (vehicle.parentEntity != null) {

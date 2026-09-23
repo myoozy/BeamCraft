@@ -61,7 +61,14 @@ is recorded:
   three-node flexbody locators. No RoR source was copied or structurally ported;
   BeamCraft's binding changes use BeamNG's public flexbody documentation and
   independently derived distance/conditioning math.
-- Minecraft entity, networking and gameplay integration.
+- Minecraft entity, networking and gameplay integration. The Yarn-mapped
+  Minecraft 1.21 sources for `VehicleEntity`, `BoatEntity`,
+  `AbstractMinecartEntity`, `BoatEntityRenderer` and `MinecartEntityRenderer`
+  were consulted in September 2026 for the established damage-wobble gameplay
+  behavior (ten-tick wobble, decaying accumulated strength and the render-only
+  sinusoidal rotation). BeamCraft independently integrates that behavior with
+  its client-authoritative soft-body lifecycle, deliberately requires repeated
+  creative-mode hits, and does not copy a vehicle-item drop implementation.
 - `SoftBodyVehicle` body-axis convention, which was checked against
   `lua/ge/extensions/core/cameraModes/autopoint.lua` but was not translated.
 - `AdaptiveDamperParser.java`, `AdaptiveDamperController.java` and

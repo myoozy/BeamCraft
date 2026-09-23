@@ -5,11 +5,14 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EntityPose;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.Dismounting;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.world.World;
+import net.minecraft.world.event.GameEvent;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -26,6 +29,12 @@ public class PhysicsVehicleEntity extends Entity {
     private static final TrackedData<Float> RIDER_ANCHOR_Y = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.FLOAT);
     private static final TrackedData<Float> RIDER_ANCHOR_Z = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.FLOAT);
     private static final TrackedData<Boolean> RIDER_ANCHOR_IS_EYE = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    private static final TrackedData<Integer> DAMAGE_WOBBLE_TICKS = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<Integer> DAMAGE_WOBBLE_SIDE = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<Float> DAMAGE_WOBBLE_STRENGTH = DataTracker.registerData(PhysicsVehicleEntity.class, TrackedDataHandlerRegistry.FLOAT);
+
+    private static final float BREAK_STRENGTH = 40.0f;
+    private static final int DAMAGE_WOBBLE_DURATION = 10;
 
     private Box visibilityBoundingBox;
 
@@ -50,6 +59,9 @@ public class PhysicsVehicleEntity extends Entity {
         builder.add(RIDER_ANCHOR_Y, 0.0f);
         builder.add(RIDER_ANCHOR_Z, 0.0f);
         builder.add(RIDER_ANCHOR_IS_EYE, false);
+        builder.add(DAMAGE_WOBBLE_TICKS, 0);
+        builder.add(DAMAGE_WOBBLE_SIDE, 1);
+        builder.add(DAMAGE_WOBBLE_STRENGTH, 0.0f);
     }
 
     // 当在游戏里用代码/物品生成车时，服务端仅需调用此方法下发配置指令
@@ -60,6 +72,10 @@ public class PhysicsVehicleEntity extends Entity {
 
     public String getRootPartName() { return this.dataTracker.get(ROOT_PART_NAME); }
     public String getPcFileName() { return this.dataTracker.get(PC_FILE_NAME); }
+
+    public int getDamageWobbleTicks() { return this.dataTracker.get(DAMAGE_WOBBLE_TICKS); }
+    public int getDamageWobbleSide() { return this.dataTracker.get(DAMAGE_WOBBLE_SIDE); }
+    public float getDamageWobbleStrength() { return this.dataTracker.get(DAMAGE_WOBBLE_STRENGTH); }
 
     public void setRiderAnchor(float x, float y, float z, boolean eyePosition) {
         if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
@@ -118,8 +134,48 @@ public class PhysicsVehicleEntity extends Entity {
 
     @Override
     public void tick() {
+        if (getDamageWobbleTicks() > 0) {
+            this.dataTracker.set(DAMAGE_WOBBLE_TICKS, getDamageWobbleTicks() - 1);
+        }
+        if (getDamageWobbleStrength() > 0.0f) {
+            this.dataTracker.set(DAMAGE_WOBBLE_STRENGTH,
+                    Math.max(0.0f, getDamageWobbleStrength() - 1.0f));
+        }
         super.tick();
         // 仅维护基础包围盒，物理更新完全交由客户端处理
+    }
+
+    /**
+     * Vanilla vehicle-style removal damage. The server owns the accumulated
+     * break progress; clients only consume the tracked wobble state. Soft-body
+     * nodes remain client-authoritative and are never networked here.
+     */
+    @Override
+    public boolean damage(DamageSource source, float amount) {
+        if (this.getWorld().isClient || this.isRemoved()) {
+            return true;
+        }
+        if (this.isInvulnerableTo(source)) {
+            return false;
+        }
+
+        this.dataTracker.set(DAMAGE_WOBBLE_SIDE, -getDamageWobbleSide());
+        this.dataTracker.set(DAMAGE_WOBBLE_TICKS, DAMAGE_WOBBLE_DURATION);
+        boolean creativePlayer = source.getAttacker() instanceof PlayerEntity player
+                && player.getAbilities().creativeMode;
+        // Creative attacks can report enough damage to erase a vehicle in one
+        // click. Cap only their removal contribution so an expensive-to-load
+        // vehicle still requires the same deliberate burst of hits.
+        float removalDamage = creativePlayer ? Math.min(1.0f, amount) : amount;
+        float strength = getDamageWobbleStrength() + Math.max(0.0f, removalDamage) * 10.0f;
+        this.dataTracker.set(DAMAGE_WOBBLE_STRENGTH, strength);
+        this.emitGameEvent(GameEvent.ENTITY_DAMAGE, source.getAttacker());
+
+        if (strength > BREAK_STRENGTH) {
+            this.removeAllPassengers();
+            this.kill();
+        }
+        return true;
     }
 
     @Override

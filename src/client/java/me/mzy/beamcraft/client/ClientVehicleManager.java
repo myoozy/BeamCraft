@@ -1,5 +1,6 @@
 package me.mzy.beamcraft.client;
 
+import me.mzy.beamcraft.BeamCraft;
 import me.mzy.beamcraft.client.config.BeamCraftConfigManager;
 import me.mzy.beamcraft.client.debug.LoadTiming;
 import me.mzy.beamcraft.client.material.MaterialLibrary;
@@ -52,6 +53,21 @@ public final class ClientVehicleManager {
             return;
         }
 
+        // Entity ids are scoped to one live client world and can be reused after
+        // unloads or dimension changes. Retain a soft body only while the world's
+        // current id lookup still points at its exact parent entity instance.
+        VEHICLE_MAP.entrySet().removeIf(entry -> {
+            SoftBodyVehicle vehicle = entry.getValue();
+            Entity current = client.world.getEntityById(entry.getKey());
+            if (vehicle.parentEntity != null
+                    && !vehicle.parentEntity.isRemoved()
+                    && current == vehicle.parentEntity) {
+                return false;
+            }
+            releaseVehicle(vehicle);
+            return true;
+        });
+
         for (Entity entity : client.world.getEntities()) {
             if (!(entity instanceof PhysicsVehicleEntity vehicleEntity)) {
                 continue;
@@ -71,15 +87,6 @@ public final class ClientVehicleManager {
             }
         }
 
-        VEHICLE_MAP.entrySet().removeIf(entry -> {
-            SoftBodyVehicle vehicle = entry.getValue();
-            if (vehicle.parentEntity != null && !vehicle.parentEntity.isRemoved()) {
-                return false;
-            }
-
-            releaseVehicle(vehicle);
-            return true;
-        });
     }
 
     private static void createVehicle(MinecraftClient client, PhysicsVehicleEntity vehicleEntity) {
@@ -139,25 +146,51 @@ public final class ClientVehicleManager {
         }
         LoadTiming.log("[load 2/4] assembly", phaseStart);
 
-        phaseStart = LoadTiming.start();
-        MaterialLibrary.requireMaterials(assetRoots, rootPart);
-        LoadTiming.log("[load 3/4] material index", phaseStart);
+        boolean materialsAcquired = false;
+        boolean meshesAcquired = false;
+        boolean physicsWorldOwnsVehicle = false;
+        try {
+            phaseStart = LoadTiming.start();
+            // Both resource loaders retain the namespace before doing their
+            // potentially failing scan/import work, so mark ownership first.
+            materialsAcquired = true;
+            MaterialLibrary.requireMaterials(assetRoots, rootPart);
+            LoadTiming.log("[load 3/4] material index", phaseStart);
 
-        phaseStart = LoadTiming.start();
-        DaeMeshLoader.requireMeshes(assetRoots, rootPart, flexbodyMeshNames(softBody));
-        LoadTiming.log("[load 4/4] mesh import", phaseStart);
+            phaseStart = LoadTiming.start();
+            meshesAcquired = true;
+            DaeMeshLoader.requireMeshes(assetRoots, rootPart, flexbodyMeshNames(softBody));
+            LoadTiming.log("[load 4/4] mesh import", phaseStart);
 
-        LoadTiming.log("[load total] vehicle load (" + rootPart + ")", totalStart);
+            LoadTiming.log("[load total] vehicle load (" + rootPart + ")", totalStart);
 
-        BoundsProfile boundsProfile = computeBoundsProfile(softBody.nodes);
-        softBody.interactionBoundsSide = boundsProfile.interactionSide();
-        softBody.renderBoundsMaxSpan = boundsProfile.renderMaxSpan();
+            BoundsProfile boundsProfile = computeBoundsProfile(softBody.nodes);
+            softBody.interactionBoundsSide = boundsProfile.interactionSide();
+            softBody.renderBoundsMaxSpan = boundsProfile.renderMaxSpan();
 
-        float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
-        softBody.nodes.rotateNodes(playerYaw, 0, 0);
-        BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
-        VEHICLE_MAP.put(vehicleEntity.getId(), softBody);
-        LOAD_FAILURES.recordSuccess(vehicleEntity.getId());
+            float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
+            softBody.nodes.rotateNodes(playerYaw, 0, 0);
+            BeamCraftClient.PHYSICS_WORLD.addVehicle(softBody);
+            physicsWorldOwnsVehicle = true;
+            VEHICLE_MAP.put(vehicleEntity.getId(), softBody);
+            LOAD_FAILURES.recordSuccess(vehicleEntity.getId());
+        } catch (RuntimeException failure) {
+            if (physicsWorldOwnsVehicle) {
+                BeamCraftClient.PHYSICS_WORLD.removeVehicle(softBody);
+            } else {
+                softBody.clear();
+            }
+            if (meshesAcquired) {
+                DaeMeshLoader.releaseVehicleModels(rootPart);
+            }
+            if (materialsAcquired) {
+                MaterialLibrary.releaseMaterials(rootPart);
+            }
+            LOAD_FAILURES.recordFailure(
+                    vehicleEntity.getId(), vehicleEntity.getUuid(), rootPart, vehicleEntity.getPcFileName());
+            BeamCraft.LOGGER.error("Vehicle load failed for entity {} ({}/{})",
+                    vehicleEntity.getId(), rootPart, vehicleEntity.getPcFileName(), failure);
+        }
     }
 
     /** The mesh names the assembled vehicle's flexbodies resolve against. */

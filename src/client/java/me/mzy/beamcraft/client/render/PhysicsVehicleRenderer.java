@@ -21,6 +21,7 @@ import net.minecraft.client.render.entity.EntityRenderer;
 import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.math.MathHelper;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL14;
@@ -112,7 +113,17 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         overlay.setupOverlayColor();
         try {
             Matrix4f modelView = new Matrix4f(RenderSystem.getModelViewMatrix());
-            modelView.mul(matrixStack.peek().getPositionMatrix());
+            Matrix4f vehicleTransform = new Matrix4f(matrixStack.peek().getPositionMatrix());
+            float wobbleDegrees = damageWobbleAngleDegrees(
+                    entity.getDamageWobbleTicks(),
+                    entity.getDamageWobbleStrength(),
+                    entity.getDamageWobbleSide(),
+                    partialTicks
+            );
+            if (wobbleDegrees != 0.0f) {
+                vehicleTransform.rotateX((float) Math.toRadians(wobbleDegrees));
+            }
+            modelView.mul(vehicleTransform);
             Matrix4f projection = RenderSystem.getProjectionMatrix();
 
             if (!flex.skinningPipeline.getSubMeshRanges().isEmpty()) {
@@ -158,6 +169,15 @@ public class PhysicsVehicleRenderer extends EntityRenderer<PhysicsVehicleEntity>
         }
 
         super.render(entity, entityYaw, partialTicks, matrixStack, vertexConsumers, packedLight);
+    }
+
+    static float damageWobbleAngleDegrees(int ticks, float strength, int side, float tickDelta) {
+        float remainingTicks = ticks - tickDelta;
+        float remainingStrength = Math.max(0.0f, strength - tickDelta);
+        if (remainingTicks <= 0.0f || remainingStrength <= 0.0f) {
+            return 0.0f;
+        }
+        return MathHelper.sin(remainingTicks) * remainingTicks * remainingStrength / 10.0f * side;
     }
 
     /**
