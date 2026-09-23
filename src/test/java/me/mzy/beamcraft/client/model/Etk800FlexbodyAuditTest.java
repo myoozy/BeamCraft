@@ -53,7 +53,11 @@ class Etk800FlexbodyAuditTest {
             if (geometry == null) continue;
             int meshVertexOffset = vertexOffset;
             vertexOffset += geometry.vertexCount;
-            if (!(name.contains("tire") || name.contains("caliper") || name.contains("brake"))) continue;
+            boolean frontBindingRegression = name.equals("etk800_duct_F")
+                    || name.equals("etk800_bumper_F_sport")
+                    || name.contains("hood");
+            if (!(name.contains("tire") || name.contains("caliper") || name.contains("brake")
+                    || frontBindingRegression)) continue;
             System.out.println("ETK_FLEX mesh=" + name + " groups=" + flex.targetGroups[mesh]);
             for (String group : flex.targetGroups[mesh]) {
                 Integer groupId = flex.groupNameToId.get(group);
@@ -71,8 +75,34 @@ class Etk800FlexbodyAuditTest {
             int usesGeneratedWheel = 0;
             int wheelHubAxisCenters = 0;
             int explicitZVertices = 0;
+            int crossZVertices = 0;
+            double maximumAffineGain = 0.0;
+            double maximumNodeSpan = 0.0;
             for (int vertex = meshVertexOffset; vertex < meshVertexOffset + geometry.vertexCount; vertex++) {
                 if (!flex.vUseCrossZ[vertex] && flex.vVzNode[vertex] >= 0) explicitZVertices++;
+                if (flex.vUseCrossZ[vertex]) crossZVertices++;
+                double gain = FlexbodyBindingUtil.affineNodeGain(
+                        flex.vWeightX[vertex], flex.vWeightY[vertex],
+                        flex.vVzNode[vertex] >= 0 ? flex.vWeightZ[vertex] : 0.0);
+                maximumAffineGain = Math.max(maximumAffineGain, gain);
+                if (flex.vVzNode[vertex] >= 0) {
+                    assertTrue(gain <= FlexbodyBindingUtil.MAX_AFFINE_NODE_GAIN + 1.0e-6,
+                            name + " vertex " + (vertex - meshVertexOffset)
+                                    + " amplifies node motion by " + gain);
+                }
+                int centerNode = flex.vCenterNode[vertex];
+                int[] locatorNodes = flex.vVzNode[vertex] >= 0
+                        ? new int[]{centerNode, flex.vVxNode[vertex], flex.vVyNode[vertex], flex.vVzNode[vertex]}
+                        : new int[]{centerNode, flex.vVxNode[vertex], flex.vVyNode[vertex]};
+                for (int first = 0; first < locatorNodes.length; first++) {
+                    for (int second = first + 1; second < locatorNodes.length; second++) {
+                        int a = locatorNodes[first], b = locatorNodes[second];
+                        double dx = nodes.baseX[a] - nodes.baseX[b];
+                        double dy = nodes.baseY[a] - nodes.baseY[b];
+                        double dz = nodes.baseZ[a] - nodes.baseZ[b];
+                        maximumNodeSpan = Math.max(maximumNodeSpan, Math.sqrt(dx * dx + dy * dy + dz * dz));
+                    }
+                }
                 if (nodes.names[flex.vCenterNode[vertex]].matches("[rf]w1.*")) wheelHubAxisCenters++;
                 int[] bindingNodes = flex.vVzNode[vertex] >= 0
                         ? new int[]{flex.vCenterNode[vertex], flex.vVxNode[vertex], flex.vVyNode[vertex], flex.vVzNode[vertex]}
@@ -88,7 +118,10 @@ class Etk800FlexbodyAuditTest {
                     + " wheelHubAxisRefs=" + usesWheelHubAxis
                     + " wheelHubAxisCenters=" + wheelHubAxisCenters
                     + " generatedWheelRefs=" + usesGeneratedWheel
-                    + " explicitZ=" + explicitZVertices);
+                    + " explicitZ=" + explicitZVertices
+                    + " crossZ=" + crossZVertices
+                    + " maxGain=" + maximumAffineGain
+                    + " maxNodeSpan=" + maximumNodeSpan);
             if (name.contains("caliper")) {
                 assertEquals(0, usesWheelHubAxis,
                         name + " must stay on the suspension side when its wheel detaches");
@@ -98,6 +131,10 @@ class Etk800FlexbodyAuditTest {
             } else if (name.startsWith("tire_")) {
                 assertEquals(geometry.vertexCount, explicitZVertices,
                         name + " should use BeamNG-style four-node locators");
+            }
+            if (name.equals("etk800_duct_F")) {
+                assertTrue(crossZVertices > 0,
+                        "the front duct must reject unstable four-node extrapolation");
             }
         }
     }

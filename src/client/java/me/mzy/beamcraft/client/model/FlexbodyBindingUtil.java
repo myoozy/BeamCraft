@@ -21,6 +21,14 @@ public class FlexbodyBindingUtil {
     /** Bounds used by BeamNG's Flexbody Debug to flag potentially spiking locator coordinates. */
     static final double PREFERRED_LOCATOR_MIN = -0.5;
     static final double PREFERRED_LOCATOR_MAX = 1.5;
+    /**
+     * Maximum L1 norm of the affine node coefficients used by an explicit
+     * four-node deform basis.
+     * A value of 1 is interpolation inside the chosen simplex; 2 permits
+     * moderate extrapolation without letting ordinary node separation turn
+     * into a much larger render-mesh spike.
+     */
+    static final double MAX_AFFINE_NODE_GAIN = 2.0;
     /** Last-resort finite guard. Values this large are never a defensible local locator. */
     static final double MAX_SAFE_LOCATOR_MAGNITUDE = 15.0;
     static final double MIN_AXIS_LENGTH_SQUARED = 1.0e-6;
@@ -188,7 +196,9 @@ public class FlexbodyBindingUtil {
                 // There is no global fallback pool. If no usable basis exists inside the
                 // mesh's own groups, fall back to a rigid binding at the vertex's own
                 // position rather than reaching into nodes owned by other parts.
-                boolean success = calculateDecoupledWeights(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
+                boolean success = calculateDecoupledWeights(flex, nodes, ptr,
+                        staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ,
+                        hasGeneratedWheelGroup, bindingPool);
                 if (!success) {
                     applyFallbackRigidBinding(flex, nodes, ptr, staticMcX, staticMcY, staticMcZ, nOrigX, nOrigY, nOrigZ, bindingPool);
                 }
@@ -243,6 +253,14 @@ public class FlexbodyBindingUtil {
     static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,
                                               double vx, double vy, double vz,
                                               double normX, double normY, double normZ, List<Integer> pool) {
+        return calculateDecoupledWeights(flex, nodes, ptr, vx, vy, vz,
+                normX, normY, normZ, true, pool);
+    }
+
+    static boolean calculateDecoupledWeights(FlexbodyContainer flex, NodeContainer nodes, int ptr,
+                                              double vx, double vy, double vz,
+                                              double normX, double normY, double normZ,
+                                              boolean allowExplicitZ, List<Integer> pool) {
         if (pool.size() < 3) return false;
 
         int centerNode = pool.getFirst();
@@ -290,8 +308,10 @@ public class FlexbodyBindingUtil {
         }
         if (!foundBasis) return false;
 
-        ExplicitZSolution explicitZ = findExplicitZ(nodes, centerNode, best, candidates, distances,
-                candidateCount, vx, vy, vz);
+        ExplicitZSolution explicitZ = allowExplicitZ
+                ? findExplicitZ(nodes, centerNode, best, candidates, distances,
+                        candidateCount, vx, vy, vz)
+                : new ExplicitZSolution();
 
         if (explicitZ.found) {
             double normalLength = Math.sqrt(normX * normX + normY * normY + normZ * normZ);
@@ -381,6 +401,8 @@ public class FlexbodyBindingUtil {
                     planarBasis.vX, planarBasis.vY, planarBasis.vZ,
                     zX, zY, zZ, determinant);
             if (!finiteAndSafe(weights)) continue;
+            double affineGain = affineNodeGain(weights[0], weights[1], weights[2]);
+            if (affineGain > MAX_AFFINE_NODE_GAIN) continue;
 
             boolean preferredAngle = outOfPlaneSineSquared >= squaredSine(PREFERRED_BASIS_ANGLE_DEGREES);
             boolean preferredCoordinates = withinPreferredLocatorBounds(weights[0])
@@ -461,14 +483,15 @@ public class FlexbodyBindingUtil {
                 || Math.abs(weightX) > MAX_SAFE_LOCATOR_MAGNITUDE
                 || Math.abs(weightY) > MAX_SAFE_LOCATOR_MAGNITUDE
                 || Math.abs(weightZ) > MAX_SAFE_LOCATOR_MAGNITUDE) return false;
-
         boolean preferredAngle = sineSquared >= squaredSine(PREFERRED_BASIS_ANGLE_DEGREES);
         boolean preferredCoordinates = withinPreferredLocatorBounds(weightX) && withinPreferredLocatorBounds(weightY);
         int preferenceTier = BasisSolution.preferenceTier(preferredAngle, preferredCoordinates);
-        if (!best.accepts(preferenceTier, pairDistanceSquared, sineSquared)) return false;
+        double affineGain = affineNodeGain(weightX, weightY, 0.0);
+        double stabilityScore = pairDistanceSquared * affineGain / sineSquared;
+        if (!best.accepts(stabilityScore, preferenceTier, pairDistanceSquared, sineSquared)) return false;
         best.set(vxNode, vyNode, uX, uY, uZ, vX, vY, vZ, nX, nY, nZ,
                 uLengthSquared, vLengthSquared, axisDot, inverseDeterminant, weightX, weightY, weightZ,
-                pairDistanceSquared, sineSquared, preferenceTier);
+                stabilityScore, pairDistanceSquared, sineSquared, preferenceTier);
         return true;
     }
 
@@ -481,6 +504,11 @@ public class FlexbodyBindingUtil {
         return value >= PREFERRED_LOCATOR_MIN && value <= PREFERRED_LOCATOR_MAX;
     }
 
+    static double affineNodeGain(double weightX, double weightY, double weightZ) {
+        double centerWeight = 1.0 - weightX - weightY - weightZ;
+        return Math.abs(centerWeight) + Math.abs(weightX) + Math.abs(weightY) + Math.abs(weightZ);
+    }
+
     private static final class BasisSolution {
         int vxNode, vyNode;
         double uX, uY, uZ, vX, vY, vZ, nX, nY, nZ;
@@ -488,6 +516,7 @@ public class FlexbodyBindingUtil {
         float weightX, weightY;
         double weightZ;
         double pairDistanceSquared = Double.POSITIVE_INFINITY;
+        double stabilityScore = Double.POSITIVE_INFINITY;
         double sineSquared;
         int preferenceTier = Integer.MAX_VALUE;
 
@@ -498,7 +527,9 @@ public class FlexbodyBindingUtil {
             return 3;
         }
 
-        boolean accepts(int tier, double distanceSquared, double candidateSineSquared) {
+        boolean accepts(double candidateScore, int tier, double distanceSquared, double candidateSineSquared) {
+            int scoreOrder = Double.compare(candidateScore, stabilityScore);
+            if (scoreOrder != 0) return scoreOrder < 0;
             if (tier != preferenceTier) return tier < preferenceTier;
             int distanceOrder = Double.compare(distanceSquared, pairDistanceSquared);
             return distanceOrder < 0 || (distanceOrder == 0 && candidateSineSquared > sineSquared);
@@ -509,7 +540,7 @@ public class FlexbodyBindingUtil {
                  double nX, double nY, double nZ,
                  double uLengthSquared, double vLengthSquared, double axisDot, double inverseDeterminant,
                  float weightX, float weightY, double weightZ,
-                 double pairDistanceSquared, double sineSquared, int preferenceTier) {
+                 double stabilityScore, double pairDistanceSquared, double sineSquared, int preferenceTier) {
             this.vxNode = vxNode;
             this.vyNode = vyNode;
             this.uX = uX; this.uY = uY; this.uZ = uZ;
@@ -522,6 +553,7 @@ public class FlexbodyBindingUtil {
             this.weightX = weightX;
             this.weightY = weightY;
             this.weightZ = weightZ;
+            this.stabilityScore = stabilityScore;
             this.pairDistanceSquared = pairDistanceSquared;
             this.sineSquared = sineSquared;
             this.preferenceTier = preferenceTier;

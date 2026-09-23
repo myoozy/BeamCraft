@@ -56,6 +56,11 @@ is recorded:
   damage logic.
 - Flexbody binding and DAE loading.
 - Rendering, material interpretation and GPU skinning.
+- Rigs of Rods GPLv3 `source/main/physics/flex/FlexBody.cpp`, `FlexBody.h`, and
+  `Locator_t.h` were consulted in September 2026 as a comparative reference for
+  three-node flexbody locators. No RoR source was copied or structurally ported;
+  BeamCraft's binding changes use BeamNG's public flexbody documentation and
+  independently derived distance/conditioning math.
 - Minecraft entity, networking and gameplay integration.
 - `SoftBodyVehicle` body-axis convention, which was checked against
   `lua/ge/extensions/core/cameraModes/autopoint.lua` but was not translated.

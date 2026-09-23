@@ -78,6 +78,64 @@ class FlexbodyBindingUtilTest {
         assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
     }
 
+    @Test
+    void fallsBackToCrossNormalWhenExplicitZWouldAmplifyNodeMotion() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(1, 1, 0.6));
+        FlexbodyContainer flex = flexForOneVertex();
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.2, 0.5, 0, 0, 1, List.of(0, 1, 2, 3)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(-1, flex.vVzNode[0]);
+        assertTrue(FlexbodyBindingUtil.affineNodeGain(
+                flex.vWeightX[0], flex.vWeightY[0], 0.0) <= FlexbodyBindingUtil.MAX_AFFINE_NODE_GAIN);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.2, 0.5);
+    }
+
+    @Test
+    void affineGainCountsCenterNodeExtrapolation() {
+        assertEquals(7.592, FlexbodyBindingUtil.affineNodeGain(-1.765, -1.531, 0.706), 1.0e-3);
+    }
+
+    @Test
+    void crossNormalPositionWeightUsesMetricOffset() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(2, 0, 0),
+                point(0, 3, 0));
+        FlexbodyContainer flex = flexForOneVertex();
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.6, 0, 0, 1, List.of(0, 1, 2)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(0.6, flex.vWeightZ[0], 1.0e-6);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.6);
+    }
+
+    @Test
+    void ordinaryBodyBindingCanDisableExplicitFourthNode() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(0, 0, 1));
+        FlexbodyContainer flex = flexForOneVertex();
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.4, 0, 0, 1,
+                false, List.of(0, 1, 2, 3)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(-1, flex.vVzNode[0]);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
+    }
+
     private static FlexbodyContainer flexForOneVertex() {
         FlexbodyContainer flex = new FlexbodyContainer();
         flex.allocateSkinningBuffers(1);
