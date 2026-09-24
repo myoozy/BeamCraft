@@ -1006,19 +1006,17 @@ public class WheelContainer {
             }
 
             float angularVelocity = getAngularVelocity(wheel);
-            if (brakeAngle[wheel] * angularVelocity < 0.0f) {
-                brakeAngle[wheel] = 0.0f;
-            }
             float angleLimit = capacity / stiffness;
             brakeAngle[wheel] = Math.clamp(
                     brakeAngle[wheel] + angularVelocity * dt,
                     -angleLimit,
                     angleLimit);
 
-            float compliantTorque = Math.abs(brakeAngle[wheel]) * stiffness;
-            float stoppingTorque = Math.abs(angularVelocity) * getHubRotationalInertia(wheel) / dt;
-            float appliedTorque = Math.min(compliantTorque, stoppingTorque);
-            float wheelTorque = -Math.copySign(appliedTorque, angularVelocity);
+            // The torsion spring itself supplies the static holding torque. Do not cap it
+            // to the impulse that would stop the pre-contact angular velocity: ground
+            // contact is resolved later in the substep and may require the brake to keep
+            // resisting after the wheel has reached zero speed.
+            float wheelTorque = -brakeAngle[wheel] * stiffness;
             applyDriveTorque(wheel, wheelTorque);
             // The pressure-wheel braking counter-torque is the exact opposite of the wheel
             // torque, distributed over nodeArm/nodeCoupling (no-op without a nodeArm).
@@ -1032,46 +1030,6 @@ public class WheelContainer {
         float clampedCoef = Math.clamp(splitCoef, 0.0f, 1.0f);
         return Math.max(0.0f, maximum) * (Math.min(clampedInput, clampedSplit)
                 + Math.max(clampedInput - clampedSplit, 0.0f) * clampedCoef);
-    }
-
-    private float getHubRotationalInertia(int wheelIdx) {
-        if (wheelIdx < 0 || wheelIdx >= count) return 0.0f;
-        NodeContainer nodes = vehicle.nodes;
-        int base = wheelIdx * MAX_RAYS;
-        int rays = numRays[wheelIdx];
-        if (rays <= 0) return 0.0f;
-
-        double ax = nodes.posX[node1[wheelIdx]] - nodes.posX[node2[wheelIdx]];
-        double ay = nodes.posY[node1[wheelIdx]] - nodes.posY[node2[wheelIdx]];
-        double az = nodes.posZ[node1[wheelIdx]] - nodes.posZ[node2[wheelIdx]];
-        double axisLength = Math.sqrt(ax * ax + ay * ay + az * az);
-        if (axisLength < 1e-9) return 0.0f;
-        ax /= axisLength;
-        ay /= axisLength;
-        az /= axisLength;
-
-        double totalMass = 0.0;
-        double cx = 0.0, cy = 0.0, cz = 0.0;
-        for (int ray = 0; ray < rays; ray++) {
-            int inner = hubInnerNodes[base + ray];
-            int outer = hubOuterNodes[base + ray];
-            double innerMass = Math.max(0.0, nodes.mass[inner]);
-            double outerMass = Math.max(0.0, nodes.mass[outer]);
-            totalMass += innerMass + outerMass;
-            cx += nodes.posX[inner] * innerMass + nodes.posX[outer] * outerMass;
-            cy += nodes.posY[inner] * innerMass + nodes.posY[outer] * outerMass;
-            cz += nodes.posZ[inner] * innerMass + nodes.posZ[outer] * outerMass;
-        }
-        if (totalMass < 1e-9) return 0.0f;
-        cx /= totalMass;
-        cy /= totalMass;
-        cz /= totalMass;
-        double inertia = 0.0;
-        for (int ray = 0; ray < rays; ray++) {
-            inertia += polarInertia(nodes, hubInnerNodes[base + ray], cx, cy, cz, ax, ay, az);
-            inertia += polarInertia(nodes, hubOuterNodes[base + ray], cx, cy, cz, ax, ay, az);
-        }
-        return (float) inertia;
     }
 
     private static float moveTowards(float current, float target, float maximumDelta) {

@@ -14,6 +14,9 @@ public final class PowertrainData {
     /** Combustion engines (one row per compiled engine→clutch unit). */
     public final CombustionEngineContainer engines = new CombustionEngineContainer();
 
+    /** Ideal direct-drive electric motors, independent of combustion engine units. */
+    public final ElectricMotorContainer electricMotors = new ElectricMotorContainer();
+
     /** Turbochargers attached to combustion engines, using the same unit ordering. */
     public final TurbochargerContainer turbochargers = new TurbochargerContainer();
 
@@ -63,6 +66,7 @@ public final class PowertrainData {
     public void clear() {
         topology.clear();
         engines.clear();
+        electricMotors.clear();
         turbochargers.clear();
         superchargers.clear();
         clutches.clear();

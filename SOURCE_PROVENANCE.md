@@ -37,9 +37,9 @@ behavior instead of copying KinetiForge's direct synchronization model.
 The following powertrain files are kept as independently implemented BeamCraft
 numerical/structural work under MIT: `ImplicitCouplingSolver.java`,
 `DctCouplingSolver.java`, `SplitShaftSolver.java`, `TorqueConverterSolver.java`,
-and `PowertrainData.java`. Their presence in the same package does not make them
+`PowertrainData.java`, and `ElectricMotorContainer.java`. Their presence in the same package does not make them
 translations of BeamNG code. The implicit spring/coupling integration and the
-two-inertia formulation were developed for BeamCraft and informed by the
+two-inertia formulation and the ideal direct-drive electric-motor runtime were developed for BeamCraft and informed by the
 maintainer's separate KinetiForgeVehicles work. Where these files consume
 BeamNG-compatible parameters, that is interface compatibility rather than a
 claim that the upstream implementation is identical.

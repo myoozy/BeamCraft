@@ -26,6 +26,7 @@ public final class PowertrainTopologyContainer {
     public static final byte TYPE_RANGE_BOX = 8;
     public static final byte TYPE_SPLIT_SHAFT = 9;
     public static final byte TYPE_DCT_GEARBOX = 10;
+    public static final byte TYPE_ELECTRIC_MOTOR = 11;
 
     public int deviceCount;
     public String[] deviceName = new String[0];
