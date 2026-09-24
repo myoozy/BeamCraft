@@ -39,6 +39,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,7 +80,32 @@ final class PowertrainCompiler {
                 deviceSpecs.add(spec);
             }
         }
-        List<DeviceSpec> specs = PowertrainSpecNormalizer.normalize(deviceSpecs);
+        List<DeviceSpec> normalizedSpecs = PowertrainSpecNormalizer.normalize(deviceSpecs);
+        List<DeviceSpec> specs = new ArrayList<>(normalizedSpecs.size());
+        Map<String, Integer> declarationByName = new HashMap<>();
+        for (DeviceSpec spec : normalizedSpecs) {
+            Integer previousIndex = declarationByName.putIfAbsent(spec.name(), specs.size());
+            if (previousIndex == null) {
+                specs.add(spec);
+                continue;
+            }
+
+            DeviceSpec previous = specs.get(previousIndex);
+            if (sameDeviceDeclaration(previous, spec)) {
+                // Some stock configurations repeat the same logical device in both a parent
+                // part and one of its selected child parts. Their named configuration object
+                // has already been unified, so the later row is the effective declaration.
+                specs.set(previousIndex, spec);
+                LOGGER.debug("Collapsed repeated powertrain device declaration '{}'", spec.name());
+                continue;
+            }
+
+            LOGGER.warn("Conflicting duplicate powertrain device '{}'; disabling this vehicle's powertrain",
+                    spec.name());
+            data.clear();
+            data.diagnostic = "conflicting duplicate device: " + spec.name();
+            return;
+        }
         PowertrainTopologyContainer topology = data.topology;
         int deviceCount = specs.size();
         topology.allocateDevices(deviceCount);
@@ -91,13 +117,7 @@ final class PowertrainCompiler {
             topology.deviceName[i] = spec.name();
             topology.deviceType[i] = typeOf(spec);
             topology.deviceRatio[i] = ratioOf(spec);
-            Integer previous = names.put(spec.name(), i);
-            if (previous != null) {
-                LOGGER.warn("Duplicate powertrain device '{}'; disabling this vehicle's powertrain", spec.name());
-                data.clear();
-                data.diagnostic = "duplicate device: " + spec.name();
-                return;
-            }
+            names.put(spec.name(), i);
         }
 
         int[] childSizes = new int[deviceCount];
@@ -1086,6 +1106,16 @@ final class PowertrainCompiler {
             case SuperchargerSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
             case UnsupportedConfig ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
         };
+    }
+
+    private static boolean sameDeviceDeclaration(DeviceSpec first, DeviceSpec second) {
+        if (typeOf(first) != typeOf(second)
+                || !Objects.equals(first.inputName(), second.inputName())
+                || first.inputIndex() != second.inputIndex()) {
+            return false;
+        }
+        return !(first instanceof UnsupportedConfig)
+                || first.type().equalsIgnoreCase(second.type());
     }
 
     private static float ratioOf(DeviceSpec spec) {
