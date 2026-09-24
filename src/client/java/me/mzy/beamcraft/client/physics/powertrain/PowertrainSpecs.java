@@ -272,6 +272,9 @@ public final class PowertrainSpecs {
             int inputIndex,
             List<TorquePoint> torqueCurve,
             List<String> torqueReactionNodes,
+            double maxRegenTorque,
+            double maxRegenPowerKW,
+            double onePedalRegenCoef,
             List<ValueModifier> valueModifiers
     ) implements DeviceSpec {
         public ElectricMotorSpec {

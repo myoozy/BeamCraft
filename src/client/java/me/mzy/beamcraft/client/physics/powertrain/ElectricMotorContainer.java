@@ -12,6 +12,9 @@ public final class ElectricMotorContainer {
     public int[] device = new int[0];
     public float[] motorAV = new float[0];
     public float[] outputTorque = new float[0];
+    public float[] maxRegenTorque = new float[0];
+    public float[] maxRegenPowerW = new float[0];
+    public float[] onePedalRegenCoef = new float[0];
     public int[] curveStart = new int[0];
     public short[] curveCount = new short[0];
     public float[] curveRPM = new float[0];
@@ -26,6 +29,9 @@ public final class ElectricMotorContainer {
         device = new int[motors];
         motorAV = new float[motors];
         outputTorque = new float[motors];
+        maxRegenTorque = new float[motors];
+        maxRegenPowerW = new float[motors];
+        onePedalRegenCoef = new float[motors];
         curveStart = new int[motors];
         curveCount = new short[motors];
         curveRPM = new float[curvePoints];

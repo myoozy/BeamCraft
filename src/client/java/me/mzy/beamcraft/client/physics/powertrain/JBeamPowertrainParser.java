@@ -233,6 +233,12 @@ public final class JBeamPowertrainParser {
                 cfg.add("dctClutchTime", controllerConfig.get("dctClutchTime").deepCopy());
             }
         }
+        if (type.equalsIgnoreCase("electricMotor") && !cfg.has("onePedalRegenCoef")) {
+            JsonElement controller = part.get("vehicleController");
+            if (controller instanceof JsonObject controllerConfig && controllerConfig.has("onePedalRegenCoef")) {
+                cfg.add("onePedalRegenCoef", controllerConfig.get("onePedalRegenCoef").deepCopy());
+            }
+        }
 
         return buildDevice(type, name, inputName, inputIndex, cfg, vars);
     }
@@ -311,6 +317,11 @@ public final class JBeamPowertrainParser {
                 torqueTable(cfg, "torque", vars),
                 JBeamParser.getStringListSafe(cfg, vars,
                         "torqueReactionNodes:", "torqueReactionNodes", "torqueReactionNodes_nodes"),
+                cfg.has("maximumWantedRegenTorque")
+                        ? d(cfg, "maximumWantedRegenTorque", 0.0, vars)
+                        : d(cfg, "maxRegenTorque", 0.0, vars),
+                d(cfg, "maxRegenPower", 0.0, vars),
+                d(cfg, "onePedalRegenCoef", 0.0, vars),
                 valueModifiers(cfg, vars)
         );
     }

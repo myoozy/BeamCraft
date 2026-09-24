@@ -267,7 +267,7 @@ public final class PowertrainSystem {
         consumeRangeBoxEvents(input);
         if (engines.unitCount == 0 && electricMotors.motorCount == 0) return;
         float throttle = Math.clamp((float) input.get(throttleSignalId), 0.0f, 1.0f);
-        solveElectricMotors(throttle);
+        solveElectricMotors(throttle, dt);
         if (engines.unitCount == 0) {
             debugThrottle = throttle;
             debugCurrentGearIndex = electricDirection;
@@ -1242,16 +1242,34 @@ public final class PowertrainSystem {
         return engines.curveTorque[end - 1];
     }
 
-    private void solveElectricMotors(float throttle) {
+    private void solveElectricMotors(float throttle, float dt) {
         for (int motor = 0; motor < electricMotors.motorCount; motor++) {
             float motorAV = 0.0f;
+            float motorCompliance = 0.0f;
             int end = electricMotors.pathStart[motor] + electricMotors.pathCount[motor];
             for (int path = electricMotors.pathStart[motor]; path < end; path++) {
-                motorAV += electricMotors.pathGain[path]
-                        * vehicle.wheels.getAngularVelocity(electricMotors.pathWheel[path]);
+                float gain = electricMotors.pathGain[path];
+                int wheel = electricMotors.pathWheel[path];
+                motorAV += gain * vehicle.wheels.getAngularVelocity(wheel);
+                float wheelInertia = vehicle.wheels.getRotationalInertia(wheel);
+                if (wheelInertia > 1.0e-7f) motorCompliance += gain * gain / wheelInertia;
             }
-            float torque = electricDirection * throttle
+            float driveTorque = electricDirection * throttle
                     * interpolateMotorTorque(motor, Math.abs(motorAV) * AV_TO_RPM);
+            float regenTorque = 0.0f;
+            if (electricDirection != ELECTRIC_NEUTRAL && motorCompliance > 1.0e-9f) {
+                float regenMagnitude = electricMotors.maxRegenTorque[motor]
+                        * electricMotors.onePedalRegenCoef[motor] * (1.0f - throttle);
+                float absAV = Math.abs(motorAV);
+                float powerLimit = electricMotors.maxRegenPowerW[motor];
+                if (powerLimit > 0.0f && absAV > 1.0e-9f) {
+                    regenMagnitude = Math.min(regenMagnitude, powerLimit / absAV);
+                }
+                float stopTorque = absAV / (motorCompliance * dt);
+                regenMagnitude = Math.min(regenMagnitude, stopTorque);
+                regenTorque = -Math.signum(motorAV) * regenMagnitude;
+            }
+            float torque = driveTorque + regenTorque;
             electricMotors.motorAV[motor] = motorAV;
             electricMotors.outputTorque[motor] = torque;
             for (int path = electricMotors.pathStart[motor]; path < end; path++) {

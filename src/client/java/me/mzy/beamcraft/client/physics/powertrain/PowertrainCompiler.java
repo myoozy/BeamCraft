@@ -365,6 +365,10 @@ final class PowertrainCompiler {
         for (int i = 0; i < motors.size(); i++) {
             MotorBuild motor = motors.get(i);
             container.device[i] = motor.device;
+            container.maxRegenTorque[i] = Math.max(0.0f, (float) motor.spec.maxRegenTorque());
+            container.maxRegenPowerW[i] = Math.max(0.0f, (float) motor.spec.maxRegenPowerKW()) * 1000.0f;
+            container.onePedalRegenCoef[i] = Math.clamp(
+                    (float) motor.spec.onePedalRegenCoef(), 0.0f, 1.0f);
             container.curveStart[i] = curveCursor;
             container.curveCount[i] = (short) motor.spec.torqueCurve().size();
             for (TorquePoint point : motor.spec.torqueCurve()) {

@@ -84,13 +84,26 @@ final class PowertrainSpecNormalizer {
                     revLimiterCutTime, revLimiterMaxRPMDrop, idleControllerP, maxIdleThrottle);
         }
         if (spec instanceof ElectricMotorSpec motor) {
-            if (!"torque".equals(key)) return spec;
-            List<TorquePoint> curve = new ArrayList<>(motor.torqueCurve().size());
-            for (TorquePoint point : motor.torqueCurve()) {
-                curve.add(new TorquePoint(point.rpm(), modify(point.torque(), modifier)));
+            List<TorquePoint> curve = motor.torqueCurve();
+            double regenTorque = motor.maxRegenTorque();
+            double regenPower = motor.maxRegenPowerKW();
+            double onePedalCoef = motor.onePedalRegenCoef();
+            switch (key) {
+                case "torque" -> {
+                    List<TorquePoint> changed = new ArrayList<>(curve.size());
+                    for (TorquePoint point : curve) {
+                        changed.add(new TorquePoint(point.rpm(), modify(point.torque(), modifier)));
+                    }
+                    curve = changed;
+                }
+                case "maximumWantedRegenTorque", "maxRegenTorque" ->
+                        regenTorque = modify(regenTorque, modifier);
+                case "maxRegenPower" -> regenPower = modify(regenPower, modifier);
+                case "onePedalRegenCoef" -> onePedalCoef = modify(onePedalCoef, modifier);
+                default -> { return spec; }
             }
             return new ElectricMotorSpec(motor.type(), motor.name(), motor.inputName(), motor.inputIndex(),
-                    curve, motor.torqueReactionNodes(), List.of());
+                    curve, motor.torqueReactionNodes(), regenTorque, regenPower, onePedalCoef, List.of());
         }
         if (spec instanceof FrictionClutchSpec c) {
             double capacity = c.lockTorque(), spring = c.lockSpring(), coefficient = c.lockSpringCoef();
