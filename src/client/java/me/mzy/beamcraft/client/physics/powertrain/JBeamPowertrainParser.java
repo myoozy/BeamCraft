@@ -14,6 +14,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.CombustionEngi
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ElectricMotorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ShaftSpec;
@@ -242,6 +243,8 @@ public final class JBeamPowertrainParser {
         switch (lower) {
             case "combustionengine":
                 return combustionEngine(type, name, inputName, inputIndex, cfg, vars);
+            case "electricmotor":
+                return electricMotor(type, name, inputName, inputIndex, cfg, vars);
             case "frictionclutch":
                 return frictionClutch(type, name, inputName, inputIndex, cfg, vars);
             case "torqueconverter":
@@ -298,6 +301,17 @@ public final class JBeamPowertrainParser {
                         : d(cfg, "revLimiterRPMChange", 300.0, vars),
                 d(cfg, "idleControllerP", 0.01, vars),
                 d(cfg, "maxIdleThrottle", 0.15, vars)
+        );
+    }
+
+    private static ElectricMotorSpec electricMotor(String type, String name, String inputName, int inputIndex,
+                                                   JsonObject cfg, Map<String, Double> vars) {
+        return new ElectricMotorSpec(
+                type, name, inputName, inputIndex,
+                torqueTable(cfg, "torque", vars),
+                JBeamParser.getStringListSafe(cfg, vars,
+                        "torqueReactionNodes:", "torqueReactionNodes", "torqueReactionNodes_nodes"),
+                valueModifiers(cfg, vars)
         );
     }
 

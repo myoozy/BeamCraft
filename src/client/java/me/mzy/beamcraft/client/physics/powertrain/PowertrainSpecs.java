@@ -38,7 +38,7 @@ public final class PowertrainSpecs {
      * 在所有实现上直接可用。
      */
     public sealed interface DeviceSpec
-            permits CombustionEngineSpec, ClutchlikeSpec, GearSelectableSpec,
+            permits CombustionEngineSpec, ElectricMotorSpec, ClutchlikeSpec, GearSelectableSpec,
                     ShaftSpec, SplitShaftSpec, TorsionReactorSpec, DifferentialSpec,
                     TurbochargerSpec, SuperchargerSpec, UnsupportedConfig {
         String type();
@@ -257,6 +257,27 @@ public final class PowertrainSpecs {
                     engineBrakeTorque, torqueCurve, torqueReactionNodes, valueModifiers,
                     0.0, 400.0, 100.0, maxRPM, "time", 0.15, 300.0,
                     0.01, 0.15);
+        }
+    }
+
+    /**
+     * Direct-drive electric motor. The MVP treats it as an ideal torque source whose
+     * angular velocity is read from the rigid downstream wheel domain; rotor inertia,
+     * losses, energy storage and regeneration deliberately remain outside this model.
+     */
+    public record ElectricMotorSpec(
+            String type,
+            String name,
+            String inputName,
+            int inputIndex,
+            List<TorquePoint> torqueCurve,
+            List<String> torqueReactionNodes,
+            List<ValueModifier> valueModifiers
+    ) implements DeviceSpec {
+        public ElectricMotorSpec {
+            torqueCurve = List.copyOf(torqueCurve);
+            torqueReactionNodes = List.copyOf(torqueReactionNodes);
+            valueModifiers = List.copyOf(valueModifiers);
         }
     }
 
