@@ -3,26 +3,21 @@ package me.mzy.beamcraft;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.network.VehicleSyncPayload;
 import me.mzy.beamcraft.network.VehicleRidePayload;
+import me.mzy.beamcraft.network.VehicleSpawnPayload;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.entity.EntityDimensions;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.util.Identifier;
-import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.network.ServerPlayerEntity;
-import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.text.Text;
 import net.minecraft.entity.Entity;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-
-import java.io.File;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +35,7 @@ public class BeamCraft implements ModInitializer {
 			Registries.ENTITY_TYPE,
 			Identifier.of(MOD_ID, "physics_vehicle"),
 			FabricEntityTypeBuilder.create(SpawnGroup.MISC, PhysicsVehicleEntity::new)
+					.trackRangeChunks(32)
 					.dimensions(EntityDimensions.fixed(2.5f, 2.0f)) // 设置一个粗略的逻辑碰撞箱
 					.fireImmune() // 载具燃烧完全由未来的油箱/电池事件系统驱动，禁用原版火焰点燃与着火动画
 					.build()
@@ -56,6 +52,7 @@ public class BeamCraft implements ModInitializer {
 		// 1. 注册 Payload 类型
 		PayloadTypeRegistry.playC2S().register(VehicleSyncPayload.ID, VehicleSyncPayload.CODEC);
 		PayloadTypeRegistry.playC2S().register(VehicleRidePayload.ID, VehicleRidePayload.CODEC);
+		PayloadTypeRegistry.playC2S().register(VehicleSpawnPayload.ID, VehicleSpawnPayload.CODEC);
 
 		// 2. 注册全局服务端接收器
 		ServerPlayNetworking.registerGlobalReceiver(VehicleSyncPayload.ID, (payload, context) -> {
@@ -67,6 +64,9 @@ public class BeamCraft implements ModInitializer {
 					// 同步服务端实体位置，防止服务端进行视距卸载或判定移动作弊
 					entity.setPosition(payload.x(), payload.y(), payload.z());
 					entity.setYaw(payload.yaw());
+					VehicleSyncPayload.RiderAnchor riderAnchor = payload.riderAnchor();
+					vehicle.setRiderAnchor(
+							riderAnchor.x(), riderAnchor.y(), riderAnchor.z(), riderAnchor.eyePosition());
 					entity.velocityModified = true; // 挂起原版速度修正预测
 				}
 			});
@@ -90,31 +90,37 @@ public class BeamCraft implements ModInitializer {
 					}
 				}));
 
-		// /spawnvehicle <车辆名> <pc配置文件名>
-		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-			dispatcher.register(CommandManager.literal("spawnvehicle")
-					// 第一个参数：车辆根名字 (如 pickup)
-					.then(CommandManager.argument("name", StringArgumentType.string())
-							// 第二个参数：PC文件名
-							.then(CommandManager.argument("pcFile", StringArgumentType.string())
-									.executes(context -> {
-										// 获取两个参数
-										String rootName = StringArgumentType.getString(context, "name");
-										String pcFile = StringArgumentType.getString(context, "pcFile");
-										ServerPlayerEntity player = context.getSource().getPlayer();
+		ServerPlayNetworking.registerGlobalReceiver(VehicleSpawnPayload.ID, (payload, context) ->
+				context.server().execute(() -> spawnVehicle(context.player(), payload)));
+	}
 
-										if (player != null) {
-											PhysicsVehicleEntity vehicle =
-													new PhysicsVehicleEntity(PHYSICS_VEHICLE_ENTITY, player.getWorld());
-											vehicle.setSetupConfig(rootName, pcFile);
-											// 设置坐标和视角
-											vehicle.refreshPositionAndAngles(player.getX(), player.getY() + 1, player.getZ(), player.getYaw(), player.getPitch());
+	private static void spawnVehicle(ServerPlayerEntity player, VehicleSpawnPayload payload) {
+		String rootName = payload.vehicleName().trim();
+		String pcFile = payload.pcFileName().trim();
+		if (!isSafeAssetName(rootName, 128) || (!pcFile.isEmpty() && !isSafeAssetName(pcFile, 256))) {
+			player.sendMessage(Text.literal("Invalid vehicle or PC file name"), false);
+			return;
+		}
 
-											player.getWorld().spawnEntity(vehicle);
-											player.sendMessage(Text.literal("🚗 Vehicle spawned: " + rootName + " (Config: " + pcFile + ")"), false);
-										}
-										return 1;
-									}))));
-		});
+		PhysicsVehicleEntity vehicle = new PhysicsVehicleEntity(PHYSICS_VEHICLE_ENTITY, player.getWorld());
+		vehicle.setSetupConfig(rootName, pcFile);
+		vehicle.refreshPositionAndAngles(
+				player.getX(), player.getY() + 1, player.getZ(), player.getYaw(), player.getPitch());
+		player.getWorld().spawnEntity(vehicle);
+		String configMessage = pcFile.isEmpty() ? "default parts" : "Config: " + pcFile;
+		player.sendMessage(Text.literal("🚗 Vehicle spawned: " + rootName + " (" + configMessage + ")"), false);
+	}
+
+	private static boolean isSafeAssetName(String value, int maxLength) {
+		if (value.isEmpty() || value.length() > maxLength
+				|| value.contains("/") || value.contains("\\") || value.contains("..")) {
+			return false;
+		}
+		for (int i = 0; i < value.length(); i++) {
+			if (Character.isISOControl(value.charAt(i))) {
+				return false;
+			}
+		}
+		return true;
 	}
 }

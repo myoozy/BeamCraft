@@ -1,7 +1,9 @@
 package me.mzy.beamcraft.client.model;
 
+import me.mzy.beamcraft.client.physics.BeamGraph;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
 import me.mzy.beamcraft.client.physics.NodeContainer;
+import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -78,6 +80,132 @@ class FlexbodyBindingUtilTest {
         assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
     }
 
+    @Test
+    void fallsBackToCrossNormalWhenExplicitZWouldAmplifyNodeMotion() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(1, 1, 0.6));
+        FlexbodyContainer flex = flexForOneVertex();
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.2, 0.5, 0, 0, 1, List.of(0, 1, 2, 3)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(-1, flex.vVzNode[0]);
+        assertTrue(FlexbodyBindingUtil.affineNodeGain(
+                flex.vWeightX[0], flex.vWeightY[0], 0.0) <= FlexbodyBindingUtil.MAX_AFFINE_NODE_GAIN);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.2, 0.5);
+    }
+
+    @Test
+    void affineGainCountsCenterNodeExtrapolation() {
+        assertEquals(7.592, FlexbodyBindingUtil.affineNodeGain(-1.765, -1.531, 0.706), 1.0e-3);
+    }
+
+    @Test
+    void sparseExplicitVerticesDoNotSplitAMeshBetweenDeformationModels() {
+        assertFalse(FlexbodyBindingUtil.retainExplicitZForMesh(4_643, 8_555));
+        assertTrue(FlexbodyBindingUtil.retainExplicitZForMesh(863, 1_078));
+        assertTrue(FlexbodyBindingUtil.retainExplicitZForMesh(182, 195));
+    }
+
+    @Test
+    void crossNormalPositionWeightUsesMetricOffset() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(2, 0, 0),
+                point(0, 3, 0));
+        FlexbodyContainer flex = flexForOneVertex();
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.6, 0, 0, 1, List.of(0, 1, 2)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(0.6, flex.vWeightZ[0], 1.0e-6);
+        assertEquals(6.0, flex.vRestCrossLength[0], 1.0e-6);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.6);
+    }
+
+    @Test
+    void disconnectedFourthNodeFallsBackToCrossNormal() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(0, 0, 1));
+        FlexbodyContainer flex = flexForOneVertex();
+        BeamGraph graph = graph(nodes.count, new int[][]{{0, 1}, {0, 2}, {1, 2}}, false);
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.4, 0, 0, 1,
+                graph, List.of(0, 1, 2, 3)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(-1, flex.vVzNode[0]);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
+    }
+
+    @Test
+    void cohesiveTetrahedronUsesItsFourthNode() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(0, 0, 1));
+        FlexbodyContainer flex = flexForOneVertex();
+        BeamGraph graph = graph(nodes.count,
+                new int[][]{{0, 1}, {0, 2}, {1, 2}, {0, 3}, {1, 3}, {2, 3}}, false);
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.4, 0, 0, 1,
+                graph, List.of(0, 1, 2, 3)));
+
+        assertFalse(flex.vUseCrossZ[0]);
+        assertTrue(flex.vVzNode[0] >= 0);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
+    }
+
+    @Test
+    void cohesiveButNearlyPlanarVertexPrefersCrossNormal() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(0, 0, 1));
+        FlexbodyContainer flex = flexForOneVertex();
+        BeamGraph graph = graph(nodes.count,
+                new int[][]{{0, 1}, {0, 2}, {1, 2}, {0, 3}, {1, 3}, {2, 3}}, false);
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.01, 0, 0, 1,
+                graph, List.of(0, 1, 2, 3)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.01);
+    }
+
+    @Test
+    void fourthNodeAcrossBreakGroupFallsBackToCrossNormal() {
+        NodeContainer nodes = nodes(
+                point(0, 0, 0),
+                point(1, 0, 0),
+                point(0, 1, 0),
+                point(0, 0, 1));
+        FlexbodyContainer flex = flexForOneVertex();
+        BeamGraph graph = graph(nodes.count,
+                new int[][]{{0, 1}, {0, 2}, {1, 2}, {0, 3}, {1, 3}, {2, 3}}, true);
+
+        assertTrue(FlexbodyBindingUtil.calculateDecoupledWeights(
+                flex, nodes, 0, 0.2, 0.3, 0.4, 0, 0, 1,
+                graph, List.of(0, 1, 2, 3)));
+
+        assertTrue(flex.vUseCrossZ[0]);
+        assertEquals(-1, flex.vVzNode[0]);
+        assertRestPositionReconstructs(flex, nodes, 0.2, 0.3, 0.4);
+    }
+
     private static FlexbodyContainer flexForOneVertex() {
         FlexbodyContainer flex = new FlexbodyContainer();
         flex.allocateSkinningBuffers(1);
@@ -93,6 +221,20 @@ class FlexbodyBindingUtilTest {
             nodes.baseZ[i] = (float) positions[i][2];
         }
         return nodes;
+    }
+
+    private static BeamGraph graph(int nodeCount, int[][] edges, boolean fourthNodeBreakGroup) {
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        vehicle.nodes.count = nodeCount;
+        vehicle.normalBeams.count = edges.length;
+        for (int beam = 0; beam < edges.length; beam++) {
+            vehicle.normalBeams.node1[beam] = edges[beam][0];
+            vehicle.normalBeams.node2[beam] = edges[beam][1];
+            if (fourthNodeBreakGroup && (edges[beam][0] == 3 || edges[beam][1] == 3)) {
+                vehicle.normalBeams.assignedBreakGroups[beam] = List.of("detach");
+            }
+        }
+        return BeamGraph.from(vehicle);
     }
 
     private static double[] point(double x, double y, double z) {

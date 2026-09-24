@@ -24,8 +24,12 @@ public class SoftBodyVehicle {
     public static final float MAX_NODE_SPEED = 343.0f;
     final int brakeInputSignalId;
     final int parkingBrakeInputSignalId;
-    public final PhysicsVehicleEntity parentEntity;
+    /** The currently tracked Minecraft anchor; null while this soft body is retained asleep. */
+    public PhysicsVehicleEntity parentEntity;
     public final float[] localOriginShift = new float[3];
+    /** Fixed interaction-box side and rotation-safe visibility cap, derived at assembly time. */
+    public double interactionBoundsSide = 1.0;
+    public double renderBoundsMaxSpan = 4.0;
     public int vehicleId = -1;
     public int globalNodeOffset = 0;
 
@@ -53,6 +57,7 @@ public class SoftBodyVehicle {
     public final VehicleCameraData cameras = new VehicleCameraData();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
     final CollisionChunkIndex collisionChunks = new CollisionChunkIndex(this);
+    private BeamGraph beamGraph;
 
     // Bounding box cache array for independent part culling
     private int maxTrackedPartId = -1;
@@ -73,6 +78,7 @@ public class SoftBodyVehicle {
     long physicsEventTraceBreakCommitNanos;
 
     final SweepResultBuffer sweepResultBuffer = new SweepResultBuffer();
+    private final float[] riderAnchorScratch = new float[3];
 
     // Written once by this vehicle's broad-phase task and consumed after the
     // parallel candidate-generation barrier. Primitive fields keep collision
@@ -95,6 +101,12 @@ public class SoftBodyVehicle {
         brakeInputSignalId = electrics.register(ElectricSignals.BRAKE_INPUT);
         parkingBrakeInputSignalId = electrics.register(ElectricSignals.PARKING_BRAKE_INPUT);
         this.flexbodies.vehicleNamespace = parentEntity != null ? parentEntity.getRootPartName() : "test";
+        cacheEntityLocation();
+    }
+
+    /** Rebinds retained client physics to a newly tracked instance of the same server entity. */
+    public void bindParentEntity(PhysicsVehicleEntity parentEntity) {
+        this.parentEntity = parentEntity;
         cacheEntityLocation();
     }
 
@@ -123,6 +135,40 @@ public class SoftBodyVehicle {
         double newEntityY = entityY + localOriginShift[1];
         double newEntityZ = entityZ + localOriginShift[2];
         this.parentEntity.setPos(newEntityX,  newEntityY, newEntityZ);
+    }
+
+    /**
+     * Resolves the current local rider anchor.  A real driver camera is an eye
+     * anchor; vehicles without one fall back to the robust node median, which
+     * is treated as a feet anchor so it cannot place the rider below the body.
+     *
+     * @param out receives local x/y/z
+     * @return true when {@code out} is a driver eye position, false when it is
+     *         the median fallback feet position
+     */
+    public boolean resolveRiderAnchor(float[] out) {
+        if (out == null || out.length < 3) {
+            throw new IllegalArgumentException("rider anchor output must hold three values");
+        }
+        VehicleCameraData.InternalCamera driver = cameras.driver();
+        if (driver != null) {
+            int node = driver.nodeIndex();
+            if (0 <= node && node < nodes.count
+                    && Float.isFinite(nodes.posX[node])
+                    && Float.isFinite(nodes.posY[node])
+                    && Float.isFinite(nodes.posZ[node])) {
+                out[0] = nodes.posX[node];
+                out[1] = nodes.posY[node];
+                out[2] = nodes.posZ[node];
+                return true;
+            }
+        }
+
+        nodes.getMedianPosition(riderAnchorScratch);
+        out[0] = riderAnchorScratch[0];
+        out[1] = riderAnchorScratch[1];
+        out[2] = riderAnchorScratch[2];
+        return false;
     }
 
     /**
@@ -302,6 +348,7 @@ public class SoftBodyVehicle {
     }
 
     private BeamPointer addBeamInternal(PhysicsSpecs.BeamSpec spec) {
+        beamGraph = null;
         String name1 = spec.name1();
         String name2 = spec.name2();
         if (nodes.nameToIndex.containsKey(name1) && nodes.nameToIndex.containsKey(name2)) {
@@ -485,6 +532,7 @@ public class SoftBodyVehicle {
 
     public void finalizePhysicsSetup() {
         powertrain.finalizeSetup();
+        beamGraph = BeamGraph.from(this);
         flexbodies.compileGroupsCSR(nodes);
         triangles.buildBreakIndices();
         collisionChunks.rebuild();
@@ -516,6 +564,14 @@ public class SoftBodyVehicle {
         // Every channel is now bounded by the cutoff-aware stability ceiling, so the
         // neutral mode (when authored) can be applied without exceeding the budget.
         adaptiveDampers.applyDefaultModes();
+    }
+
+    /** Immutable authored beam topology, rebuilt after vehicle assembly. */
+    public BeamGraph beamGraph() {
+        if (beamGraph == null || beamGraph.nodeCount() != nodes.count) {
+            beamGraph = BeamGraph.from(this);
+        }
+        return beamGraph;
     }
 
     /**
@@ -823,6 +879,7 @@ public class SoftBodyVehicle {
      * Clear all physics container data and reset simulation world
      */
     public void clear() {
+        beamGraph = null;
         nodes.clear();
         electrics.clear();
         normalBeams.clear();

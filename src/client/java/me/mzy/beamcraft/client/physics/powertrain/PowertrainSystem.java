@@ -52,6 +52,9 @@ public final class PowertrainSystem {
     static final float AV_TO_RPM = 1.0f / RPM_TO_AV;
     private static final float PSI_TO_PA = 6894.7573f;
     private static final float TURBO_REFERENCE_DT = 0.01f;
+    private static final int ELECTRIC_REVERSE = -1;
+    private static final int ELECTRIC_NEUTRAL = 0;
+    private static final int ELECTRIC_DRIVE = 1;
 
     private final SoftBodyVehicle vehicle;
     private final List<DeviceSpec> pendingSpecs = new ArrayList<>();
@@ -60,6 +63,7 @@ public final class PowertrainSystem {
     private PowertrainData data = new PowertrainData();
     public final PowertrainTopologyContainer topology = data.topology;
     public final CombustionEngineContainer engines = data.engines;
+    public final ElectricMotorContainer electricMotors = data.electricMotors;
     public final TurbochargerContainer turbochargers = data.turbochargers;
     public final SuperchargerContainer superchargers = data.superchargers;
     public final FrictionClutchContainer clutches = data.clutches;
@@ -85,6 +89,7 @@ public final class PowertrainSystem {
     private long lastShiftUpEvent;
     private long lastShiftDownEvent;
     private long lastRangeBoxToggleEvent;
+    private int electricDirection = ELECTRIC_NEUTRAL;
     private volatile float debugEngineRPM;
     private volatile float debugThrottle;
     private volatile float debugActualThrottle;
@@ -132,6 +137,7 @@ public final class PowertrainSystem {
         List<DeviceSpec> specs = new ArrayList<>(pendingSpecs);
         pendingSpecs.clear();
         PowertrainCompiler.compile(vehicle, specs, data);
+        electricDirection = ELECTRIC_NEUTRAL;
         debugTorqueCurveCount = engines.unitCount > 0 ? engines.curveCount[0] : 0;
         debugActualThrottle = engines.unitCount > 0 ? engines.actualThrottle[0] : 0.0f;
         debugStarterActive = false;
@@ -143,9 +149,10 @@ public final class PowertrainSystem {
         debugTurboBoostPSI = 0.0f;
         debugSuperchargerRPM = 0.0f;
         debugSuperchargerBoostPSI = 0.0f;
-        debugCurrentGearIndex = engines.unitCount > 0 ? gearboxes.currentGearIndex[0] : 0;
-        debugCurrentGearName = engines.unitCount > 0 ? gearName(0, gearboxes.currentGearIndex[0]) : "?";
-        debugActiveRatio = engines.unitCount > 0 ? gearboxes.activeRatio[0] : 0.0f;
+        debugCurrentGearIndex = engines.unitCount > 0 ? gearboxes.currentGearIndex[0] : electricDirection;
+        debugCurrentGearName = engines.unitCount > 0 ? gearName(0, gearboxes.currentGearIndex[0])
+                : electricMotors.motorCount > 0 ? electricDirectionName() : "?";
+        debugActiveRatio = engines.unitCount > 0 ? gearboxes.activeRatio[0] : electricDirection;
         debugShiftRemaining = 0.0f;
     }
 
@@ -258,8 +265,16 @@ public final class PowertrainSystem {
         ElectricValues input = electrics == null ? ElectricSnapshot.EMPTY : electrics;
         consumeShiftEvents(input);
         consumeRangeBoxEvents(input);
-        if (engines.unitCount == 0 || dt <= 0.0f) return;
+        if (engines.unitCount == 0 && electricMotors.motorCount == 0) return;
         float throttle = Math.clamp((float) input.get(throttleSignalId), 0.0f, 1.0f);
+        solveElectricMotors(throttle, dt);
+        if (engines.unitCount == 0) {
+            debugThrottle = throttle;
+            debugCurrentGearIndex = electricDirection;
+            debugCurrentGearName = electricDirectionName();
+            debugActiveRatio = electricDirection;
+            return;
+        }
         float clutchPedal = Math.clamp((float) input.get(clutchSignalId), 0.0f, 1.0f);
         boolean starter = input.get(starterSignalId) >= 0.5;
         debugThrottle = throttle;
@@ -841,6 +856,9 @@ public final class PowertrainSystem {
         lastShiftDownEvent = down;
 
         for (int event = 0; event < upCount; event++) {
+            if (electricMotors.motorCount > 0 && engines.unitCount == 0) {
+                electricDirection = Math.min(ELECTRIC_DRIVE, electricDirection + 1);
+            }
             for (int unit = 0; unit < gearboxes.unitCount; unit++) {
                 int base = gearboxes.pendingGearIndex[unit] >= 0
                         ? gearboxes.pendingGearIndex[unit] : gearboxes.currentGearIndex[unit];
@@ -848,6 +866,9 @@ public final class PowertrainSystem {
             }
         }
         for (int event = 0; event < downCount; event++) {
+            if (electricMotors.motorCount > 0 && engines.unitCount == 0) {
+                electricDirection = Math.max(ELECTRIC_REVERSE, electricDirection - 1);
+            }
             for (int unit = 0; unit < gearboxes.unitCount; unit++) {
                 int base = gearboxes.pendingGearIndex[unit] >= 0
                         ? gearboxes.pendingGearIndex[unit] : gearboxes.currentGearIndex[unit];
@@ -1041,6 +1062,7 @@ public final class PowertrainSystem {
     }
 
     public void reset() {
+        electricDirection = ELECTRIC_NEUTRAL;
         for (int i = 0; i < engines.unitCount; i++) {
             engines.engineAV[i] = engines.idleAV[i];
             engines.idleControlThrottle[i] = 0.0f;
@@ -1130,15 +1152,17 @@ public final class PowertrainSystem {
         debugFuelEnabled = engines.unitCount > 0 && engines.fuelEnabled[0];
         debugLimiterActive = false;
         debugLimiterCutRemaining = 0.0f;
-        debugCurrentGearIndex = engines.unitCount > 0 ? gearboxes.currentGearIndex[0] : 0;
-        debugCurrentGearName = engines.unitCount > 0 ? gearName(0, gearboxes.currentGearIndex[0]) : "?";
-        debugActiveRatio = engines.unitCount > 0 ? gearboxes.activeRatio[0] : 0.0f;
+        debugCurrentGearIndex = engines.unitCount > 0 ? gearboxes.currentGearIndex[0] : electricDirection;
+        debugCurrentGearName = engines.unitCount > 0 ? gearName(0, gearboxes.currentGearIndex[0])
+                : electricMotors.motorCount > 0 ? electricDirectionName() : "?";
+        debugActiveRatio = engines.unitCount > 0 ? gearboxes.activeRatio[0] : electricDirection;
         debugShiftRemaining = 0.0f;
     }
 
     public void clear() {
         pendingSpecs.clear();
         data.clear();
+        electricDirection = ELECTRIC_NEUTRAL;
         lastShiftUpEvent = 0L;
         lastShiftDownEvent = 0L;
         lastRangeBoxToggleEvent = 0L;
@@ -1216,6 +1240,70 @@ public final class PowertrainSystem {
             }
         }
         return engines.curveTorque[end - 1];
+    }
+
+    private void solveElectricMotors(float throttle, float dt) {
+        for (int motor = 0; motor < electricMotors.motorCount; motor++) {
+            float motorAV = 0.0f;
+            float motorCompliance = 0.0f;
+            int end = electricMotors.pathStart[motor] + electricMotors.pathCount[motor];
+            for (int path = electricMotors.pathStart[motor]; path < end; path++) {
+                float gain = electricMotors.pathGain[path];
+                int wheel = electricMotors.pathWheel[path];
+                motorAV += gain * vehicle.wheels.getAngularVelocity(wheel);
+                float wheelInertia = vehicle.wheels.getRotationalInertia(wheel);
+                if (wheelInertia > 1.0e-7f) motorCompliance += gain * gain / wheelInertia;
+            }
+            float driveTorque = electricDirection * throttle
+                    * interpolateMotorTorque(motor, Math.abs(motorAV) * AV_TO_RPM);
+            float regenTorque = 0.0f;
+            if (electricDirection != ELECTRIC_NEUTRAL && motorCompliance > 1.0e-9f) {
+                float regenMagnitude = electricMotors.maxRegenTorque[motor]
+                        * electricMotors.onePedalRegenCoef[motor] * (1.0f - throttle);
+                float absAV = Math.abs(motorAV);
+                float powerLimit = electricMotors.maxRegenPowerW[motor];
+                if (powerLimit > 0.0f && absAV > 1.0e-9f) {
+                    regenMagnitude = Math.min(regenMagnitude, powerLimit / absAV);
+                }
+                float stopTorque = absAV / (motorCompliance * dt);
+                regenMagnitude = Math.min(regenMagnitude, stopTorque);
+                regenTorque = -Math.signum(motorAV) * regenMagnitude;
+            }
+            float torque = driveTorque + regenTorque;
+            electricMotors.motorAV[motor] = motorAV;
+            electricMotors.outputTorque[motor] = torque;
+            for (int path = electricMotors.pathStart[motor]; path < end; path++) {
+                vehicle.wheels.applyDriveTorqueAndReaction(
+                        electricMotors.pathWheel[path], torque * electricMotors.pathGain[path]);
+            }
+        }
+    }
+
+    private float interpolateMotorTorque(int motor, float rpm) {
+        int start = electricMotors.curveStart[motor];
+        int count = electricMotors.curveCount[motor];
+        if (count <= 0) return 0.0f;
+        if (count == 1 || rpm <= electricMotors.curveRPM[start]) {
+            return electricMotors.curveTorque[start];
+        }
+        int end = start + count;
+        for (int i = start + 1; i < end; i++) {
+            if (rpm <= electricMotors.curveRPM[i]) {
+                float span = electricMotors.curveRPM[i] - electricMotors.curveRPM[i - 1];
+                float t = span > 1.0e-6f ? (rpm - electricMotors.curveRPM[i - 1]) / span : 0.0f;
+                return electricMotors.curveTorque[i - 1]
+                        + (electricMotors.curveTorque[i] - electricMotors.curveTorque[i - 1]) * t;
+            }
+        }
+        return electricMotors.curveTorque[end - 1];
+    }
+
+    private String electricDirectionName() {
+        return switch (electricDirection) {
+            case ELECTRIC_REVERSE -> "R";
+            case ELECTRIC_NEUTRAL -> "N";
+            default -> "D";
+        };
     }
 
     private void applyReactionTorque(int start, int count, float torque) {

@@ -56,6 +56,7 @@ public class FlexbodyContainer {
     public float[] vNormWeightX = new float[INIT_FLEX_CAP];
     public float[] vNormWeightY = new float[INIT_FLEX_CAP];
     public float[] vNormWeightZ = new float[INIT_FLEX_CAP];
+    public float[] vRestCrossLength = new float[INIT_FLEX_CAP];
     public boolean[] vUseCrossZ; // 当找不到正交 Vz 时设为 true，靠叉乘推导
 
     // CPU 蒙皮计算输出缓冲 (供 VBO 上传)
@@ -108,6 +109,7 @@ public class FlexbodyContainer {
             vWeightX = Utility.expand(vWeightX, newSize);
             vWeightY = Utility.expand(vWeightY, newSize);
             vWeightZ = Utility.expand(vWeightZ, newSize);
+            vRestCrossLength = Utility.expand(vRestCrossLength, newSize);
 
             // 懒初始化数组特殊处理
             if (vUseCrossZ != null) {
@@ -247,6 +249,7 @@ public class FlexbodyContainer {
         this.vNormWeightX = new float[totalVerts];
         this.vNormWeightY = new float[totalVerts];
         this.vNormWeightZ = new float[totalVerts];
+        this.vRestCrossLength = new float[totalVerts];
 
         this.vUseCrossZ  = new boolean[totalVerts];
 

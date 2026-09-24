@@ -323,9 +323,9 @@ public class ComputeSkinningPipeline {
                 normals.putFloat(flex.vNormWeightZ[i]);
                 normals.putFloat(usesDeformBasis ? flex.vVxNode[i] : -1.0f);
 
-                offsets.putFloat(flex.skinnedPosX[i]);
-                offsets.putFloat(flex.skinnedPosY[i]);
-                offsets.putFloat(flex.skinnedPosZ[i]);
+                offsets.putFloat(usesDeformBasis ? flex.vRestCrossLength[i] : flex.skinnedPosX[i]);
+                offsets.putFloat(usesDeformBasis ? 0.0f : flex.skinnedPosY[i]);
+                offsets.putFloat(usesDeformBasis ? 0.0f : flex.skinnedPosZ[i]);
                 offsets.putFloat(usesDeformBasis ? flex.vVyNode[i] : -1.0f);
 
                 vzNodes.putFloat(flex.vVzNode[i]);

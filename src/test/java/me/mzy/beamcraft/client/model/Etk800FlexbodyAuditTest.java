@@ -2,6 +2,7 @@ package me.mzy.beamcraft.client.model;
 
 import com.google.gson.JsonObject;
 import me.mzy.beamcraft.client.physics.FlexbodyContainer;
+import me.mzy.beamcraft.client.physics.BeamGraph;
 import me.mzy.beamcraft.client.physics.JBeamAssembler;
 import me.mzy.beamcraft.client.physics.JBeamLoader;
 import me.mzy.beamcraft.client.physics.NodeContainer;
@@ -45,6 +46,7 @@ class Etk800FlexbodyAuditTest {
 
         FlexbodyContainer flex = vehicle.flexbodies;
         NodeContainer nodes = vehicle.nodes;
+        BeamGraph beamGraph = vehicle.beamGraph();
         int vertexOffset = 0;
         for (int mesh = 0; mesh < flex.meshCount; mesh++) {
             String name = flex.meshName[mesh];
@@ -53,7 +55,11 @@ class Etk800FlexbodyAuditTest {
             if (geometry == null) continue;
             int meshVertexOffset = vertexOffset;
             vertexOffset += geometry.vertexCount;
-            if (!(name.contains("tire") || name.contains("caliper") || name.contains("brake"))) continue;
+            boolean frontBindingRegression = name.equals("etk800_duct_F")
+                    || name.equals("etk800_bumper_F_sport")
+                    || name.contains("hood");
+            if (!(name.contains("tire") || name.contains("caliper") || name.contains("brake")
+                    || frontBindingRegression)) continue;
             System.out.println("ETK_FLEX mesh=" + name + " groups=" + flex.targetGroups[mesh]);
             for (String group : flex.targetGroups[mesh]) {
                 Integer groupId = flex.groupNameToId.get(group);
@@ -71,8 +77,42 @@ class Etk800FlexbodyAuditTest {
             int usesGeneratedWheel = 0;
             int wheelHubAxisCenters = 0;
             int explicitZVertices = 0;
+            int crossZVertices = 0;
+            int[] explicitDirectConnections = new int[4];
+            double maximumAffineGain = 0.0;
+            double maximumNodeSpan = 0.0;
             for (int vertex = meshVertexOffset; vertex < meshVertexOffset + geometry.vertexCount; vertex++) {
-                if (!flex.vUseCrossZ[vertex] && flex.vVzNode[vertex] >= 0) explicitZVertices++;
+                if (!flex.vUseCrossZ[vertex] && flex.vVzNode[vertex] >= 0) {
+                    explicitZVertices++;
+                    int direct = 0;
+                    if (beamGraph.cohesivelyConnected(flex.vVzNode[vertex], flex.vCenterNode[vertex])) direct++;
+                    if (beamGraph.cohesivelyConnected(flex.vVzNode[vertex], flex.vVxNode[vertex])) direct++;
+                    if (beamGraph.cohesivelyConnected(flex.vVzNode[vertex], flex.vVyNode[vertex])) direct++;
+                    explicitDirectConnections[direct]++;
+                }
+                if (flex.vUseCrossZ[vertex]) crossZVertices++;
+                double gain = FlexbodyBindingUtil.affineNodeGain(
+                        flex.vWeightX[vertex], flex.vWeightY[vertex],
+                        flex.vVzNode[vertex] >= 0 ? flex.vWeightZ[vertex] : 0.0);
+                maximumAffineGain = Math.max(maximumAffineGain, gain);
+                if (flex.vVzNode[vertex] >= 0) {
+                    assertTrue(gain <= FlexbodyBindingUtil.MAX_AFFINE_NODE_GAIN + 1.0e-6,
+                            name + " vertex " + (vertex - meshVertexOffset)
+                                    + " amplifies node motion by " + gain);
+                }
+                int centerNode = flex.vCenterNode[vertex];
+                int[] locatorNodes = flex.vVzNode[vertex] >= 0
+                        ? new int[]{centerNode, flex.vVxNode[vertex], flex.vVyNode[vertex], flex.vVzNode[vertex]}
+                        : new int[]{centerNode, flex.vVxNode[vertex], flex.vVyNode[vertex]};
+                for (int first = 0; first < locatorNodes.length; first++) {
+                    for (int second = first + 1; second < locatorNodes.length; second++) {
+                        int a = locatorNodes[first], b = locatorNodes[second];
+                        double dx = nodes.baseX[a] - nodes.baseX[b];
+                        double dy = nodes.baseY[a] - nodes.baseY[b];
+                        double dz = nodes.baseZ[a] - nodes.baseZ[b];
+                        maximumNodeSpan = Math.max(maximumNodeSpan, Math.sqrt(dx * dx + dy * dy + dz * dz));
+                    }
+                }
                 if (nodes.names[flex.vCenterNode[vertex]].matches("[rf]w1.*")) wheelHubAxisCenters++;
                 int[] bindingNodes = flex.vVzNode[vertex] >= 0
                         ? new int[]{flex.vCenterNode[vertex], flex.vVxNode[vertex], flex.vVyNode[vertex], flex.vVzNode[vertex]}
@@ -88,16 +128,32 @@ class Etk800FlexbodyAuditTest {
                     + " wheelHubAxisRefs=" + usesWheelHubAxis
                     + " wheelHubAxisCenters=" + wheelHubAxisCenters
                     + " generatedWheelRefs=" + usesGeneratedWheel
-                    + " explicitZ=" + explicitZVertices);
+                    + " explicitZ=" + explicitZVertices
+                    + " crossZ=" + crossZVertices
+                    + " explicitDirect=" + java.util.Arrays.toString(explicitDirectConnections)
+                    + " maxGain=" + maximumAffineGain
+                    + " maxNodeSpan=" + maximumNodeSpan);
             if (name.contains("caliper")) {
                 assertEquals(0, usesWheelHubAxis,
                         name + " must stay on the suspension side when its wheel detaches");
+            } else if (name.contains("tire")) {
+                assertEquals(geometry.vertexCount, explicitZVertices,
+                        name + " must use one continuous four-node model while steering");
             } else if (name.contains("brakedisc")) {
                 assertTrue(usesWheelHubAxis > 0,
                         name + " is a rotating part and must retain its wheel-axis binding");
-            } else if (name.startsWith("tire_")) {
-                assertEquals(geometry.vertexCount, explicitZVertices,
-                        name + " should use BeamNG-style four-node locators");
+            }
+            if (name.equals("etk800_duct_F")) {
+                assertEquals(0, explicitZVertices,
+                        "the front duct must not mix deformation models across one surface");
+                assertTrue(maximumNodeSpan < 0.65,
+                        "the front duct must not reach into remote bumper locator nodes");
+            }
+            if (name.equals("etk800_bumper_F_sport")) {
+                assertEquals(0, explicitZVertices,
+                        "the front bumper must not mix deformation models across one surface");
+                assertTrue(maximumNodeSpan < 0.85,
+                        "the front bumper must keep every locator cage local");
             }
         }
     }

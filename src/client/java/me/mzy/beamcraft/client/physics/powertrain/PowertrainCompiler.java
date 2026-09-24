@@ -13,6 +13,7 @@ import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ClutchlikeSpec
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DeviceSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DifferentialSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.DctGearboxSpec;
+import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.ElectricMotorSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.FrictionClutchSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearSelectableSpec;
 import me.mzy.beamcraft.client.physics.powertrain.PowertrainSpecs.GearboxSpec;
@@ -29,6 +30,7 @@ import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyConta
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_DIFFERENTIAL;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_DCT_GEARBOX;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_ENGINE;
+import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_ELECTRIC_MOTOR;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_GEARBOX;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_RANGE_BOX;
 import static me.mzy.beamcraft.client.physics.powertrain.PowertrainTopologyContainer.TYPE_SPLIT_SHAFT;
@@ -39,6 +41,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,7 +82,32 @@ final class PowertrainCompiler {
                 deviceSpecs.add(spec);
             }
         }
-        List<DeviceSpec> specs = PowertrainSpecNormalizer.normalize(deviceSpecs);
+        List<DeviceSpec> normalizedSpecs = PowertrainSpecNormalizer.normalize(deviceSpecs);
+        List<DeviceSpec> specs = new ArrayList<>(normalizedSpecs.size());
+        Map<String, Integer> declarationByName = new HashMap<>();
+        for (DeviceSpec spec : normalizedSpecs) {
+            Integer previousIndex = declarationByName.putIfAbsent(spec.name(), specs.size());
+            if (previousIndex == null) {
+                specs.add(spec);
+                continue;
+            }
+
+            DeviceSpec previous = specs.get(previousIndex);
+            if (sameDeviceDeclaration(previous, spec)) {
+                // Some stock configurations repeat the same logical device in both a parent
+                // part and one of its selected child parts. Their named configuration object
+                // has already been unified, so the later row is the effective declaration.
+                specs.set(previousIndex, spec);
+                LOGGER.debug("Collapsed repeated powertrain device declaration '{}'", spec.name());
+                continue;
+            }
+
+            LOGGER.warn("Conflicting duplicate powertrain device '{}'; disabling this vehicle's powertrain",
+                    spec.name());
+            data.clear();
+            data.diagnostic = "conflicting duplicate device: " + spec.name();
+            return;
+        }
         PowertrainTopologyContainer topology = data.topology;
         int deviceCount = specs.size();
         topology.allocateDevices(deviceCount);
@@ -91,13 +119,7 @@ final class PowertrainCompiler {
             topology.deviceName[i] = spec.name();
             topology.deviceType[i] = typeOf(spec);
             topology.deviceRatio[i] = ratioOf(spec);
-            Integer previous = names.put(spec.name(), i);
-            if (previous != null) {
-                LOGGER.warn("Duplicate powertrain device '{}'; disabling this vehicle's powertrain", spec.name());
-                data.clear();
-                data.diagnostic = "duplicate device: " + spec.name();
-                return;
-            }
+            names.put(spec.name(), i);
         }
 
         int[] childSizes = new int[deviceCount];
@@ -151,6 +173,7 @@ final class PowertrainCompiler {
         collectDeviceLayouts(data, specs);
 
         List<UnitBuild> units = new ArrayList<>();
+        List<MotorBuild> motors = new ArrayList<>();
         for (int engine = 0; engine < deviceCount; engine++) {
             if (topology.deviceType[engine] != TYPE_ENGINE) continue;
             if (topology.childCount[engine] != 1) {
@@ -169,19 +192,27 @@ final class PowertrainCompiler {
                     superchargerByEngine.get(topology.deviceName[engine]));
             if (!unit.paths.isEmpty()) units.add(unit);
         }
+        for (int motor = 0; motor < deviceCount; motor++) {
+            if (topology.deviceType[motor] != TYPE_ELECTRIC_MOTOR) continue;
+            MotorBuild build = buildMotor(vehicle, specs, topology, motor);
+            if (!build.paths.isEmpty()) motors.add(build);
+        }
         compileUnits(vehicle, data, units);
-        if (data.engines.unitCount > 0) {
+        compileMotors(data, motors);
+        if (data.engines.unitCount > 0 || data.electricMotors.motorCount > 0) {
             int turboCount = 0;
             for (boolean existing : data.turbochargers.existing) if (existing) turboCount++;
             int superchargerCount = 0;
             for (boolean existing : data.superchargers.existing) if (existing) superchargerCount++;
             data.diagnostic = detachedDevices == 0 ? "ready" : "ready; " + detachedDevices + " detached device(s)";
             LOGGER.info("Compiled BeamCraft powertrain: {} devices, {} engine/clutchlike unit(s), "
-                            + "{} turbocharger(s), {} supercharger(s), {} driven wheel path(s)",
-                    deviceCount, data.engines.unitCount, turboCount, superchargerCount,
-                    data.wheelPaths.pathWheel.length);
+                            + "{} electric motor(s), {} turbocharger(s), {} supercharger(s), "
+                            + "{} driven wheel path(s)",
+                    deviceCount, data.engines.unitCount, data.electricMotors.motorCount,
+                    turboCount, superchargerCount,
+                    data.wheelPaths.pathWheel.length + data.electricMotors.pathWheel.length);
         } else {
-            data.diagnostic = "no supported engine-to-wheel path";
+            data.diagnostic = "no supported power-source-to-wheel path";
         }
     }
 
@@ -302,6 +333,57 @@ final class PowertrainCompiler {
                 capacity, spring, maxTorque, paths, reactions, reactors,
                 gearboxDevice, gearbox, rangeBoxDevice, rangeBox,
                 splitShafts, differentials, turbocharger, supercharger);
+    }
+
+    private static MotorBuild buildMotor(SoftBodyVehicle vehicle, List<DeviceSpec> specs,
+                                         PowertrainTopologyContainer topology, int motor) {
+        ElectricMotorSpec motorSpec = (ElectricMotorSpec) specs.get(motor);
+        List<PathBuild> paths = new ArrayList<>();
+        boolean[] visiting = new boolean[topology.deviceCount];
+        int end = topology.childStart[motor] + topology.childCount[motor];
+        for (int cursor = topology.childStart[motor]; cursor < end; cursor++) {
+            collectDomainPaths(vehicle, specs, topology, topology.children[cursor],
+                    1.0f, (byte) 0, -1, -1, paths, visiting);
+        }
+        if (paths.isEmpty()) {
+            LOGGER.warn("Electric motor '{}' has no resolved driven wheel path", motorSpec.name());
+        }
+        return new MotorBuild(motor, motorSpec, paths);
+    }
+
+    private static void compileMotors(PowertrainData data, List<MotorBuild> motors) {
+        int curvePoints = 0;
+        int paths = 0;
+        for (MotorBuild motor : motors) {
+            curvePoints += motor.spec.torqueCurve().size();
+            paths += motor.paths.size();
+        }
+        ElectricMotorContainer container = data.electricMotors;
+        container.allocate(motors.size(), curvePoints, paths);
+        int curveCursor = 0;
+        int pathCursor = 0;
+        for (int i = 0; i < motors.size(); i++) {
+            MotorBuild motor = motors.get(i);
+            container.device[i] = motor.device;
+            container.maxRegenTorque[i] = Math.max(0.0f, (float) motor.spec.maxRegenTorque());
+            container.maxRegenPowerW[i] = Math.max(0.0f, (float) motor.spec.maxRegenPowerKW()) * 1000.0f;
+            container.onePedalRegenCoef[i] = Math.clamp(
+                    (float) motor.spec.onePedalRegenCoef(), 0.0f, 1.0f);
+            container.curveStart[i] = curveCursor;
+            container.curveCount[i] = (short) motor.spec.torqueCurve().size();
+            for (TorquePoint point : motor.spec.torqueCurve()) {
+                container.curveRPM[curveCursor] = (float) point.rpm();
+                container.curveTorque[curveCursor] = (float) point.torque();
+                curveCursor++;
+            }
+            container.pathStart[i] = pathCursor;
+            container.pathCount[i] = (short) motor.paths.size();
+            for (PathBuild path : motor.paths) {
+                container.pathWheel[pathCursor] = path.wheel;
+                container.pathGain[pathCursor] = path.gain;
+                pathCursor++;
+            }
+        }
     }
 
     /**
@@ -1072,6 +1154,7 @@ final class PowertrainCompiler {
     private static byte typeOf(DeviceSpec spec) {
         return switch (spec) {
             case CombustionEngineSpec ignored -> PowertrainTopologyContainer.TYPE_ENGINE;
+            case ElectricMotorSpec ignored -> PowertrainTopologyContainer.TYPE_ELECTRIC_MOTOR;
             case FrictionClutchSpec ignored -> PowertrainTopologyContainer.TYPE_CLUTCH;
             case TorqueConverterSpec ignored -> PowertrainTopologyContainer.TYPE_TORQUE_CONVERTER;
             case DctGearboxSpec ignored -> PowertrainTopologyContainer.TYPE_DCT_GEARBOX;
@@ -1086,6 +1169,16 @@ final class PowertrainCompiler {
             case SuperchargerSpec ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
             case UnsupportedConfig ignored -> PowertrainTopologyContainer.TYPE_UNSUPPORTED;
         };
+    }
+
+    private static boolean sameDeviceDeclaration(DeviceSpec first, DeviceSpec second) {
+        if (typeOf(first) != typeOf(second)
+                || !Objects.equals(first.inputName(), second.inputName())
+                || first.inputIndex() != second.inputIndex()) {
+            return false;
+        }
+        return !(first instanceof UnsupportedConfig)
+                || first.type().equalsIgnoreCase(second.type());
     }
 
     private static float ratioOf(DeviceSpec spec) {
@@ -1158,6 +1251,9 @@ final class PowertrainCompiler {
     private record DifferentialBuild(int device, DifferentialSpec spec,
                                      List<PathBuild> output1Paths, List<PathBuild> output2Paths,
                                      List<ReactionTermBuild> inputTerms) {
+    }
+
+    private record MotorBuild(int device, ElectricMotorSpec spec, List<PathBuild> paths) {
     }
 
     private record UnitBuild(int engineDevice, int clutchlikeDevice, CombustionEngineSpec engine,

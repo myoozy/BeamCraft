@@ -57,6 +57,7 @@ public class PhysicsWorld {
     private SoftBodyVehicle[] candidateTaskVehicles = new SoftBodyVehicle[0];
     private int[] candidateTaskMeshletStarts = new int[0];
     private int[] candidateTaskMeshletEnds = new int[0];
+    private final float[] riderAnchorScratch = new float[3];
 
     /** Shared collision pipeline: candidate generation, soft-contact solving and environment collision. */
     public final CollisionPipeline collisionPipeline = new CollisionPipeline(voxelSnapshot, globalSap, collisionManager);
@@ -111,18 +112,26 @@ public class PhysicsWorld {
     public void addVehicle(SoftBodyVehicle vehicle) {
         if (vehicle == null || vehicles.contains(vehicle)) return;
 
-        vehicle.vehicleId = nextVehicleId++;
+        if (vehicle.vehicleId < 0) {
+            vehicle.vehicleId = nextVehicleId++;
+        }
         vehicles.add(vehicle);
+    }
+
+    /** Stops simulating a vehicle without releasing any of its retained state. */
+    public void suspendVehicle(SoftBodyVehicle vehicle) {
+        if (vehicle == null) return;
+        vehicles.remove(vehicle);
+        vehicle.renderTimeline.clear();
     }
 
     /**
      * Remove a vehicle and release its owned SoA buffers.
      */
     public void removeVehicle(SoftBodyVehicle vehicle) {
-        if (vehicle == null || !vehicles.contains(vehicle)) return;
+        if (vehicle == null) return;
 
         vehicles.remove(vehicle);
-
         vehicle.clear();
 
         System.out.println("Vehicle removed safely. ID: " + vehicle.vehicleId);
@@ -130,6 +139,9 @@ public class PhysicsWorld {
     }
 
     public void clear() {
+        for (SoftBodyVehicle vehicle : vehicles) {
+            vehicle.clear();
+        }
         vehicles.clear();
         collisionManager.clearContacts();
         System.out.println("Physics world data cleared");
@@ -453,15 +465,27 @@ public class PhysicsWorld {
     public double[] commitPreparedStep(StepResult result) {
         long commitStartedNanos = System.nanoTime();
         for (SoftBodyVehicle vehicle : result.preparedStep().activeVehicles()) {
+            if (vehicle.parentEntity == null || vehicle.parentEntity.isRemoved()) {
+                continue;
+            }
             vehicle.nodes.writeRenderBuffer();
             vehicle.updateEntityLocation();
-            if (vehicle.parentEntity != null && ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
+            if (vehicle.parentEntity != null) {
+                boolean riderAnchorIsEye = vehicle.resolveRiderAnchor(riderAnchorScratch);
+                vehicle.parentEntity.setRiderAnchor(
+                        riderAnchorScratch[0], riderAnchorScratch[1], riderAnchorScratch[2], riderAnchorIsEye);
+                if (!ClientPlayNetworking.canSend(VehicleSyncPayload.ID)) {
+                    continue;
+                }
                 ClientPlayNetworking.send(new VehicleSyncPayload(
                         vehicle.parentEntity.getId(),
                         vehicle.parentEntity.getX(),
                         vehicle.parentEntity.getY(),
                         vehicle.parentEntity.getZ(),
-                        vehicle.parentEntity.getYaw()
+                        vehicle.parentEntity.getYaw(),
+                        new VehicleSyncPayload.RiderAnchor(
+                                riderAnchorScratch[0], riderAnchorScratch[1], riderAnchorScratch[2],
+                                riderAnchorIsEye)
                 ));
             }
         }

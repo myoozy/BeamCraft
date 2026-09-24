@@ -37,9 +37,9 @@ behavior instead of copying KinetiForge's direct synchronization model.
 The following powertrain files are kept as independently implemented BeamCraft
 numerical/structural work under MIT: `ImplicitCouplingSolver.java`,
 `DctCouplingSolver.java`, `SplitShaftSolver.java`, `TorqueConverterSolver.java`,
-and `PowertrainData.java`. Their presence in the same package does not make them
+`PowertrainData.java`, and `ElectricMotorContainer.java`. Their presence in the same package does not make them
 translations of BeamNG code. The implicit spring/coupling integration and the
-two-inertia formulation were developed for BeamCraft and informed by the
+two-inertia formulation and the ideal direct-drive electric-motor runtime were developed for BeamCraft and informed by the
 maintainer's separate KinetiForgeVehicles work. Where these files consume
 BeamNG-compatible parameters, that is interface compatibility rather than a
 claim that the upstream implementation is identical.
@@ -55,8 +55,25 @@ is recorded:
 - Node-and-beam soft-body dynamics, stability/stiffness limiting, collision and
   damage logic.
 - Flexbody binding and DAE loading.
+- Flexbody transform expressions in `JBeamParser.java` were checked against the
+  installed BeamNG data entry
+  `vehicles/vivace/vivace_suspension_R_rally.jbeam` (BeamNG contributors). The
+  compatibility change was contributed by M1AO and BeamCraft contributors with
+  Codex assistance; no BeamNG implementation source was adapted for this change.
 - Rendering, material interpretation and GPU skinning.
-- Minecraft entity, networking and gameplay integration.
+- Rigs of Rods GPLv3 `source/main/physics/flex/FlexBody.cpp`, `FlexBody.h`, and
+  `Locator_t.h` were consulted in September 2026 as a comparative reference for
+  three-node flexbody locators. No RoR source was copied or structurally ported;
+  BeamCraft's binding changes use BeamNG's public flexbody documentation and
+  independently derived distance/conditioning math.
+- Minecraft entity, networking and gameplay integration. The Yarn-mapped
+  Minecraft 1.21 sources for `VehicleEntity`, `BoatEntity`,
+  `AbstractMinecartEntity`, `BoatEntityRenderer` and `MinecartEntityRenderer`
+  were consulted in September 2026 for the established damage-wobble gameplay
+  behavior (ten-tick wobble, decaying accumulated strength and the render-only
+  sinusoidal rotation). BeamCraft independently integrates that behavior with
+  its client-authoritative soft-body lifecycle, deliberately requires repeated
+  creative-mode hits, and does not copy a vehicle-item drop implementation.
 - `SoftBodyVehicle` body-axis convention, which was checked against
   `lua/ge/extensions/core/cameraModes/autopoint.lua` but was not translated.
 - `AdaptiveDamperParser.java`, `AdaptiveDamperController.java` and

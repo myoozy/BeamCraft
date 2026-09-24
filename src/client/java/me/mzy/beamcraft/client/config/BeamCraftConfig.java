@@ -27,6 +27,7 @@ public final class BeamCraftConfig {
     public Conflict conflict = new Conflict();
     public Input input = new Input();
     public Diagnostics diagnostics = new Diagnostics();
+    public VehicleCache vehicleCache = new VehicleCache();
 
     public static final class Conflict {
         public boolean notify = false;
@@ -37,6 +38,13 @@ public final class BeamCraftConfig {
     public static final class Diagnostics {
         /** Enable the manual F8 start/stop substep trace recorder. */
         public boolean physicsEventTrace = false;
+    }
+
+    public static final class VehicleCache {
+        /** Approximate combined heap/GPU budget for untracked sleeping vehicles. */
+        public int sleepingMemoryMiB = 512;
+        /** Emergency eviction starts when the JVM heap reaches this fraction. */
+        public double heapHighWatermark = 0.85;
     }
 
     /**
@@ -179,7 +187,20 @@ public final class BeamCraftConfig {
         if (diagnostics == null) {
             diagnostics = new Diagnostics();
         }
+        if (vehicleCache == null) {
+            vehicleCache = new VehicleCache();
+        }
+        vehicleCache.sleepingMemoryMiB = Math.max(0, vehicleCache.sleepingMemoryMiB);
+        if (!Double.isFinite(vehicleCache.heapHighWatermark)
+                || vehicleCache.heapHighWatermark < 0.5
+                || vehicleCache.heapHighWatermark > 0.98) {
+            vehicleCache.heapHighWatermark = new VehicleCache().heapHighWatermark;
+        }
         return this;
+    }
+
+    public long sleepingVehicleCacheBytes() {
+        return (long) vehicleCache.sleepingMemoryMiB * 1024L * 1024L;
     }
 
     private static boolean mergeMissing(JsonObject target, JsonObject defaults) {

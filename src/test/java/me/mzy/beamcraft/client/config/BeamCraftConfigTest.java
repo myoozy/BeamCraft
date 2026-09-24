@@ -27,6 +27,9 @@ class BeamCraftConfigTest {
         assertEquals(null, config.input.exitVehicle);
         assertEquals(null, config.input.steering);
         assertEquals(null, config.input.throttle);
+        assertEquals(512, config.vehicleCache.sleepingMemoryMiB);
+        assertEquals(0.85, config.vehicleCache.heapHighWatermark);
+        assertEquals(512L * 1024L * 1024L, config.sleepingVehicleCacheBytes());
 
         BeamCraftConfig.Input defaults = BeamCraftConfig.Input.defaults();
         assertEquals(List.of("key.keyboard.left.shift"), defaults.exitVehicle.keys);
@@ -117,5 +120,24 @@ class BeamCraftConfigTest {
         JsonObject throttle = saved.getAsJsonObject("input").getAsJsonObject("throttle");
         assertEquals(0.0, throttle.get("riseTime").getAsDouble());
         assertTrue(!throttle.has("fallTime"));
+    }
+
+    @Test
+    void normalizesUnsafeVehicleCacheSettings() throws Exception {
+        Path file = tempDir.resolve(BeamCraftConfig.FILE_NAME);
+        Files.writeString(file, """
+                {
+                  "vehicleCache": {
+                    "sleepingMemoryMiB": -20,
+                    "heapHighWatermark": 1.5
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        BeamCraftConfig config = BeamCraftConfig.load(tempDir);
+
+        assertEquals(0, config.vehicleCache.sleepingMemoryMiB);
+        assertEquals(0.85, config.vehicleCache.heapHighWatermark);
+        assertEquals(0L, config.sleepingVehicleCacheBytes());
     }
 }
