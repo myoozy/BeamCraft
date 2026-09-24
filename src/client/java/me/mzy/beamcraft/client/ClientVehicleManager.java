@@ -54,6 +54,8 @@ public final class ClientVehicleManager {
         final SoftBodyVehicle softBody;
         PhysicsVehicleEntity entity;
         boolean active;
+        long estimatedRetainedBytes;
+        long lastUseOrder;
 
         ManagedVehicle(PhysicsVehicleEntity entity, SoftBodyVehicle softBody) {
             this.uuid = entity.getUuid();
@@ -75,6 +77,7 @@ public final class ClientVehicleManager {
     private static float[] sharedInterpX = new float[NodeContainer.INIT_NODE_CAP];
     private static float[] sharedInterpY = new float[NodeContainer.INIT_NODE_CAP];
     private static float[] sharedInterpZ = new float[NodeContainer.INIT_NODE_CAP];
+    private static long cacheUseSequence;
 
     private ClientVehicleManager() {
     }
@@ -126,6 +129,7 @@ public final class ClientVehicleManager {
             }
 
             bindTrackedEntity(managed, vehicleEntity);
+            managed.lastUseOrder = ++cacheUseSequence;
             TRACKED_VEHICLES.put(entityId, managed);
             updateEntityBounds(managed.softBody);
             setActive(managed, hasRequiredChunks(client.world, managed.softBody));
@@ -146,6 +150,7 @@ public final class ClientVehicleManager {
                 managed.softBody.bindParentEntity(null);
             }
         }
+        enforceCacheBudget();
     }
 
     private static ManagedVehicle createVehicle(MinecraftClient client, PhysicsVehicleEntity vehicleEntity) {
@@ -229,7 +234,10 @@ public final class ClientVehicleManager {
             float playerYaw = client.player != null ? client.player.getYaw() : 0.0f;
             softBody.nodes.rotateNodes(playerYaw, 0, 0);
             LOAD_FAILURES.recordSuccess(vehicleEntity.getId());
-            return new ManagedVehicle(vehicleEntity, softBody);
+            ManagedVehicle managed = new ManagedVehicle(vehicleEntity, softBody);
+            managed.estimatedRetainedBytes = VehicleMemoryEstimator.estimateRetainedBytes(softBody);
+            managed.lastUseOrder = ++cacheUseSequence;
+            return managed;
         } catch (RuntimeException failure) {
             softBody.clear();
             if (meshesAcquired) {
@@ -267,6 +275,46 @@ public final class ClientVehicleManager {
             BeamCraftClient.PHYSICS_WORLD.addVehicle(managed.softBody);
         } else {
             BeamCraftClient.PHYSICS_WORLD.suspendVehicle(managed.softBody);
+            managed.estimatedRetainedBytes = VehicleMemoryEstimator.estimateRetainedBytes(managed.softBody);
+        }
+    }
+
+    private static void enforceCacheBudget() {
+        List<VehicleCachePolicy.Candidate<ManagedVehicle>> candidates = new ArrayList<>();
+        for (ManagedVehicle managed : RETAINED_VEHICLES.values()) {
+            // A tracked vehicle waiting for neighbouring chunks cannot be evicted:
+            // doing so would reload and evict it again every tick. Only genuinely
+            // untracked sleeping vehicles belong to the retained cache budget.
+            if (!managed.active && managed.entity == null) {
+                candidates.add(new VehicleCachePolicy.Candidate<>(
+                        managed,
+                        managed.estimatedRetainedBytes,
+                        managed.lastUseOrder
+                ));
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        var cacheConfig = BeamCraftConfigManager.get();
+        Runtime runtime = Runtime.getRuntime();
+        long heapUsed = runtime.totalMemory() - runtime.freeMemory();
+        List<ManagedVehicle> evictions = VehicleCachePolicy.selectEvictions(
+                candidates,
+                cacheConfig.sleepingVehicleCacheBytes(),
+                heapUsed,
+                runtime.maxMemory(),
+                cacheConfig.vehicleCache.heapHighWatermark
+        );
+        for (ManagedVehicle managed : evictions) {
+            BeamCraft.LOGGER.info(
+                    "Evicting sleeping vehicle {} ({}) from client cache; estimated {} MiB",
+                    managed.uuid,
+                    managed.rootPart,
+                    Math.max(1L, managed.estimatedRetainedBytes / (1024L * 1024L))
+            );
+            destroyVehicle(managed);
         }
     }
 
