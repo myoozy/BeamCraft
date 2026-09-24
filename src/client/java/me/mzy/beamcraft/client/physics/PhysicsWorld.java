@@ -112,18 +112,26 @@ public class PhysicsWorld {
     public void addVehicle(SoftBodyVehicle vehicle) {
         if (vehicle == null || vehicles.contains(vehicle)) return;
 
-        vehicle.vehicleId = nextVehicleId++;
+        if (vehicle.vehicleId < 0) {
+            vehicle.vehicleId = nextVehicleId++;
+        }
         vehicles.add(vehicle);
+    }
+
+    /** Stops simulating a vehicle without releasing any of its retained state. */
+    public void suspendVehicle(SoftBodyVehicle vehicle) {
+        if (vehicle == null) return;
+        vehicles.remove(vehicle);
+        vehicle.renderTimeline.clear();
     }
 
     /**
      * Remove a vehicle and release its owned SoA buffers.
      */
     public void removeVehicle(SoftBodyVehicle vehicle) {
-        if (vehicle == null || !vehicles.contains(vehicle)) return;
+        if (vehicle == null) return;
 
         vehicles.remove(vehicle);
-
         vehicle.clear();
 
         System.out.println("Vehicle removed safely. ID: " + vehicle.vehicleId);

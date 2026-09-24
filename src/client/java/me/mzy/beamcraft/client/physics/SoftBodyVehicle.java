@@ -24,7 +24,8 @@ public class SoftBodyVehicle {
     public static final float MAX_NODE_SPEED = 343.0f;
     final int brakeInputSignalId;
     final int parkingBrakeInputSignalId;
-    public final PhysicsVehicleEntity parentEntity;
+    /** The currently tracked Minecraft anchor; null while this soft body is retained asleep. */
+    public PhysicsVehicleEntity parentEntity;
     public final float[] localOriginShift = new float[3];
     /** Fixed interaction-box side and rotation-safe visibility cap, derived at assembly time. */
     public double interactionBoundsSide = 1.0;
@@ -100,6 +101,12 @@ public class SoftBodyVehicle {
         brakeInputSignalId = electrics.register(ElectricSignals.BRAKE_INPUT);
         parkingBrakeInputSignalId = electrics.register(ElectricSignals.PARKING_BRAKE_INPUT);
         this.flexbodies.vehicleNamespace = parentEntity != null ? parentEntity.getRootPartName() : "test";
+        cacheEntityLocation();
+    }
+
+    /** Rebinds retained client physics to a newly tracked instance of the same server entity. */
+    public void bindParentEntity(PhysicsVehicleEntity parentEntity) {
+        this.parentEntity = parentEntity;
         cacheEntityLocation();
     }
 
