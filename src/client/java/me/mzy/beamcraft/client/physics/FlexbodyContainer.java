@@ -31,6 +31,8 @@ public class FlexbodyContainer {
     public double[] scaleX = new double[INIT_FLEX_CAP], scaleY = new double[INIT_FLEX_CAP], scaleZ = new double[INIT_FLEX_CAP];
     public int[] partId = new int[INIT_FLEX_CAP];
     public JBeamAssembler.TransformContext[] slotContext = new JBeamAssembler.TransformContext[INIT_FLEX_CAP];
+    /** -1 for a deforming flexbody, otherwise the owning {@link PropContainer} row. */
+    public int[] propIndex = filledWithMinusOne(INIT_FLEX_CAP);
 
     // ==========================================
     // 2. O(1) 静态节点组查询表 (CSR 格式)
@@ -97,6 +99,9 @@ public class FlexbodyContainer {
 
             partId = Utility.expand(partId, newSize);
             slotContext = java.util.Arrays.copyOf(slotContext, newSize);
+            int oldPropLength = propIndex.length;
+            propIndex = Utility.expand(propIndex, newSize);
+            java.util.Arrays.fill(propIndex, oldPropLength, newSize, -1);
 
             // ==========================
             // 2. 运行时蒙皮数据层 SoA 数组
@@ -178,10 +183,38 @@ public class FlexbodyContainer {
         scaleX[idx] = sx; scaleY[idx] = sy; scaleZ[idx] = sz;
         partId[idx] = pId;
         slotContext[idx] = ctx;
+        propIndex[idx] = -1;
         vehicleNamespace = namespace;
 
         meshCount++;
         return idx;
+    }
+
+    /** Registers a rigid prop mesh in the shared GPU mesh stream. */
+    public int registerPropMesh(String name, String namespace, int pId,
+                                JBeamAssembler.TransformContext ctx, int owningPropIndex) {
+        ensureCapacity();
+        int idx = meshCount;
+        meshName[idx] = name;
+        targetGroups[idx] = java.util.List.of();
+        deformGroup[idx] = "";
+        deformMaterialBase[idx] = "";
+        deformMaterialDamaged[idx] = "";
+        posX[idx] = posY[idx] = posZ[idx] = 0.0;
+        rotX[idx] = rotY[idx] = rotZ[idx] = 0.0;
+        scaleX[idx] = scaleY[idx] = scaleZ[idx] = 1.0;
+        partId[idx] = pId;
+        slotContext[idx] = ctx;
+        propIndex[idx] = owningPropIndex;
+        vehicleNamespace = namespace;
+        meshCount++;
+        return idx;
+    }
+
+    private static int[] filledWithMinusOne(int size) {
+        int[] values = new int[size];
+        java.util.Arrays.fill(values, -1);
+        return values;
     }
 
     /**

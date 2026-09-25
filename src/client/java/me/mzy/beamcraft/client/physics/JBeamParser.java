@@ -1195,6 +1195,159 @@ public class JBeamParser {
         }
     }
 
+    // --- 8. Rigid prop parsing ---
+
+    /**
+     * Parses BeamNG's documented props table. Props share the DAE/material stream
+     * with flexbodies, but bind rigidly to an authored idRef/idX/idY node frame.
+     */
+    static void parseProps(JsonArray props, SoftBodyVehicle vehicle, String rootPartName,
+                           JBeamAssembler.PartEntry entry, BeamExpressionContext expressionContext) {
+        JsonObject scoped = new JsonObject();
+        Map<String, Integer> columns = null;
+
+        for (JsonElement element : props) {
+            if (element.isJsonObject()) {
+                mergeJsonObjectsRecursive(scoped, element.getAsJsonObject());
+                continue;
+            }
+            if (!element.isJsonArray()) continue;
+            JsonArray row = element.getAsJsonArray();
+            if (columns == null) {
+                columns = propColumns(row);
+                continue;
+            }
+
+            JsonObject properties = copyJsonObject(scoped);
+            if (row.size() > 0 && row.get(row.size() - 1).isJsonObject()) {
+                mergeJsonObjectsRecursive(properties, row.get(row.size() - 1).getAsJsonObject());
+            }
+
+            String function = propString(row, columns, "func", 0, "nop", expressionContext);
+            String meshName = propString(row, columns, "mesh", 1, null, expressionContext);
+            if (meshName == null || meshName.isEmpty()
+                    || "SPOTLIGHT".equalsIgnoreCase(meshName)
+                    || "POINTLIGHT".equalsIgnoreCase(meshName)) {
+                continue;
+            }
+
+            String refName = propString(row, columns, "idref", 2, null, expressionContext);
+            String xName = propString(row, columns, "idx", 3, null, expressionContext);
+            String yName = propString(row, columns, "idy", 4, null, expressionContext);
+            Integer refNode = vehicle.nodes.nameToIndex.get(refName);
+            Integer xNode = vehicle.nodes.nameToIndex.get(xName);
+            Integer yNode = vehicle.nodes.nameToIndex.get(yName);
+            if (refNode == null || xNode == null || yNode == null) {
+                if (!getBooleanSafe(properties, "optional", false)) {
+                    BeamCraft.LOGGER.warn(
+                            "BeamCraft: prop '{}' references missing frame nodes ({}, {}, {}); skipping",
+                            meshName, refName, xName, yName);
+                }
+                continue;
+            }
+
+            PhysicsSpecs.Vec3 baseRotation = propVector(
+                    row, columns, "baserotation", 5, properties, "baseRotation",
+                    expressionContext, entry.variables, PhysicsSpecs.Vec3.ZERO);
+            PhysicsSpecs.Vec3 rotation = propVector(
+                    row, columns, "rotation", 6, properties, "rotation",
+                    expressionContext, entry.variables, PhysicsSpecs.Vec3.ZERO);
+            PhysicsSpecs.Vec3 translation = propVector(
+                    row, columns, "translation", 7, properties, "translation",
+                    expressionContext, entry.variables, PhysicsSpecs.Vec3.ZERO);
+
+            float min = propFloat(row, columns, "min", 8,
+                    getFloatSafe(properties, "min", 0.0f, entry.variables), entry.variables);
+            float max = propFloat(row, columns, "max", 9,
+                    getFloatSafe(properties, "max", 100.0f, entry.variables), entry.variables);
+            float offset = propFloat(row, columns, "offset", 10,
+                    getFloatSafe(properties, "offset", 0.0f, entry.variables), entry.variables);
+            float multiplier = propFloat(row, columns, "multiplier", 11,
+                    getFloatSafe(properties, "multiplier", 1.0f, entry.variables), entry.variables);
+
+            float[] localTranslation = vectorValue(properties.get("baseTranslation"),
+                    expressionContext, entry.variables, 0.0f);
+            float[] globalRotation = vectorValue(properties.get("baseRotationGlobal"),
+                    expressionContext, entry.variables, 0.0f);
+            JsonElement globalTranslationElement = firstPresent(properties,
+                    "baseTranslationGlobal", "baseTranslationGlobalElastic", "baseTranslationGlobalRigid");
+            float[] globalTranslation = vectorValue(globalTranslationElement,
+                    expressionContext, entry.variables, 0.0f);
+            PhysicsSpecs.PropSpec spec = new PhysicsSpecs.PropSpec(
+                    function == null ? "nop" : function,
+                    meshName,
+                    refNode, xNode, yNode,
+                    baseRotation, vec3(globalRotation), globalRotation != null, rotation, translation,
+                    Math.min(min, max), Math.max(min, max), offset, multiplier,
+                    vec3(localTranslation), localTranslation != null,
+                    vec3(globalTranslation), globalTranslation != null,
+                    getBooleanSafe(properties, "translationUseMeters", false)
+            );
+
+            int propIndex = vehicle.props.count;
+            int meshIndex = vehicle.flexbodies.registerPropMesh(
+                    meshName, rootPartName, entry.partId, entry.transform, propIndex);
+            vehicle.props.register(spec, meshIndex);
+        }
+    }
+
+    private static Map<String, Integer> propColumns(JsonArray header) {
+        Map<String, Integer> columns = new java.util.HashMap<>();
+        for (int i = 0; i < header.size(); i++) {
+            String name = getStringCell(header.get(i));
+            if (name != null) {
+                columns.put(name.toLowerCase(java.util.Locale.ROOT).replace(":", ""), i);
+            }
+        }
+        return columns;
+    }
+
+    private static String propString(JsonArray row, Map<String, Integer> columns,
+                                     String column, int fallbackIndex, String defaultValue,
+                                     BeamExpressionContext expressionContext) {
+        JsonElement cell = propCell(row, columns, column, fallbackIndex);
+        String raw = getStringCell(cell);
+        String evaluated = evalStringValue(raw, expressionContext);
+        return evaluated == null ? defaultValue : evaluated;
+    }
+
+    private static float propFloat(JsonArray row, Map<String, Integer> columns,
+                                   String column, int fallbackIndex, float defaultValue,
+                                   Map<String, Double> variables) {
+        JsonElement cell = propCell(row, columns, column, fallbackIndex);
+        return (float) getDoubleCell(cell, defaultValue, variables);
+    }
+
+    private static PhysicsSpecs.Vec3 propVector(
+            JsonArray row, Map<String, Integer> columns, String column, int fallbackIndex,
+            JsonObject properties, String propertyName, BeamExpressionContext expressionContext,
+            Map<String, Double> variables, PhysicsSpecs.Vec3 defaultValue) {
+        float[] value = vectorValue(propCell(row, columns, column, fallbackIndex),
+                expressionContext, variables, 0.0f);
+        if (value == null) {
+            value = vectorValue(properties.get(propertyName), expressionContext, variables, 0.0f);
+        }
+        return value == null ? defaultValue : new PhysicsSpecs.Vec3(value[0], value[1], value[2]);
+    }
+
+    private static JsonElement propCell(JsonArray row, Map<String, Integer> columns,
+                                        String column, int fallbackIndex) {
+        int index = columns.getOrDefault(column, fallbackIndex);
+        return index >= 0 && index < row.size() ? row.get(index) : null;
+    }
+
+    private static JsonElement firstPresent(JsonObject object, String... keys) {
+        for (String key : keys) {
+            if (object.has(key) && !object.get(key).isJsonNull()) return object.get(key);
+        }
+        return null;
+    }
+
+    private static PhysicsSpecs.Vec3 vec3(float[] value) {
+        return value == null ? PhysicsSpecs.Vec3.ZERO
+                : new PhysicsSpecs.Vec3(value[0], value[1], value[2]);
+    }
+
     private static float[] vectorValue(
             JsonElement raw,
             BeamExpressionContext expressionContext,

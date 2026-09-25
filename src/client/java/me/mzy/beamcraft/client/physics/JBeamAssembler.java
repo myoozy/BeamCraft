@@ -182,6 +182,10 @@ public class JBeamAssembler {
                     JBeamParser.parseFlexbodies(entry.json.getAsJsonArray("flexbodies"),
                             vehicle, rootPartName, entry, expressionContext);
                 }
+                if (entry.json.has("props")) {
+                    JBeamParser.parseProps(entry.json.getAsJsonArray("props"),
+                            vehicle, rootPartName, entry, expressionContext);
+                }
             }
             int beamsCount = vehicle.normalBeams.count + vehicle.supportBeams.count + vehicle.boundedBeams.count;
             System.out.println("✅ Pass 2 Complete: Structures built | Total beams: " + beamsCount);

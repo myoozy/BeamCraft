@@ -39,6 +39,86 @@ public final class Utility {
         return result;
     }
 
+    /** Converts an orthonormal row-major rotation matrix to an (x,y,z,w) quaternion. */
+    public static void quaternionFromRotationRows(float[] q,
+                                                  float m00, float m01, float m02,
+                                                  float m10, float m11, float m12,
+                                                  float m20, float m21, float m22) {
+        float fourX2 = 1.0f + m00 - m11 - m22;
+        float fourY2 = 1.0f - m00 + m11 - m22;
+        float fourZ2 = 1.0f - m00 - m11 + m22;
+        float fourW2 = 1.0f + m00 + m11 + m22;
+
+        int largest = 0;
+        float largestSquared4 = fourW2;
+        if (fourX2 > largestSquared4) { largest = 1; largestSquared4 = fourX2; }
+        if (fourY2 > largestSquared4) { largest = 2; largestSquared4 = fourY2; }
+        if (fourZ2 > largestSquared4) { largest = 3; largestSquared4 = fourZ2; }
+
+        float component = 0.5f * (float) Math.sqrt(Math.max(0.0f, largestSquared4));
+        float scale = component > 1.0e-8f ? 0.25f / component : 0.0f;
+        switch (largest) {
+            case 1 -> {
+                q[0] = component;
+                q[1] = (m01 + m10) * scale;
+                q[2] = (m02 + m20) * scale;
+                q[3] = (m21 - m12) * scale;
+            }
+            case 2 -> {
+                q[0] = (m01 + m10) * scale;
+                q[1] = component;
+                q[2] = (m12 + m21) * scale;
+                q[3] = (m02 - m20) * scale;
+            }
+            case 3 -> {
+                q[0] = (m02 + m20) * scale;
+                q[1] = (m12 + m21) * scale;
+                q[2] = component;
+                q[3] = (m10 - m01) * scale;
+            }
+            default -> {
+                q[0] = (m21 - m12) * scale;
+                q[1] = (m02 - m20) * scale;
+                q[2] = (m10 - m01) * scale;
+                q[3] = component;
+            }
+        }
+    }
+
+    /** Premultiplies by an intrinsic Y-Z-X Euler rotation. */
+    public static void premultiplyEulerYzx(float[] q, float x, float y, float z) {
+        premultiplyQuaternion(q, (float) Math.sin(x * 0.5f), 0.0f, 0.0f,
+                (float) Math.cos(x * 0.5f));
+        premultiplyQuaternion(q, 0.0f, 0.0f, (float) Math.sin(z * 0.5f),
+                (float) Math.cos(z * 0.5f));
+        premultiplyQuaternion(q, 0.0f, (float) Math.sin(y * 0.5f), 0.0f,
+                (float) Math.cos(y * 0.5f));
+    }
+
+    /** Stores the vector part of q^-1 * (v,0) * q at arbitrary output indices. */
+    public static void rotateVectorByInverseQuaternion(
+            float[] out, int xIndex, int yIndex, int zIndex,
+            float qx, float qy, float qz, float qw,
+            float vx, float vy, float vz) {
+        float ax = qw * vx - qy * vz + qz * vy;
+        float ay = qw * vy - qz * vx + qx * vz;
+        float az = qw * vz - qx * vy + qy * vx;
+        float aw = qx * vx + qy * vy + qz * vz;
+        out[xIndex] = aw * qx + ax * qw + ay * qz - az * qy;
+        out[yIndex] = aw * qy - ax * qz + ay * qw + az * qx;
+        out[zIndex] = aw * qz + ax * qy - ay * qx + az * qw;
+    }
+
+    private static void premultiplyQuaternion(float[] q,
+                                              float leftX, float leftY,
+                                              float leftZ, float leftW) {
+        float rightX = q[0], rightY = q[1], rightZ = q[2], rightW = q[3];
+        q[0] = leftW * rightX + leftX * rightW + leftY * rightZ - leftZ * rightY;
+        q[1] = leftW * rightY - leftX * rightZ + leftY * rightW + leftZ * rightX;
+        q[2] = leftW * rightZ + leftX * rightY - leftY * rightX + leftZ * rightW;
+        q[3] = leftW * rightW - leftX * rightX - leftY * rightY - leftZ * rightZ;
+    }
+
     public static float reducedMass(float mass1, float mass2) {
         if (mass1 <= 0.0f || mass2 <= 0.0f) return 0.0f;
         return mass1 * mass2 / (mass1 + mass2);

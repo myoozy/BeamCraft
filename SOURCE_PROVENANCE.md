@@ -27,6 +27,7 @@ Lua source carries a bCDDL 1.1 notice.
 | `ClutchlikeContainer.java`, `FrictionClutchContainer.java`, `TorqueConverterContainer.java`, `DctGearboxContainer.java` | `lua/vehicle/powertrain/frictionClutch.lua`, `torqueConverter.lua`, `dctGearbox.lua` |
 | `GearboxContainer.java`, `RangeBoxContainer.java`, `ShaftContainer.java`, `SplitShaftContainer.java`, `DifferentialContainer.java`, `TorsionReactorContainer.java` | `lua/vehicle/powertrain/manualGearbox.lua`, `automaticGearbox.lua`, `sequentialGearbox.lua`, `rangeBox.lua`, `shaft.lua`, `splitShaft.lua`, `differential.lua`, `torsionReactor.lua` |
 | `DifferentialSolver.java`, `DifferentialSolverTest.java` | `lua/vehicle/powertrain/differential.lua`; passive LSD, viscous, locked and active-lock constitutive behavior |
+| `PropContainer.java`, `FlexbodyBindingUtil.java` | `lua/common/jbeam/sections/meshs.lua`, `lua/ge/extensions/core/vehicle/triggerLabelPlacement.lua`, and the quaternion/vector convention in `lua/common/mathlib.lua`; prop reference-frame construction, native async-update orientation, auto-yaw and intrinsic rotation sequence |
 
 `DifferentialSolver.java` also uses the no-slip impulse bound and reduced-inertia
 idea from the maintainer's MIT-licensed KinetiForgeVehicles
@@ -54,7 +55,12 @@ is recorded:
 - JBeam assembly/loading outside the bCDDL-marked parser and merger files.
 - Node-and-beam soft-body dynamics, stability/stiffness limiting, collision and
   damage logic.
-- Flexbody binding and DAE loading.
+- Flexbody binding and DAE loading outside the bCDDL-marked rigid-prop binding.
+- Rigid prop parsing and signal/actuator linkage were implemented from
+  BeamNG's public Props documentation
+  (`https://documentation.beamng.com/modding/vehicle/sections/props/`) by M1AO
+  and BeamCraft contributors with Codex assistance. Prop orientation and its
+  three-node attachment are the source adaptations recorded above.
 - Flexbody transform expressions in `JBeamParser.java` were checked against the
   installed BeamNG data entry
   `vehicles/vivace/vivace_suspension_R_rally.jbeam` (BeamNG contributors). The

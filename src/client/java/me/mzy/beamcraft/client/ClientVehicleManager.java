@@ -614,12 +614,13 @@ public final class ClientVehicleManager {
                 if (flex.totalVertexCount == 0 || nodes.count == 0) {
                     continue;
                 }
+                int renderNodeCount = vehicle.props.renderNodeCount(nodes.count);
                 if (!flex.skinningPipeline.isReady()
-                        && !flex.skinningPipeline.init(flex, nodes.count)) {
+                        && !flex.skinningPipeline.init(flex, renderNodeCount)) {
                     continue;
                 }
 
-                ensureInterpolationCapacity(nodes.count);
+                ensureInterpolationCapacity(renderNodeCount);
                 Vec3d renderedEntityOrigin = getRenderedEntityOrigin(vehicle.parentEntity, tickDelta);
                 boolean sampledTimeline = vehicle.renderTimeline.sampleAtTickDeltaRelativeTo(
                         tickDelta,
@@ -659,11 +660,14 @@ public final class ClientVehicleManager {
                     );
                 }
 
+                vehicle.props.appendRenderNodes(
+                        vehicle, sharedInterpX, sharedInterpY, sharedInterpZ, nodes.count);
+
                 flex.skinningPipeline.updateGpuSkinning(
                         sharedInterpX,
                         sharedInterpY,
                         sharedInterpZ,
-                        nodes.count,
+                        renderNodeCount,
                         renderMoment
                 );
             }

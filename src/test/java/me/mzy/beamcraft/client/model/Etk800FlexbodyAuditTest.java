@@ -25,6 +25,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Local diagnostic against the stock ETK800 configuration named in the flexbody bug report. */
 class Etk800FlexbodyAuditTest {
     @Test
+    void bindVivaceSteeringPropUsingItsAuthoredBaseRotation(@TempDir Path tempDir) throws Exception {
+        String corpus = System.getenv("BEAMCRAFT_JBEAM_CORPUS");
+        Assumptions.assumeTrue(corpus != null && !corpus.isBlank());
+        File root = new File(corpus);
+
+        Map<String, JsonObject> registry = new HashMap<>();
+        Map<String, String> config = new HashMap<>();
+        JBeamLoader.loadVehicle(root, "vivace", "vivace_230S_DCT.pc", registry, config);
+        SoftBodyVehicle vehicle = new SoftBodyVehicle(null);
+        assertTrue(new JBeamAssembler().assembleVehicle("vivace", config, registry, vehicle));
+
+        loadDae(root.toPath().resolve("vivace.zip"), "vehicles/vivace/vivace.dae",
+                tempDir.resolve("vivace.dae"), "vivace");
+        FlexbodyBindingUtil.performBinding(vehicle.flexbodies, vehicle);
+
+        int steeringProp = -1;
+        for (int prop = 0; prop < vehicle.props.count; prop++) {
+            int mesh = vehicle.props.meshIndex[prop];
+            if (vehicle.flexbodies.meshName[mesh].startsWith("vivace_steering_wheel")) {
+                steeringProp = prop;
+                break;
+            }
+        }
+        assertTrue(steeringProp >= 0, "stock Vivace config must contain its steering-wheel prop");
+        assertEquals(90.0f, vehicle.props.baseRotationY[steeringProp], 1.0e-6f);
+        assertEquals(180.0f, vehicle.props.baseRotationZ[steeringProp], 1.0e-6f);
+        assertTrue(vehicle.props.originBound[steeringProp]);
+    }
+
+    @Test
     void dumpRelevantBindings(@TempDir Path tempDir) throws Exception {
         String corpus = System.getenv("BEAMCRAFT_JBEAM_CORPUS");
         Assumptions.assumeTrue(corpus != null && !corpus.isBlank());
@@ -55,6 +85,9 @@ class Etk800FlexbodyAuditTest {
             if (geometry == null) continue;
             int meshVertexOffset = vertexOffset;
             vertexOffset += geometry.vertexCount;
+            // Props share the render stream but intentionally reference synthetic
+            // render nodes, so they are outside this flexbody topology audit.
+            if (flex.propIndex[mesh] >= 0) continue;
             boolean frontBindingRegression = name.equals("etk800_duct_F")
                     || name.equals("etk800_bumper_F_sport")
                     || name.contains("hood");

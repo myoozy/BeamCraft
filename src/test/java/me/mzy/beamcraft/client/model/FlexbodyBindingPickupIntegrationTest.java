@@ -93,6 +93,10 @@ class FlexbodyBindingPickupIntegrationTest {
             DaeMeshLoader.RawGeometry geometry = flex.meshName[mesh].isEmpty()
                     ? null : DaeMeshLoader.resolveMesh(flex.vehicleNamespace, flex.meshName[mesh]);
             if (geometry == null) continue;
+            if (flex.propIndex[mesh] >= 0) {
+                offset += geometry.vertexCount;
+                continue;
+            }
             MeshStats stats = collectStats(flex.meshName[mesh], offset, geometry.vertexCount, flex, nodes);
             vertices += stats.vertices;
             rigid += stats.rigidVertices;

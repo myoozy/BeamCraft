@@ -5,6 +5,37 @@ import java.util.List;
 public final class PhysicsSpecs {
     private PhysicsSpecs() {}
 
+    /** Small immutable vector used by render-facing JBeam specifications. */
+    public record Vec3(float x, float y, float z) {
+        public static final Vec3 ZERO = new Vec3(0.0f, 0.0f, 0.0f);
+    }
+
+    /**
+     * One BeamNG rigid prop. The mesh itself is kept in the shared render-mesh
+     * container; this specification describes its node frame and animation.
+     */
+    public record PropSpec(
+            String function,
+            String meshName,
+            int refNode,
+            int xNode,
+            int yNode,
+            Vec3 baseRotation,
+            Vec3 baseRotationGlobal,
+            boolean hasBaseRotationGlobal,
+            Vec3 rotation,
+            Vec3 translation,
+            float min,
+            float max,
+            float offset,
+            float multiplier,
+            Vec3 baseTranslation,
+            boolean hasBaseTranslation,
+            Vec3 baseTranslationGlobal,
+            boolean hasBaseTranslationGlobal,
+            boolean translationUseMeters
+    ) {}
+
     /** Common command-mapping properties shared by linear and torsional hydros. */
     public interface HydroActuatorSpec {
         String inputSource();

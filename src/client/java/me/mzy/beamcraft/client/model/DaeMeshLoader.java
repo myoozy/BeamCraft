@@ -42,6 +42,14 @@ public class DaeMeshLoader {
         public int vertexCount;
         public int indexCount;
         public List<SubMesh> subMeshes;
+        /** DAE object origin after the scene-node transform, used as a rigid-prop pivot. */
+        public float originX;
+        public float originY;
+        public float originZ;
+        /** Unit object-local axes after the DAE scene-node transform. */
+        public float axisXX = 1.0f, axisXY, axisXZ;
+        public float axisYX, axisYY = 1.0f, axisYZ;
+        public float axisZX, axisZY, axisZZ = 1.0f;
 
         // 引用计数器
         public int refCount = 0;
@@ -60,11 +68,11 @@ public class DaeMeshLoader {
     // only the shared-library files that back a requested mesh are imported, and the
     // provider of a mesh is found by scanning candidate DAE text for node names.
     //
-    // JBeam cannot say which file a mesh lives in (the flexbody table carries only
+    // JBeam cannot say which file a mesh lives in (flexbody and prop tables carry
     // the mesh name) and the file names are not a usable index either —
     // tire_super_modern_sport lives in tires.dae, disc_brake in disc_brakes.dae.
     //
-    // Every consumer resolves meshes through flex.meshName[], so requireMeshes()
+    // Every visible mesh is registered in flex.meshName[], so requireMeshes()
     // primes exactly the set that can ever be requested; resolveMesh() also
     // resolves lazily on a miss, so nothing outside that set can silently vanish.
 
@@ -152,7 +160,7 @@ public class DaeMeshLoader {
     }
 
     /**
-     * Names no {@code .dae} declares. Not necessarily a problem: the flexbody table
+     * Names no {@code .dae} declares. Not necessarily a problem: a visible-mesh table
      * keeps rows for parts whose mesh is simply absent, and those meshes never
      * rendered. It is reported because the other explanation is that the name index
      * reads a name differently than Assimp does, which would drop a real mesh.
@@ -629,6 +637,27 @@ public class DaeMeshLoader {
                 unifiedGeometry.vertexCount = currentMergedVertPtr;
                 unifiedGeometry.indexCount  = currentMergedIndexPtr;
                 unifiedGeometry.subMeshes   = subMeshes;
+                Vector3f meshOrigin = new Vector3f();
+                globalTransform.transformPosition(meshOrigin);
+                unifiedGeometry.originX = meshOrigin.x;
+                unifiedGeometry.originY = meshOrigin.y;
+                unifiedGeometry.originZ = meshOrigin.z;
+                Vector3f meshAxisX = new Vector3f(1.0f, 0.0f, 0.0f);
+                Vector3f meshAxisY = new Vector3f(0.0f, 1.0f, 0.0f);
+                Vector3f meshAxisZ = new Vector3f(0.0f, 0.0f, 1.0f);
+                globalTransform.transformDirection(meshAxisX);
+                globalTransform.transformDirection(meshAxisY);
+                globalTransform.transformDirection(meshAxisZ);
+                orthonormalizeObjectAxes(meshAxisX, meshAxisY, meshAxisZ);
+                unifiedGeometry.axisXX = meshAxisX.x;
+                unifiedGeometry.axisXY = meshAxisX.y;
+                unifiedGeometry.axisXZ = meshAxisX.z;
+                unifiedGeometry.axisYX = meshAxisY.x;
+                unifiedGeometry.axisYY = meshAxisY.y;
+                unifiedGeometry.axisYZ = meshAxisY.z;
+                unifiedGeometry.axisZX = meshAxisZ.x;
+                unifiedGeometry.axisZY = meshAxisZ.y;
+                unifiedGeometry.axisZZ = meshAxisZ.z;
 
                 // Register under both the cleaned and the original node name so either resolves.
                 MESH_CACHE.put(namespace + ":" + cleanNodeName, unifiedGeometry);
@@ -647,4 +676,28 @@ public class DaeMeshLoader {
             }
         }
     }
+
+    private static void orthonormalizeObjectAxes(Vector3f x, Vector3f y, Vector3f authoredZ) {
+        if (x.lengthSquared() <= 1.0e-12f || y.lengthSquared() <= 1.0e-12f) {
+            x.set(1.0f, 0.0f, 0.0f);
+            y.set(0.0f, 1.0f, 0.0f);
+            authoredZ.set(0.0f, 0.0f, 1.0f);
+            return;
+        }
+        x.normalize();
+        y.fma(-x.dot(y), x);
+        if (y.lengthSquared() <= 1.0e-12f) {
+            y.set(0.0f, 1.0f, 0.0f);
+            if (Math.abs(x.dot(y)) > 0.9f) y.set(0.0f, 0.0f, 1.0f);
+            y.fma(-x.dot(y), x);
+        }
+        y.normalize();
+        Vector3f cross = new Vector3f(x).cross(y).normalize();
+        if (authoredZ.lengthSquared() > 1.0e-12f && cross.dot(authoredZ) < 0.0f) {
+            y.negate();
+            cross.negate();
+        }
+        authoredZ.set(cross);
+    }
+
 }

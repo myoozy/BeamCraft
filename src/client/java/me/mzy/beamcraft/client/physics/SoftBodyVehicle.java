@@ -54,6 +54,7 @@ public class SoftBodyVehicle {
     public final DriverInputFilter driverInputs = new DriverInputFilter(electrics);
     private final VehicleInternalForceSolver internalForceSolver = new VehicleInternalForceSolver(this);
     public final FlexbodyContainer flexbodies = new FlexbodyContainer();
+    public final PropContainer props = new PropContainer();
     public final VehicleCameraData cameras = new VehicleCameraData();
     public final PhysicsRenderTimeline renderTimeline = new PhysicsRenderTimeline();
     final CollisionChunkIndex collisionChunks = new CollisionChunkIndex(this);
@@ -898,6 +899,7 @@ public class SoftBodyVehicle {
         adaptiveDampers.clear();
         adaptiveDamperSpecs = List.of();
         flexbodies.clear();
+        props.clear();
         cameras.clear();
         renderTimeline.clear();
         breakGroupMap.clear();
