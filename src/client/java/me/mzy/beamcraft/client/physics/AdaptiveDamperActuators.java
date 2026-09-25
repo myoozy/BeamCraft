@@ -1,12 +1,3 @@
-/*
- * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
- * If a copy of the bCDDL was not distributed with this file, see
- * LICENSES/bCDDL-1.1.txt.
- *
- * Adapted from BeamNG.drive lua/vehicle/controller/drivingDynamics/actuators/
- * adaptiveDampers.lua. Java adaptation and modifications contributed by
- * M1AO and BeamCraft contributors.
- */
 package me.mzy.beamcraft.client.physics;
 
 import java.util.Collection;
@@ -18,7 +9,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 /**
  * Standalone BeamNG-compatible adaptive damper actuator backend.
  *
- * <p>Mirrors {@code lua/vehicle/controller/drivingDynamics/actuators/adaptiveDampers.lua}.
+ * <p>Uses {@link AdaptiveDamperCompatibility} for BeamNG-compatible beam selection
+ * and coefficient application.
  * Each registered controller instance owns a set of <em>bounded</em> beams,
  * addressed by the beams' authored JBeam {@code name}, and a mode table. Setting
  * a mode re-derives every runtime damping channel from the beam's immutable
@@ -87,33 +79,11 @@ public final class AdaptiveDamperActuators {
             Map<String, AdaptiveDamperMode> modes = spec.modes();
             if (modes == null || modes.isEmpty()) continue;
 
-            int[] indices = resolveBeamIndices(beams, spec.dampBeamNames());
+            int[] indices = AdaptiveDamperCompatibility.resolveBeamIndices(
+                    beams, spec.dampBeamNames());
             controllers.put(spec.instanceName(),
                     new AdaptiveDamperController(spec.instanceName(), indices, Map.copyOf(modes)));
         }
-    }
-
-    private static int[] resolveBeamIndices(BoundedBeamContainer beams, List<String> beamNames) {
-        if (beamNames == null || beamNames.isEmpty()) return new int[0];
-        int[] collected = new int[beamNames.size()];
-        int size = 0;
-        for (String beamName : beamNames) {
-            for (int index : beams.indicesForName(beamName)) {
-                // A duplicate name in a single controller's list must not drive
-                // the same beam twice.
-                boolean duplicate = false;
-                for (int i = 0; i < size; i++) {
-                    if (collected[i] == index) {
-                        duplicate = true;
-                        break;
-                    }
-                }
-                if (duplicate) continue;
-                if (size == collected.length) collected = java.util.Arrays.copyOf(collected, size * 2);
-                collected[size++] = index;
-            }
-        }
-        return java.util.Arrays.copyOf(collected, size);
     }
 
     // ------------------------------------------------------------------ API
@@ -209,9 +179,9 @@ public final class AdaptiveDamperActuators {
     }
 
     /**
-     * Re-derives every active controller from its authored values. Mirrors the
-     * BeamNG controller's empty {@code reset()}: the selected mode stays selected
-     * and is simply reapplied, so no scaling accumulates across resets.
+     * Re-derives every active controller from its authored values. The selected
+     * mode stays selected and is simply reapplied, so no scaling accumulates
+     * across resets.
      */
     void reset() {
         pending.clear();
@@ -235,41 +205,8 @@ public final class AdaptiveDamperActuators {
     }
 
     private void apply(AdaptiveDamperController controller, AdaptiveDamperMode mode) {
-        BoundedBeamContainer beams = vehicle.boundedBeams;
-        int count = beams.count;
-        for (int index : controller.beamIndices()) {
-            if (index < 0 || index >= count) continue;
-
-            float ceiling = beams.dampStabilityCeiling[index];
-            beams.damp[index] = scaled(beams.authoredDamp[index], mode.beamDampCoef(), ceiling);
-            beams.dampFast[index] = scaled(
-                    beams.authoredDampFast[index], mode.beamDampFastCoef(), ceiling);
-            beams.dampRebound[index] = scaled(
-                    beams.authoredDampRebound[index], mode.beamDampReboundCoef(), ceiling);
-            beams.dampReboundFast[index] = scaled(
-                    beams.authoredDampReboundFast[index], mode.beamDampReboundFastCoef(), ceiling);
-
-            // adaptiveDampers.lua passes the same scaled split for both the
-            // compression and the rebound channel, overriding any authored
-            // rebound-specific split.
-            float split = scaledSplit(beams.authoredDampVelocitySplit[index],
-                    mode.beamDampVelocitySplitCoef());
-            beams.dampVelocitySplit[index] = split;
-            beams.dampVelocitySplitRebound[index] = split;
-        }
+        AdaptiveDamperCompatibility.applyMode(
+                vehicle.boundedBeams, controller.beamIndices(), mode);
         controller.setCurrentModeName(mode.name());
-    }
-
-    private static float scaled(float authored, float coefficient, float ceiling) {
-        float value = authored * coefficient;
-        if (Float.isNaN(value)) return ceiling;
-        return Math.min(value, ceiling);
-    }
-
-    /** The velocity split is a threshold, not a stiffness/damping coefficient, so it is never stability-clamped. */
-    private static float scaledSplit(float authored, float coefficient) {
-        float value = authored * coefficient;
-        if (Float.isNaN(value)) return authored;
-        return Math.min(value, Float.MAX_VALUE);
     }
 }

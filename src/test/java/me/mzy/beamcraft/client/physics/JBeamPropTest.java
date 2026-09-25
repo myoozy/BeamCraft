@@ -74,7 +74,7 @@ class JBeamPropTest {
         float[] y = {0, 0, 3};
         float[] z = {0, 0, 0};
         float[] basis = new float[9];
-        assertTrue(PropContainer.buildReferenceBasis(x, y, z, 0, 1, 2, basis));
+        assertTrue(PropRuntime.buildReferenceBasis(x, y, z, 0, 1, 2, basis));
         assertEquals(1.0f, basis[0], 1.0e-6f);
         assertEquals(0.0f, basis[3], 1.0e-6f);
         assertEquals(0.0f, basis[1], 1.0e-6f);
@@ -84,7 +84,7 @@ class JBeamPropTest {
         float[] liveY = {0.37811777f, 0.37803710f, 0.65755713f};
         float[] liveZ = {0.67669964f, 0.67691076f, 0.14553191f};
         float[] orientation = new float[9];
-        assertTrue(PropContainer.buildPropOrientation(
+        assertTrue(PropRuntime.buildPropOrientation(
                 liveX, liveY, liveZ, 0, 1, 2,
                 -5, 0, 180, 0, 0, 0, orientation));
         float[] expected = {
@@ -103,7 +103,7 @@ class JBeamPropTest {
         float[] y = {0.61747539f, 0.54633522f, 0.54635179f};
         float[] z = {0.09120397f, 0.28514484f, 0.28532347f};
         float[] orientation = new float[9];
-        assertTrue(PropContainer.buildPropOrientation(
+        assertTrue(PropRuntime.buildPropOrientation(
                 x, y, z, 0, 1, 2,
                 0, 90, 180, 0, 0, 0, orientation));
         float[] expected = {
@@ -123,7 +123,7 @@ class JBeamPropTest {
         float[] y = {0.0f, 0.01817430f, 0.00013429f, 0.99983490f};
         float[] z = {0.0f, -0.99983480f, -0.00024010f, 0.01817430f};
         float[] orientation = new float[9];
-        assertTrue(PropContainer.buildGlobalPropOrientation(
+        assertTrue(PropRuntime.buildGlobalPropOrientation(
                 x, y, z, new VehicleCameraData.RefNodes(0, 1, 2, 3),
                 -0.031f, -3.382f, -9.177f,
                 0, 0, 0, orientation, new float[9]));
@@ -175,7 +175,7 @@ class JBeamPropTest {
         float[] y = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
         float[] z = new float[6];
         vehicle.electrics.set("steering_input", 1.0);
-        vehicle.props.appendRenderNodes(vehicle, x, y, z, vehicle.nodes.count);
+        PropRuntime.appendRenderNodes(vehicle.props, vehicle, x, y, z, vehicle.nodes.count);
 
         int center = vehicle.nodes.count;
         int axisX = center + 1;
@@ -186,9 +186,9 @@ class JBeamPropTest {
         // Native BeamNG reports steering=-lock for positive steering input,
         // independently of whether the authored linkage extends or contracts.
         x[1] = displacedLength;
-        vehicle.props.appendRenderNodes(vehicle, x, y, z, vehicle.nodes.count);
+        PropRuntime.appendRenderNodes(vehicle.props, vehicle, x, y, z, vehicle.nodes.count);
         float[] expected = new float[9];
-        assertTrue(PropContainer.buildPropOrientation(
+        assertTrue(PropRuntime.buildPropOrientation(
                 x, y, z, 0, 1, 2,
                 0, 0, 0, 0, 0, -45, expected));
         assertEquals(expected[0], x[axisX] - x[center], 1.0e-4f);

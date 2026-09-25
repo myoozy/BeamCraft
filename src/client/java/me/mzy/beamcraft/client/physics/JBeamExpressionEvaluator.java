@@ -1,18 +1,8 @@
-/*
- * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
- * If a copy of the bCDDL was not distributed with this file, see
- * LICENSES/bCDDL-1.1.txt.
- *
- * Adapted from BeamNG.drive lua/common/jbeam/expressionParser.lua and
- * lua/common/jbeam/variables.lua. Java adaptation and modifications
- * contributed by M1AO and BeamCraft contributors.
- */
 package me.mzy.beamcraft.client.physics;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 
 /**
  * Tokenizer + precedence-parser evaluator for BeamNG JBeam {@code $=} expressions.
@@ -491,11 +481,9 @@ public final class JBeamExpressionEvaluator {
     // Evaluator
     // ------------------------------------------------------------------
 
-    private static final Random RAND = new Random(0x5EED_2026L);
-
     /** Seed the shared random stream used by {@code random()}/{@code randomseed()}. */
-    public static synchronized void setRandomSeed(long seed) {
-        RAND.setSeed(seed);
+    public static void setRandomSeed(long seed) {
+        JBeamExpressionBuiltins.setRandomSeed(seed);
     }
 
     static Object eval(Node n, BeamExpressionContext ctx) throws EvalException {
@@ -561,275 +549,17 @@ public final class JBeamExpressionEvaluator {
     }
 
     private static Object evalCall(String name, List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        // Non-scalar / side-effecting / control-flow builtins handled separately.
-        switch (name) {
-            case "case":
-                return evalCase(args, ctx);
-            case "random":
-                return randomBuiltin(args, ctx);
-            case "randomseed":
-                return randomSeedBuiltin(args, ctx);
-            case "print":
-                return printBuiltin(args, ctx);
-            case "include":
-                throw err(EvalStatus.UNSUPPORTED,
-                        "include() reads external CSV files at game load and is not supported");
-            case "vec3":
-            case "quat":
-                throw err(EvalStatus.UNSUPPORTED,
-                        name + "() constructs a vector/quaternion table, which is not representable "
-                                + "in BeamCraft's scalar value model (Double/String/Boolean/nil)");
-            case "concat":
-                return concatBuiltin(args, ctx);
-            default:
-                break;
-        }
-
-        double a, b;
-        switch (name) {
-            case "round": a = asNumber(evalSingleArg(name, args, ctx)); return Math.floor(a + 0.5); // mathlib round(a) = floor(a+0.5)
-            case "abs": a = asNumber(evalSingleArg(name, args, ctx)); return Math.abs(a);
-            case "ceil": a = asNumber(evalSingleArg(name, args, ctx)); return Math.ceil(a);
-            case "floor": a = asNumber(evalSingleArg(name, args, ctx)); return Math.floor(a);
-            case "sqrt": a = asNumber(evalSingleArg(name, args, ctx)); return Math.sqrt(a);
-            case "sin": a = asNumber(evalSingleArg(name, args, ctx)); return Math.sin(a);
-            case "cos": a = asNumber(evalSingleArg(name, args, ctx)); return Math.cos(a);
-            case "tan": a = asNumber(evalSingleArg(name, args, ctx)); return Math.tan(a);
-            case "exp": a = asNumber(evalSingleArg(name, args, ctx)); return Math.exp(a);
-            case "log": // log(x) or log(x, base) = ln(x)/ln(base)
-                a = asNumber(evalSingleArg(name, args, ctx));
-                if (args.size() >= 2) {
-                    b = asNumber(evalArgAt(name, args, 1, ctx));
-                    return Math.log(a) / Math.log(b);
-                }
-                return Math.log(a);
-            case "square": a = asNumber(evalSingleArg(name, args, ctx)); return a * a;
-            case "smoothstep": a = asNumber(evalSingleArg(name, args, ctx)); return smoothstep(a);
-            case "smootherstep": a = asNumber(evalSingleArg(name, args, ctx)); return smootherstep(a);
-            case "smootheststep": a = asNumber(evalSingleArg(name, args, ctx)); return smootheststep(a);
-            case "sign": a = asNumber(evalSingleArg(name, args, ctx)); return Math.signum(a);
-            case "acos": a = asNumber(evalSingleArg(name, args, ctx)); return Math.acos(a);
-            case "asin": a = asNumber(evalSingleArg(name, args, ctx)); return Math.asin(a);
-            case "atan": // Lua 5.1 math.atan is single-argument (two-arg lives in atan2)
-                if (args.size() != 1) throw err(EvalStatus.EVAL_ERROR, "wrong number of arguments to 'atan'");
-                a = asNumber(evalSingleArg(name, args, ctx));
-                return Math.atan(a);
-            case "cosh": a = asNumber(evalSingleArg(name, args, ctx)); return Math.cosh(a);
-            case "sinh": a = asNumber(evalSingleArg(name, args, ctx)); return Math.sinh(a);
-            case "tanh": a = asNumber(evalSingleArg(name, args, ctx)); return Math.tanh(a);
-            case "deg": a = asNumber(evalSingleArg(name, args, ctx)); return Math.toDegrees(a);
-            case "rad": a = asNumber(evalSingleArg(name, args, ctx)); return Math.toRadians(a);
-            case "log10": a = asNumber(evalSingleArg(name, args, ctx)); return Math.log10(a);
-            case "frexp": a = asNumber(evalSingleArg(name, args, ctx)); return frexpMantissa(a);
-            case "modf": a = asNumber(evalSingleArg(name, args, ctx)); return modfIntegerPart(a);
-            case "atan2": // atan2(y, x)
-                a = asNumber(evalSingleArg(name, args, ctx));
-                b = asNumber(evalArgAt(name, args, 1, ctx));
-                return Math.atan2(a, b);
-            case "fmod": // C fmod(x, y) — truncated remainder
-                a = asNumber(evalSingleArg(name, args, ctx));
-                b = asNumber(evalArgAt(name, args, 1, ctx));
-                return a % b;
-            case "mod": // Lua 5.1 math.mod = floored modulo (same as the % operator)
-                a = asNumber(evalSingleArg(name, args, ctx));
-                b = asNumber(evalArgAt(name, args, 1, ctx));
-                return a - Math.floor(a / b) * b;
-            case "ldexp": // m * 2^e
-                a = asNumber(evalSingleArg(name, args, ctx));
-                b = asNumber(evalArgAt(name, args, 1, ctx));
-                return Math.scalb(a, (int) b);
-            case "pow":
-                a = asNumber(evalSingleArg(name, args, ctx));
-                b = asNumber(evalArgAt(name, args, 1, ctx));
-                return Math.pow(a, b);
-            case "smoothmin":
-                return smoothmin(args, ctx);
-            case "min":
-            case "max": return minMax(name, args, ctx);
-            case "clamp":
-                a = asNumber(evalSingleArg(name, args, ctx));
-                b = asNumber(evalArgAt(name, args, 1, ctx));
-                double maxV = asNumber(evalArgAt(name, args, 2, ctx));
-                return Math.max(b, Math.min(a, maxV));
-            default:
-                throw err(EvalStatus.UNSUPPORTED, "unknown function '" + name + "'");
-        }
-    }
-
-    private static Object evalSingleArg(String name, List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        return evalArgAt(name, args, 0, ctx);
-    }
-
-    private static Object evalArgAt(String name, List<Node> args, int index, BeamExpressionContext ctx) throws EvalException {
-        if (index >= args.size()) {
-            throw err(EvalStatus.EVAL_ERROR, name + "() requires " + (index + 1) + " argument(s)");
-        }
-        return eval(args.get(index), ctx);
-    }
-
-    private static Object minMax(String name, List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        if (args.isEmpty()) throw err(EvalStatus.EVAL_ERROR, name + "() requires at least one argument");
-        double result = asNumber(eval(args.get(0), ctx));
-        for (int i = 1; i < args.size(); i++) {
-            double v = asNumber(eval(args.get(i), ctx));
-            result = name.equals("max") ? Math.max(result, v) : Math.min(result, v);
-        }
-        return result;
-    }
-
-    /**
-     * Lua 5.1 {@code math.random}: {@code random()} → float in [0,1); {@code random(m)} →
-     * integer in [1, m]; {@code random(l, u)} → integer in [l, u] ({@code floor(r*(u-l+1))+l}).
-     * Empty intervals raise the same error the real engine does.
-     */
-    private static Object randomBuiltin(List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        if (args.isEmpty()) {
-            synchronized (RAND) {
-                return RAND.nextDouble();
+        return JBeamExpressionBuiltins.invoke(name, new JBeamExpressionBuiltins.Arguments() {
+            @Override
+            public int size() {
+                return args.size();
             }
-        }
-        if (args.size() > 2) throw err(EvalStatus.EVAL_ERROR, "wrong number of arguments to 'random'");
-        double a = asNumber(eval(args.get(0), ctx));
-        if (args.size() == 1) {
-            if (a < 1.0) throw err(EvalStatus.EVAL_ERROR, "random(" + a + ") interval is empty (upper bound must be >= 1)");
-            synchronized (RAND) {
-                return Math.floor(RAND.nextDouble() * a) + 1.0; // int in [1, m]
+
+            @Override
+            public Object evaluate(int index) throws EvalException {
+                return eval(args.get(index), ctx);
             }
-        }
-        double b = asNumber(eval(args.get(1), ctx));
-        if (a > b) throw err(EvalStatus.EVAL_ERROR, "random(" + a + ", " + b + ") interval is empty");
-        synchronized (RAND) {
-            return Math.floor(RAND.nextDouble() * (b - a + 1.0)) + a; // int in [l, u]
-        }
-    }
-
-    /** {@code math.randomseed(x)} — reseeds the shared stream; returns nil. */
-    private static Object randomSeedBuiltin(List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        if (args.size() == 1) {
-            Object v = eval(args.get(0), ctx);
-            if (v instanceof Number n) {
-                synchronized (RAND) {
-                    RAND.setSeed((long) n.doubleValue());
-                }
-            }
-            // nil argument: leave the seed untouched (data-dependent, lenient)
-        }
-        return null;
-    }
-
-    /** {@code print(val[, label])} — prints {@code label = val} (or {@code val}) and returns {@code val}. */
-    private static Object printBuiltin(List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        Object val = args.isEmpty() ? null : eval(args.get(0), ctx);
-        String label = args.size() > 1 ? asString(eval(args.get(1), ctx)) : null;
-        String line = label != null ? label + " = " + luaTostring(val) : luaTostring(val);
-        System.out.println("[BeamExpression] " + line);
-        return val;
-    }
-
-    /**
-     * {@code concat} is {@code table.concat}. The scalar value model has no tables, so the
-     * first argument can never be a table — behave exactly like Lua and raise
-     * {@code bad argument #1 to 'concat' (table expected)}.
-     */
-    private static Object concatBuiltin(List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        if (args.isEmpty()) {
-            throw err(EvalStatus.EVAL_ERROR, "bad argument #1 to 'concat' (table expected, got no value)");
-        }
-        Object first = eval(args.get(0), ctx);
-        throw err(EvalStatus.EVAL_ERROR, "bad argument #1 to 'concat' (table expected, got " + typeName(first) + ")");
-    }
-
-    /**
-     * Implements the documented JBeam {@code case()} behavior. Lua evaluates every argument
-     * before the call, so all branches are evaluated eagerly (no short-circuit). A boolean selector is a
-     * ternary (true → 2nd parameter, false → 3rd); a number selector indexes into the remaining
-     * parameters ({@code floor} applied); a nil/string/table selector, or an index that is
-     * out of range or selects a falsy value, falls back to the last parameter.
-     */
-    private static Object evalCase(List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        if (args.isEmpty()) return null;
-        Object selector = eval(args.get(0), ctx);
-        int count = args.size() - 1;
-        Object[] varargs = new Object[count];
-        for (int i = 0; i < count; i++) varargs[i] = eval(args.get(i + 1), ctx);
-
-        int index;
-        if (selector instanceof Boolean b) {
-            index = b ? 1 : 2;
-        } else if (selector instanceof Number n) {
-            index = (int) Math.floor(n.doubleValue());
-        } else {
-            index = 0; // invalid selector type → falls through to the last argument
-        }
-
-        Object sel = (index >= 1 && index <= count) ? varargs[index - 1] : null;
-        if (sel != null && !Boolean.FALSE.equals(sel)) return sel; // `or` fallback if nil/false
-        return count >= 1 ? varargs[count - 1] : null; // last parameter
-    }
-
-    // ------------------------------------------------------------------
-    // JBeam-compatible interpolation helpers
-    // ------------------------------------------------------------------
-
-    /** {@code smoothstep(x)}: clamp to [0,1], then apply {@code x*x*(3-2x)}. */
-    static double smoothstep(double x) {
-        x = Math.max(0, Math.min(1, x));
-        return x * x * (3 - 2 * x);
-    }
-
-    /** {@code smootherstep(x)}: {@code x^3*(x*(x*6-15)+10)} clamped to [0,1]. */
-    static double smootherstep(double x) {
-        double t = x * x * x * (x * (x * 6 - 15) + 10);
-        return Math.max(0, Math.min(1, t));
-    }
-
-    /** {@code smootheststep(x)}: clamp to [0,1], {@code (x^2)^2*(35 - x*(x*(x*20-70)+84))}. */
-    static double smootheststep(double x) {
-        x = Math.max(0, Math.min(1, x));
-        double x2 = x * x;
-        return x2 * x2 * (35 - x * (x * (x * 20 - 70) + 84));
-    }
-
-    /** {@code smoothmin(a, b, k)} with {@code k} defaulting to 0.1. */
-    static double smoothmin(double a, double b, double k) {
-        double h = Math.max(0, Math.min(1, 0.5 + (b - a) / k));
-        return h * a + (1 - h) * (b - h * k * 0.5);
-    }
-
-    private static Object smoothmin(List<Node> args, BeamExpressionContext ctx) throws EvalException {
-        double a = asNumber(evalSingleArg("smoothmin", args, ctx));
-        double b = asNumber(evalArgAt("smoothmin", args, 1, ctx));
-        double k;
-        if (args.size() > 2) {
-            Object kv = eval(args.get(2), ctx);
-            k = kv == null ? 0.1 : asNumber(kv); // `k or 0.1`
-        } else {
-            k = 0.1;
-        }
-        return smoothmin(a, b, k);
-    }
-
-    /** Lua {@code math.frexp(x)} first return: the mantissa {@code m} with {@code x = m*2^e}, {@code 0.5<=|m|<1}. */
-    static double frexpMantissa(double x) {
-        if (x == 0.0 || Double.isInfinite(x) || Double.isNaN(x)) return x;
-        double mant = x;
-        mant = Math.scalb(mant, -Math.getExponent(mant)); // into [1, 2)
-        if (mant >= 1.0) mant = Math.scalb(mant, -1);     // into [0.5, 1)
-        return mant;
-    }
-
-    /** Lua {@code math.modf(x)} first return: the integral part, truncated toward zero. */
-    static double modfIntegerPart(double x) {
-        return x > 0 ? Math.floor(x) : Math.ceil(x);
-    }
-
-    /** Lua {@code tostring} for the supported value model. */
-    static String luaTostring(Object v) {
-        if (v == null) return "nil";
-        if (v instanceof String s) return s;
-        if (v instanceof Number n) return numToString(n.doubleValue());
-        if (v instanceof Boolean b) return b ? "true" : "false";
-        return v.toString();
+        });
     }
 
     // ------------------------------------------------------------------

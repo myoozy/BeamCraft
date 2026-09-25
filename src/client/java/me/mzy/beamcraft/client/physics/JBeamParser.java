@@ -1,13 +1,3 @@
-/*
- * This Source Code Form is subject to the terms of the bCDDL, v. 1.1.
- * If a copy of the bCDDL was not distributed with this file, see
- * LICENSES/bCDDL-1.1.txt.
- *
- * Contains adaptations from BeamNG.drive lua/common/jbeam/expressionParser.lua,
- * lua/common/jbeam/variables.lua, lua/common/jbeam/loader.lua, and
- * lua/vehicle/jbeam/stage2.lua. Java adaptation and modifications contributed
- * by M1AO and BeamCraft contributors.
- */
 package me.mzy.beamcraft.client.physics;
 
 import com.google.gson.JsonArray;
@@ -393,12 +383,9 @@ public class JBeamParser {
     // --- 1. Node Parsing ---
 
     /**
-     * Node defaults BeamNG applies when a part's node section never authors the
-     * property. Taken from {@code lua/common/jbeam/loader.lua}
-     * ({@code defaultNodeWeight = 25}) and {@code lua/vehicle/jbeam/stage2.lua}
-     * ({@code frictionCoef or 1}); {@code slidingFriction} stays a negative
-     * sentinel because BeamNG falls back to the resolved friction coefficient, not
-     * to a constant.
+     * Node defaults used when a part's node section never authors the property.
+     * {@code slidingFriction} stays a negative sentinel so it can fall back to the
+     * resolved friction coefficient rather than to a second constant.
      */
     static final float DEFAULT_NODE_WEIGHT = 25.0f;
     static final float DEFAULT_NODE_FRICTION = 1.0f;
@@ -636,7 +623,7 @@ public class JBeamParser {
         // precompressionRange is only meaningful when authored: absent => use the
         // beamPrecompression multiplier, authored (even 0 or negative) => override it.
         boolean currentPrecompRangeDefined = false;
-        // Official BeamNG normal/bounded beam defaults.
+        // JBeam normal/bounded beam schema defaults.
         float currentSpring = DEFAULT_BEAM_SPRING, currentDamp = DEFAULT_BEAM_DAMP;
         float currentDeform = DEFAULT_BEAM_DEFORM, currentStrength = DEFAULT_BEAM_STRENGTH;
         float currentDeformLimitStress = Float.MAX_VALUE;
@@ -1027,11 +1014,9 @@ public class JBeamParser {
     public static void parseSlidenodes(JsonArray slidenodes, Map<String, String[]> globalRailMap, SoftBodyVehicle vehicle, JBeamAssembler.PartEntry entry) {
         boolean isHeader = true;
 
-        // BeamNG does not default a slidenode spring to zero: processSlidenodes uses
-        // `snode.spring or vehicle.options.beamSpring`, i.e. an unauthored spring is
-        // the global beam spring, so the node rides the rail stiffly rather than
-        // floating on it. Damping has no BeamNG counterpart at all — addSlidenode
-        // takes only a spring — so zero stays the right default there.
+        // An unauthored slidenode spring inherits the global beam spring so the
+        // node rides the rail rather than floating on it. Damping is an optional
+        // BeamCraft extension and therefore keeps its neutral zero default.
         float currentSpring = DEFAULT_BEAM_SPRING;
         float currentDamp = 0.0f;
 

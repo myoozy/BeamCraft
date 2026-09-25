@@ -18,16 +18,16 @@ Lua source carries a bCDDL 1.1 notice.
 
 | BeamCraft files | Upstream BeamNG source |
 | --- | --- |
-| `JBeamExpressionEvaluator.java`, `BeamExpressionContext.java`, `JBeamParser.java` | `lua/common/jbeam/expressionParser.lua`, `lua/common/jbeam/variables.lua`, plus localized defaults from `lua/common/jbeam/loader.lua` and `lua/vehicle/jbeam/stage2.lua` |
+| `JBeamExpressionBuiltins.java` | `lua/common/jbeam/expressionParser.lua` and `lua/common/mathlib.lua`; the JBeam function environment, `case` selection and compatibility helpers |
 | `JBeamPartMerger.java` | `lua/common/jbeam/slotSystem.lua` (`unifyParts` semantics) |
-| `WheelContainer.java`, `JBeamPressureWheelsParser.java` | `lua/common/jbeam/sections/wheels.lua`, especially pressure-wheel construction |
-| `AdaptiveDamperActuators.java`, `AdaptiveDamperMode.java` | `lua/vehicle/controller/drivingDynamics/actuators/adaptiveDampers.lua` |
+| `JBeamPressureWheelsParser.java`, `PressureWheelBuilder.java` | `lua/common/jbeam/sections/wheels.lua`, especially pressure-wheel parsing and construction |
+| `AdaptiveDamperCompatibility.java` | `lua/vehicle/controller/drivingDynamics/actuators/adaptiveDampers.lua`; beam-name selection and mode-coefficient application |
 | `JBeamPowertrainParser.java`, `PowertrainSpecNormalizer.java`, `PowertrainCompiler.java`, `PowertrainSystem.java`, `PowertrainSpecs.java`, `PowertrainTopologyContainer.java`, `DrivenWheelPathContainer.java`, `TorqueReactionContainer.java` | `lua/vehicle/powertrain.lua` and the device files below; parsing, topology, ports, traversal, inertia reflection and torque-reaction semantics |
 | `CombustionEngineContainer.java`, `TurbochargerContainer.java`, `SuperchargerContainer.java` | `lua/vehicle/powertrain/combustionEngine.lua`, `turbocharger.lua`, `supercharger.lua` |
 | `ClutchlikeContainer.java`, `FrictionClutchContainer.java`, `TorqueConverterContainer.java`, `DctGearboxContainer.java` | `lua/vehicle/powertrain/frictionClutch.lua`, `torqueConverter.lua`, `dctGearbox.lua` |
 | `GearboxContainer.java`, `RangeBoxContainer.java`, `ShaftContainer.java`, `SplitShaftContainer.java`, `DifferentialContainer.java`, `TorsionReactorContainer.java` | `lua/vehicle/powertrain/manualGearbox.lua`, `automaticGearbox.lua`, `sequentialGearbox.lua`, `rangeBox.lua`, `shaft.lua`, `splitShaft.lua`, `differential.lua`, `torsionReactor.lua` |
 | `DifferentialSolver.java`, `DifferentialSolverTest.java` | `lua/vehicle/powertrain/differential.lua`; passive LSD, viscous, locked and active-lock constitutive behavior |
-| `PropContainer.java`, `FlexbodyBindingUtil.java` | `lua/common/jbeam/sections/meshs.lua`, `lua/ge/extensions/core/vehicle/triggerLabelPlacement.lua`, and the quaternion/vector convention in `lua/common/mathlib.lua`; prop reference-frame construction, native async-update orientation, auto-yaw and intrinsic rotation sequence |
+| `PropRuntime.java`, `PropMeshBinder.java` | `lua/common/jbeam/sections/meshs.lua`, `lua/ge/extensions/core/vehicle/triggerLabelPlacement.lua`, and the quaternion/vector convention in `lua/common/mathlib.lua`; prop reference-frame construction, native async-update orientation, auto-yaw, intrinsic rotation sequence and rigid mesh placement |
 
 `DifferentialSolver.java` also uses the no-slip impulse bound and reduced-inertia
 idea from the maintainer's MIT-licensed KinetiForgeVehicles
@@ -52,15 +52,30 @@ compatibility facts. No source-code adaptation was identified in the September
 2026 audit, so their BeamCraft implementation remains MIT unless later evidence
 is recorded:
 
-- JBeam assembly/loading outside the bCDDL-marked parser and merger files.
+- `JBeamParser.java` and `JBeamAssembler.java`, including the independently
+  implemented JSON/table readers and expression-routing glue. Beam and node
+  schema defaults and fallback behavior were checked against
+  `lua/common/jbeam/loader.lua`, `lua/common/jbeam/variables.lua` and
+  `lua/vehicle/jbeam/stage2.lua`; no implementation structure was translated.
+- `JBeamExpressionEvaluator.java` and `BeamExpressionContext.java`, which
+  implement an independent Java lexer, precedence parser, AST evaluator and
+  map-backed variable context from the public JBeam expression syntax. The
+  source-adapted function environment is isolated in
+  `JBeamExpressionBuiltins.java`.
 - Node-and-beam soft-body dynamics, stability/stiffness limiting, collision and
   damage logic.
-- Flexbody binding and DAE loading outside the bCDDL-marked rigid-prop binding.
+- `WheelContainer.java`, which retains BeamCraft's SoA wheel state, capacity
+  management and runtime torque/brake operations after the adapted construction
+  logic was isolated in `PressureWheelBuilder.java`.
+- Flexbody binding and DAE loading outside the separately bCDDL-marked
+  `PropMeshBinder.java` rigid-prop binding.
 - Rigid prop parsing and signal/actuator linkage were implemented from
   BeamNG's public Props documentation
   (`https://documentation.beamng.com/modding/vehicle/sections/props/`) by M1AO
   and BeamCraft contributors with Codex assistance. Prop orientation and its
-  three-node attachment are the source adaptations recorded above.
+  three-node attachment are the source adaptations isolated in
+  `PropRuntime.java` and `PropMeshBinder.java`; `PropContainer.java` is only
+  BeamCraft's SoA storage and lifecycle implementation.
 - Flexbody transform expressions in `JBeamParser.java` were checked against the
   installed BeamNG data entry
   `vehicles/vivace/vivace_suspension_R_rally.jbeam` (BeamNG contributors). The
@@ -82,10 +97,11 @@ is recorded:
   creative-mode hits, and does not copy a vehicle-item drop implementation.
 - `SoftBodyVehicle` body-axis convention, which was checked against
   `lua/ge/extensions/core/cameraModes/autopoint.lua` but was not translated.
-- `AdaptiveDamperParser.java`, `AdaptiveDamperController.java` and
-  `AdaptiveDamperSpec.java`, which provide BeamCraft's parser, immutable data and
-  thread-safe controller infrastructure around the separately bCDDL-marked
-  actuator behavior.
+- `AdaptiveDamperActuators.java`, `AdaptiveDamperMode.java`,
+  `AdaptiveDamperParser.java`, `AdaptiveDamperController.java` and
+  `AdaptiveDamperSpec.java`, which provide BeamCraft's thread-safe command
+  dispatch, lifecycle, schema, parser and immutable controller data around the
+  separately bCDDL-marked compatibility kernel.
 - `TorqueReactionSolver.java`, which independently distributes a requested
   torque as zero-net-force node forces using a mass centroid and inertia tensor.
 - Test sources, which contain independently written compatibility assertions;

@@ -11,6 +11,7 @@ import me.mzy.beamcraft.client.physics.JBeamAssembler;
 import me.mzy.beamcraft.client.physics.JBeamLoader;
 import me.mzy.beamcraft.client.physics.NodeContainer;
 import me.mzy.beamcraft.client.physics.SoftBodyVehicle;
+import me.mzy.beamcraft.client.physics.PropRuntime;
 import me.mzy.beamcraft.entity.PhysicsVehicleEntity;
 import me.mzy.beamcraft.utility.Utility;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
@@ -660,8 +661,8 @@ public final class ClientVehicleManager {
                     );
                 }
 
-                vehicle.props.appendRenderNodes(
-                        vehicle, sharedInterpX, sharedInterpY, sharedInterpZ, nodes.count);
+                PropRuntime.appendRenderNodes(
+                        vehicle.props, vehicle, sharedInterpX, sharedInterpY, sharedInterpZ, nodes.count);
 
                 flex.skinningPipeline.updateGpuSkinning(
                         sharedInterpX,
